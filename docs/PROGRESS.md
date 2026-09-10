@@ -29,7 +29,9 @@ frontend code has been written, by instruction.
 
 ## LAST VERIFIED COMMIT
 
-`(pending — the foundation commit for this work)`
+`a10dab0` — *Establish TRACE-X engineering control plane (Phase 0 foundation)*
+
+All results below were produced against this commit.
 
 ---
 

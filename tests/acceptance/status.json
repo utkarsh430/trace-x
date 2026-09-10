@@ -4,7 +4,7 @@
   "current_phase": "0",
   "current_phase_name": "Foundation & Constitution",
   "updated_at": "2026-09-10",
-  "last_verified_commit": null,
+  "last_verified_commit": "a10dab0",
   "legend": {
     "NOT_STARTED": "No implementation exists.",
     "IN_PROGRESS": "Implementation started; acceptance evidence incomplete.",
