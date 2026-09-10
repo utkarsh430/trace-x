@@ -77,11 +77,11 @@
       "id": "P0.migrations",
       "phase": "0",
       "name": "Alembic migrations, five-schema role separation, up/down round-trip",
-      "status": "NOT_STARTED",
+      "status": "PASS",
       "evidence": {
         "command": "make migrate && make migrate-down",
-        "verified_at": null,
-        "result": null
+        "verified_at": "2026-09-10",
+        "result": "pytest -m integration: 23 passed. alembic upgrade head creates 5 schemas + 4 roles + all grants against live PostgreSQL 16; downgrade base removes all of them (requires DROP OWNED BY); re-upgrade restores. Audit verified append-only: trace_app INSERT ok, SELECT/UPDATE/DELETE denied"
       }
     },
     {

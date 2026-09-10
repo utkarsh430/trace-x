@@ -61,8 +61,9 @@ parallelism is what keeps the mandatory data-engineering track from serialising 
 - Repository skeleton; `CLAUDE.md` plus all control-plane documents.
 - `pyproject.toml` with ruff / mypy / pytest / bandit configuration and the version pin matrix.
 - `docker compose` `core` profile (Postgres, Redis) with non-colliding ports.
-- Alembic migrations including the **five-schema role separation** (`app`, `audit`, `groundtruth`,
-  `eval`, `external`).
+- Alembic migrations as the **single source of truth** for the five-schema role separation
+  (`app`, `audit`, `groundtruth`, `eval`, `external`), the four service roles, and every grant.
+  No second definition exists in a compose init script — the grants *are* the isolation control.
 - `make doctor` asserting the full pin matrix (Spark 4.0.1 / Delta 4.0.1 / Hadoop 3.4.x / Temurin 17 /
   Python 3.12), disk, Docker RAM, ports, and the resolved LLM tier.
 - OpenTelemetry and structured-logging scaffold with PII redaction.
@@ -73,10 +74,16 @@ parallelism is what keeps the mandatory data-engineering track from serialising 
 
 **AUTOMATED TESTS**
 - Lint, format, type-check, secret scan green.
-- Migration up/down round-trip.
+- Migration up/down round-trip: downgrade must remove **all** schemas and roles, and a re-upgrade must
+  restore them.
+- Audit log is append-only at the database level: `trace_app` may `INSERT` but not `SELECT`, `UPDATE`
+  or `DELETE`.
 - **Ground-truth isolation: `trace_app` receives `permission denied for schema groundtruth`.**
 - PII-redaction logging test.
 - Version-pin assertion test.
+- Dependency lock exists, pins exact versions, carries hashes, and covers every declared dependency.
+- Trace context survives a non-HTTP hop; every log line carries `trace_id` inside a span; redaction is
+  positionally last before the renderer.
 - Claim-linter self-test: a fabricated number in a fixture fails the build.
 - Acceptance-status integrity test: `PASS` without evidence is rejected.
 

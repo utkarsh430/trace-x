@@ -37,7 +37,7 @@ jobs:
         run: mypy
 
       - name: bandit
-        run: bandit -q -ll -c pyproject.toml -r packages scripts eval
+        run: bandit -q -ll -c pyproject.toml -r packages scripts eval migrations
 
       - name: Secret scan
         run: |

@@ -195,7 +195,8 @@ Envelope, keying and evolution rules: `docs/EVENT_CONTRACTS.md`.
 
 The application and every agent connect as `trace_app`. Ground truth is not hidden by convention; it is
 **unreachable**. A test asserts `permission denied for schema groundtruth`, and that test is a release
-blocker. `eval` holds two disjoint result families that are never unioned: `eval.synthetic_runs`
+blocker. Schemas, roles and grants are created **only** by Alembic
+(`migrations/versions/0001_schemas_roles_grants.py`) — one definition, so the control cannot drift. `eval` holds two disjoint result families that are never unioned: `eval.synthetic_runs`
 (Track A) and `eval.external_runs` (Track B).
 
 ---

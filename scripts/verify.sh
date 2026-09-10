@@ -58,7 +58,7 @@ else
 fi
 
 if [[ -x .venv/bin/bandit ]]; then
-  run_gate "bandit"            .venv/bin/bandit -q -ll -c pyproject.toml -r packages scripts eval
+  run_gate "bandit"            .venv/bin/bandit -q -ll -c pyproject.toml -r packages scripts eval migrations
 else
   skip_gate "bandit" "dev deps not installed — run 'make setup'"
 fi

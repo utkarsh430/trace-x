@@ -30,17 +30,14 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?set it in .env}
       # Deterministic collation so ORDER BY is stable across machines.
       POSTGRES_INITDB_ARGS: "--locale=C --encoding=UTF8"
-      # Role passwords are injected here and read by the init script via \getenv.
-      # They are never written into a committed file (CLAUDE.md §9).
-      TRACE_APP_DB_PASSWORD: ${TRACE_APP_DB_PASSWORD:?set it in .env}
-      TRACE_STREAM_DB_PASSWORD: ${TRACE_STREAM_DB_PASSWORD:?set it in .env}
-      TRACE_EVAL_DB_PASSWORD: ${TRACE_EVAL_DB_PASSWORD:?set it in .env}
-      TRACE_AUDITOR_DB_PASSWORD: ${TRACE_AUDITOR_DB_PASSWORD:?set it in .env}
     ports:
       - "${POSTGRES_PORT:-5442}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    # Schemas, roles and grants are created by Alembic (`make migrate`), never by
+    # an init script. The grants ARE the ground-truth isolation control (ADR-0004)
+    # and a control with two definitions can drift. A real deployment (RDS) has no
+    # init script either, so this keeps local and cloud on one path.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_SUPERUSER:-tracex_owner} -d ${POSTGRES_DB:-tracex}"]
       interval: 5s

@@ -16,13 +16,18 @@ Gate: `docs/ROADMAP.md` § Phase 0.
 
 ## CURRENT STATUS
 
-**Control plane established and verified. Phase 0 is 8/10 capabilities PASS.**
+**Phase 0 is 9/10 capabilities PASS.** The one outstanding item (CI execution) is blocked on a git
+remote, not on code.
 
 The engineering control plane — constitution, specifications, ADRs, acceptance tracking, developer
 command interface, bootstrap environment — is in place and **proven by executed commands**.
-`make verify` passes all 8 gates. 203 tests pass (188 fast + 15 integration against real PostgreSQL).
+230 tests pass (207 fast + 23 integration against real PostgreSQL).
 
-Remaining Phase 0 work: the Alembic migration layer (D1) and CI execution on a real push (D2).
+**`make verify` currently reports 7 PASS / 1 FAIL.** The failure is the `doctor` disk check: the machine
+has **3.5 GB free on a 228 GB disk that is 99% full**, below the 6 GB floor the core profile needs. This
+is an environment condition, not a code defect — every other gate is green, and the threshold has
+deliberately **not** been lowered to make the check pass (CLAUDE.md §17 forbids silently reducing a
+requirement). This project's own footprint is 291 MB.
 
 **No TRACE-X product functionality exists yet.** No transaction processing, ML, streaming, agents or
 frontend code has been written, by instruction.
@@ -65,28 +70,42 @@ declared once under `[tool.trace_x.pins]`, `.env.example` with working local def
 profiled `docker compose` (`core` / `streaming` / `graph` / `llm`) with per-service memory limits and
 non-colliding ports (Postgres **5442**, Redis **6389**).
 
-### Ground-truth isolation — verified against real PostgreSQL
-`deploy/postgres/init/01-roles-and-schemas.sql` creates 5 schemas and 4 roles. **Executed against a live
-PostgreSQL 16 container and confirmed:**
+### Database layer — Alembic owns schemas, roles and grants
+`migrations/versions/0001_schemas_roles_grants.py` is the **single source of truth**. The compose init
+script that previously duplicated the grant logic was removed: the grants *are* the ground-truth
+isolation control, and a control with two definitions can drift. A production deployment (RDS) has no
+init script either, so local and cloud follow one path. Role passwords are bound as query parameters
+and quoted server-side by `format(%L)` — no credential in any committed file.
+
+**Executed against a live PostgreSQL 16 container:**
 
 | Check | Result |
 |---|---|
-| `trace_app` reading `groundtruth` | ❌ denied — `permission denied for schema groundtruth` |
-| `trace_stream` reading `groundtruth` | ❌ denied |
-| `trace_auditor` reading `groundtruth` | ❌ denied |
+| `trace_app` / `trace_stream` / `trace_auditor` reading `groundtruth` | ❌ denied — `permission denied for schema groundtruth` |
 | `trace_app` creating objects in `groundtruth` | ❌ denied |
+| Ground-truth values leaking through error output | ❌ none |
 | `trace_eval` reading `groundtruth` | ✅ permitted (the harness must measure) |
 | `trace_app` reading `app` schema | ✅ permitted (isolation must not break the app) |
+| `trace_app` INSERT into `audit` | ✅ permitted |
+| `trace_app` SELECT / UPDATE / DELETE on `audit` | ❌ denied — append-only at the database level |
+| `trace_app` `INSERT ... RETURNING` on `audit` | ❌ denied (RETURNING needs SELECT) — write-only is genuinely write-only |
+| `trace_auditor` reading what the app appended | ✅ permitted |
+| `alembic downgrade base` | ✅ removes all 5 schemas and all 4 roles (needs `DROP OWNED BY`) |
+| `alembic upgrade head` after downgrade | ✅ restores everything |
 
 This is the highest-severity control in the project: leakage would silently invalidate every metric.
 
-### Local stack — started and verified
-`make up` brings up the `core` profile. Confirmed running:
+### Observability scaffold
+`configure_telemetry()` installs tracer and meter providers; `configure_logging()` installs a structlog
+chain whose **last processor before the renderer** is PII redaction, so nothing can introduce PII after
+it runs. Every log line inside a span carries `trace_id` and `span_id`. `carrier_inject`/`carrier_extract`
+carry W3C trace context across the hops nothing instruments for us — Kafka headers, MCP requests and
+Spark job parameters. A missing collector never breaks the application.
 
-| Service | Port | Health | Verified |
-|---|---|---|---|
-| postgres 16 | 5442 | healthy | Init script created 5 schemas + 4 roles from **env-injected** passwords; `trace_eval` authenticates; `trace_app` still denied on `groundtruth` |
-| redis 7-alpine | 6389 | healthy | `redis-cli ping` → `PONG` |
+### Dependency lock
+`requirements.lock` — 92 packages, fully hashed, generated with `--allow-unsafe` so a hashed install
+actually works. Its SHA-256 is the `env_lock_digest` field required by every evaluation run manifest
+(ADR-0017).
 
 ### Test suite (203 tests, all passing)
 | File | Tests | Covers |
@@ -123,13 +142,14 @@ Nothing in flight. This is a clean stopping point.
 
 | # | Item | Impact | When |
 |---|---|---|---|
-| D1 | No Alembic migration layer yet — only the raw role/schema bootstrap SQL | Application tables cannot be created; migration up/down round-trip is untested | Phase 0, remaining |
-| D2 | CI workflows written (`lint`, `test-fast`, `claims`) but never executed on a real push | YAML is valid; behaviour on a runner is unverified | Phase 0, remaining — needs a remote |
-| D3 | No OpenTelemetry wiring — only PII-redacting logging exists | Tracing scaffold incomplete | Phase 0, remaining |
+| ~~D1~~ | ~~No Alembic migration layer~~ | **RESOLVED** — Alembic owns schemas, roles and grants; round-trip verified against real PostgreSQL | done |
+| D2 | CI workflows written (`lint`, `test-fast`, `claims`, `test-integration`) but never executed on a real push | YAML validates; behaviour on a runner is unverified. **Cannot be resolved locally — needs a git remote** | Blocked on a remote |
+| ~~D3~~ | ~~No OpenTelemetry wiring~~ | **RESOLVED** — tracer/meter providers, W3C context propagation for non-HTTP hops, `trace_id` in every log line | done |
 | D4 | `compose.yml` declares `streaming`/`graph`/`llm` services that nothing consumes yet | Profile shape is reviewable but unexercised | Phases 3, 5, 6 |
 | D5 | `postgres:16` used instead of `postgres:16-alpine` | ~250 MB more disk; chosen because `postgres:16` was already local and disk is the binding constraint | Revisit if disk is freed |
-| D6 | No dependency lockfile — `pyproject.toml` uses ranges | `env_lock_digest` in the run manifest has nothing to hash | Before Phase 9 |
-| D7 | `make up-streaming` / `up-full` referenced in docs but not yet defined as targets | Documented commands that do not exist | Phase 3 |
+| D10 | No declarative SQLAlchemy models yet, so Alembic autogenerate is unused | Migrations are hand-written. Correct for the security-critical grants; will matter once tables arrive | Phase 1 |
+| ~~D6~~ | ~~No dependency lockfile~~ | **RESOLVED** — `requirements.lock`, 92 packages, hashed, installable; `env_lock_digest` is computable | done |
+| ~~D7~~ | ~~`make up-streaming` / `up-full` documented but undefined~~ | **RESOLVED** — both targets exist | done |
 | D8 | macOS Docker keychain credential helper hangs, blocking all registry pulls | Blocks `make up` on a cold image cache; workaround documented in `LOCAL_DEVELOPMENT.md` | Environment issue, not code |
 | D9 | Role passwords in `.env.example` are the literal `change_me_locally` | Fine locally; a real deployment must supply real values. Compose fails fast (`:?`) if any is unset, and the init script refuses to create passwordless roles | Before any shared deployment |
 
@@ -139,7 +159,7 @@ Nothing in flight. This is a clean stopping point.
 
 | # | Risk | Status |
 |---|---|---|
-| R1 | **Disk: 7.0 GB free.** Phase 3 needs ≥ 15 GB for Kafka + Spark + Neo4j + MLflow images | **Open — blocks Phase 3 entry.** `make doctor` warns |
+| R1 | **Disk: 3.5 GB free on a 228 GB disk at 99% capacity.** Below the 6 GB core-profile floor; Phase 3 needs ≥ 15 GB | **Open — `make doctor` now FAILS, not warns.** This project's footprint is 291 MB, so the space must come from elsewhere. ~1.9 GB of unused Docker images and ~1 GB of dangling Docker volumes belong to other projects and were deliberately left untouched |
 | R2 | **Java 25 is the system default**; Spark 4.0 requires Temurin 17 | Mitigated — `make doctor` detects it and prints the exact `JAVA_HOME` fix. Not yet blocking |
 | R3 | Docker RAM ceiling 7.7 GB; the full profile budget is tight | Open — mitigated by profiles and per-service memory limits |
 | R4 | No AWS credentials on this machine | Open — blocks Phase 12 only. `P12.cloud-validation` is tracked as blocked |
@@ -164,45 +184,63 @@ Nothing in flight. This is a clean stopping point.
 
 ## NEXT EXECUTABLE TASKS
 
-In order. Each is a Phase 0 exit condition.
+Phase 0 implementation is complete. Two items remain before the gate can be closed, and **neither is
+a coding task** — both need something only the user can provide.
 
-1. **Alembic migration layer** — initialise, wire to the five-schema model, add an up/down round-trip
-   test. Resolves D1.
-2. **CI workflows** — `.github/workflows/lint.yml`, `test-fast.yml`, `claims.yml`. Resolves D2.
-3. **OpenTelemetry scaffold** — tracer/meter providers, OTLP exporter config, `trace_id` in the log
-   context. Resolves D3.
-4. **Dependency lock** — generate and commit a lockfile so `env_lock_digest` is computable. Resolves D6.
-5. **Re-run `make verify`**, update this file and `tests/acceptance/status.json` with real results.
-6. **Close Phase 0** against the gate in `docs/ROADMAP.md`, then request approval to begin Phase 1.
+1. **Free ~3 GB of disk** so `make doctor` passes and `make verify` returns fully green. This
+   project occupies 291 MB; the space must come from elsewhere on a disk that is 99% full.
+   Candidates deliberately left untouched because they belong to other projects:
+   `docker image prune -a` (~1.9 GB) and `docker volume prune` (~1 GB). **Ask before running either.**
+   Phase 3 will need ~15 GB.
+2. **Add a git remote and push**, so the four CI workflows actually execute. Their YAML validates and
+   the gates run locally, but "CI passes" is an unverified claim until a runner has run them (D2).
+
+Then:
+
+3. **Close Phase 0** against the gate in `docs/ROADMAP.md` and request approval to begin Phase 1.
 
 **Do not begin Phase 1** (domain model, generator, source adapters) until Phase 0 exit conditions are
 met and the user approves.
+
+### Optional, before Phase 3
+- Set `JAVA_HOME` to Temurin 17 permanently (`make doctor` warns; Spark 4.0 will fail on Java 25).
+- Install Ollama and `make pull-model` for the keyless `SMOKE` tier (needed from Phase 6).
 
 ---
 
 ## LAST VERIFICATION RESULTS
 
-Recorded from an actual `make verify` run on 2026-09-10.
+Recorded from an actual `make verify` run on 2026-09-10, after the migration, observability and
+lockfile work.
 
 ```
-TRACE-X verify — 2026-09-10T15:56:22Z
-  PASS  doctor                 exit 0 (5 warnings, all expected at Phase 0: Java 25 vs Temurin 17,
-                                       disk 7.0 GB, pyspark/delta not installed, ollama absent)
-  PASS  acceptance-status      58 capabilities, internally consistent
-  PASS  check-claims           38 documents scanned, 0 manifests, no unbacked numeric claim
-  PASS  ruff-format            clean (58 files)
-  PASS  ruff-lint              clean
-  PASS  mypy                   clean, strict on trace_core (16 files)
-  PASS  test-fast              188 passed
-  PASS  bandit                 clean at MEDIUM+ (3 LOW are verified false positives, documented)
+TRACE-X verify
+  FAIL  doctor              disk 3.5 GB free, need >= 6.0 GB for the core profile
+                            (other doctor checks pass; 4 expected warnings:
+                             Java 25 vs Temurin 17, pyspark/delta not installed, ollama absent)
+  PASS  acceptance-status   58 capabilities, internally consistent
+  PASS  check-claims        41 documents scanned, 0 manifests, no unbacked numeric claim
+  PASS  ruff-format         clean
+  PASS  ruff-lint           clean
+  PASS  mypy                clean, strict on trace_core (22 files, now incl. migrations/)
+  PASS  test-fast           207 passed
+  PASS  bandit              clean at MEDIUM+ (packages, scripts, eval, migrations)
 ======================================================================
-  phase 0   8 passed   0 failed   0 skipped
-  VERIFY OK
+  phase 0   7 passed   1 failed   0 skipped
 ```
 
-Integration suite (requires Docker, run separately):
+**The single failure is a host resource condition.** It is reported rather than suppressed: lowering
+the disk floor to turn the gate green would be exactly the shortcut CLAUDE.md §17 prohibits.
+Freeing ~3 GB restores a fully green `make verify`; Phase 3 will need ~15 GB.
+
+Integration suite (real PostgreSQL 16 container, migrations applied by real Alembic):
 ```
-  pytest -m integration    15 passed    (against a live PostgreSQL 16 container)
+  pytest -m integration    23 passed
+```
+
+Full suite:
+```
+  pytest -m "not cloud"    230 passed
 ```
 
 Phase-gated commands correctly refuse to run:
@@ -211,11 +249,5 @@ Phase-gated commands correctly refuse to run:
   "PHASE NOT IMPLEMENTED ... requires Phase N ... repo is at Phase 0"
 ```
 
-Local stack:
-```
-  make up   ->  tracex-postgres-1 healthy (5442), tracex-redis-1 healthy (6389)
-                5 schemas + 4 roles bootstrapped automatically; redis PONG
-```
-
-**Acceptance status: 8 PASS · 1 IN_PROGRESS · 49 NOT_STARTED · 0 FAIL · 0 BLOCKED** across 58 tracked
+**Acceptance status: 9 PASS · 1 IN_PROGRESS · 48 NOT_STARTED · 0 FAIL · 0 BLOCKED** across 58 tracked
 capabilities. `tests/acceptance/status.json` is the authoritative machine-readable record.

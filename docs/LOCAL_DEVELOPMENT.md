@@ -37,7 +37,7 @@ Put it in your shell profile. `make doctor` warns until it is correct.
 git clone <repo> && cd trace-x
 make setup      # venv + dev dependencies, creates .env from the template
 make doctor     # preflight — fix anything it reports before continuing
-make up         # core profile: postgres + redis
+make up         # core profile: postgres + redis, then applies migrations
 make verify     # ★ canonical health check
 ```
 
@@ -125,6 +125,9 @@ than fabricating a decision.
 ```bash
 make doctor        # preflight
 make up / down / ps / logs
+make migrate       # apply migrations (schemas, roles, grants — ADR-0004)
+make migrate-down  # roll back
+make lock          # regenerate the hashed dependency lockfile
 make lint          # ruff format check + lint
 make typecheck     # mypy (strict on trace_core)
 make test-fast     # unit + property + contract + conformance (< 5 min, no services)
@@ -166,6 +169,8 @@ without a `--result`.
 | `make demo` reports no LLM | Ollama not installed or model not pulled | `make pull-model`, or set a `DEV` key in `.env` |
 | Investigation ends `INSUFFICIENT_EVIDENCE` on `SMOKE` | Small model hit its budget | Expected. Use `DEV`/`EVAL` for quality |
 | `permission denied for schema groundtruth` in app code | **Working as designed** | Ground truth is unreachable by the app. Only the eval harness may read it |
+| `permission denied for table events` on an audit `SELECT` | **Working as designed** | The audit log is append-only: `trace_app` may `INSERT` only. Note `INSERT ... RETURNING` also fails, because it needs `SELECT` |
+| Migration fails: `TRACE_APP_DB_PASSWORD is not set` | `.env` not exported | `make migrate` sources `.env`; if running alembic directly, export the four `TRACE_*_DB_PASSWORD` variables |
 | `docker pull` hangs; `error getting credentials` | macOS keychain credential helper is blocked (common when the keychain is locked or the login session is non-interactive) | Unlock the login keychain, or bypass the helper for one command: `export DOCKER_CONFIG=$(mktemp -d); echo '{}' > $DOCKER_CONFIG/config.json; ln -s ~/.docker/cli-plugins $DOCKER_CONFIG/cli-plugins`. The symlink is required — without it the `docker compose` plugin is not discovered |
 | Integration tests skipped | Docker not running | Start Docker; the skip message names the reason |
 | `external` tests skipped | IEEE-CIS not downloaded | `make fetch-external` (needs Kaggle credentials) |

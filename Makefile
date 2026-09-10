@@ -13,7 +13,8 @@ VPY   := $(VENV)/bin/python
 VPIP  := $(VENV)/bin/pip
 COMPOSE := docker compose -f deploy/compose.yml --env-file .env
 
-.PHONY: help doctor setup up down ps logs test-fast test e2e lint typecheck secrets audit audit-full \
+.PHONY: help doctor setup up up-streaming up-full down ps logs test-fast test e2e lint typecheck \
+        secrets audit audit-full migrate migrate-down migrate-status lock \
         verify eval eval-external demo seed fetch-external pull-model bench-layout \
         check-claims acceptance clean not-implemented
 
@@ -44,10 +45,20 @@ setup: ## Create venv and install dev + core dependencies
 ## ---------------------------------------------------------------------------
 ## Local stack
 ## ---------------------------------------------------------------------------
-up: ## Start the core profile (postgres, redis)
+up: ## Start the core profile (postgres, redis) and apply migrations
 	@test -f .env || (cp .env.example .env && echo "created .env from template")
-	@$(COMPOSE) --profile core up -d
+	@$(COMPOSE) --profile core up -d --wait
+	@$(MAKE) --no-print-directory migrate
 	@$(COMPOSE) --profile core ps
+
+up-streaming: ## Start core + streaming (kafka, spark) -- needs ~10 GB free
+	@$(MAKE) --no-print-directory up
+	@$(COMPOSE) --profile streaming up -d --wait
+
+up-full: ## Start every profile -- needs ~15 GB free and 8 GB Docker RAM
+	@$(MAKE) --no-print-directory up
+	@$(COMPOSE) --profile streaming --profile graph --profile ml --profile obs \
+	            --profile llm up -d
 
 down: ## Stop the stack (volumes preserved)
 	@$(COMPOSE) --profile core --profile streaming --profile graph \
@@ -58,6 +69,23 @@ ps: ## Show stack status
 
 logs: ## Tail stack logs
 	@$(COMPOSE) logs -f --tail=100
+
+## ---------------------------------------------------------------------------
+## Database
+## ---------------------------------------------------------------------------
+migrate: ## Apply migrations (creates schemas, roles and grants -- ADR-0004)
+	@set -a; . ./.env; set +a; $(VPY) -m alembic upgrade head
+
+migrate-down: ## Roll back all migrations
+	@set -a; . ./.env; set +a; $(VPY) -m alembic downgrade base
+
+migrate-status: ## Show the current migration revision
+	@set -a; . ./.env; set +a; $(VPY) -m alembic current --verbose
+
+lock: ## Regenerate the hashed dependency lockfile
+	@$(VPY) -m piptools compile --quiet --generate-hashes --strip-extras --allow-unsafe \
+	  --output-file=requirements.lock --extra=dev --extra=db --extra=obs --extra=api pyproject.toml
+	@echo "requirements.lock updated ($$(shasum -a 256 requirements.lock | cut -c1-16)...)"
 
 ## ---------------------------------------------------------------------------
 ## Quality gates
@@ -76,7 +104,7 @@ audit: ## Dependency vulnerability audit
 	@$(VPY) -m pip_audit --skip-editable || true
 
 audit-full: ## Static security scan including LOW severity findings
-	@$(VPY) -m bandit -c pyproject.toml -r packages scripts eval
+	@$(VPY) -m bandit -c pyproject.toml -r packages scripts eval migrations
 
 test-fast: ## Unit + property + contract + conformance (no external services)
 	@$(VPY) -m pytest -m "not integration and not e2e and not load and not chaos and not external and not cloud and not slow"

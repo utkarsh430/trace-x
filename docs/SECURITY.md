@@ -122,6 +122,17 @@ RLS policies on `app.investigations` and `app.cases` restrict analyst visibility
 unassigned cases; `fraud_manager` and `auditor` see all. `audit` has a `BEFORE UPDATE OR DELETE`
 trigger that raises unconditionally — the log is append-only at the database level, not by convention.
 
+**Alembic is the single source of truth for schemas, roles and grants**
+(`migrations/versions/0001_schemas_roles_grants.py`). There is deliberately no second definition in a
+compose init script: the grants *are* the ground-truth isolation control, and a control with two
+definitions can drift. A production deployment (RDS) has no init script either, so local and cloud
+follow one path. Role passwords are supplied through the environment and bound as query parameters,
+then quoted server-side by `format(%L)` — no credential appears in any committed file.
+
+Verified behaviour of the audit grant: `trace_app` may `INSERT` but may **not** `SELECT`, `UPDATE` or
+`DELETE`. It cannot even use `INSERT ... RETURNING`, because that requires `SELECT`. The application
+writes the audit log and can never read it back; only `trace_auditor` and `trace_eval` can.
+
 ---
 
 ## 5. Prompt-injection defences
