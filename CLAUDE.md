@@ -1,0 +1,340 @@
+# CLAUDE.md — TRACE-X Project Constitution
+
+> **Stable rules. Read this first, every session.**
+> This file contains rules and invariants only. It must **never** contain progress or status —
+> that lives in `docs/PROGRESS.md`. Changing a rule here requires explicit user approval and,
+> for anything architectural, an ADR.
+
+---
+
+## 1. Project purpose
+
+TRACE-X is a real-time fraud detection and autonomous investigation platform. It ingests transaction
+and identity events, scores them synchronously, opens investigations on suspicious ones, and runs a
+bounded multi-agent investigation that gathers evidence, challenges its own hypotheses, and produces
+an evidence-backed decision a human can audit or override.
+
+It demonstrates **two** competencies that must both be genuine: production data engineering
+(Kafka / Spark Structured Streaming / Delta / Databricks) and production agentic AI (LangGraph,
+MCP tool boundaries, bounded autonomy, action safety). Neither is decoration for the other.
+
+**This is not** a tutorial, a CRUD app, a chatbot, or a thin LLM wrapper.
+
+---
+
+## 2. Session protocol (mandatory)
+
+Every session:
+
+1. **Read** `CLAUDE.md` → `docs/PROGRESS.md` → the current phase in `docs/ROADMAP.md`.
+2. **Work** only within the current phase's scope. Do not skip ahead.
+3. **Run** `make verify` before claiming anything works.
+4. **Update** `docs/PROGRESS.md` and `tests/acceptance/status.json` with actual results.
+5. **Write an ADR** if an architectural decision was made or changed.
+
+A cold session must be able to recover complete state from `docs/PROGRESS.md` + git history.
+If it cannot, `PROGRESS.md` is defective and fixing it is the first task.
+
+---
+
+## 3. Architectural principles
+
+1. **Every process boundary needs a stated technical reason.** Absent one, code belongs in the
+   `trace_core` modular monolith. Microservices are not a default.
+2. **Latency regimes do not mix.** The hot path (synchronous scoring) has a ~100 ms budget. The warm
+   path (Spark, event-time correct) takes seconds. The cold path (investigations) takes 30–120 s.
+   Never put a slow dependency on a fast path.
+3. **Correctness beats throughput; observability beats cleverness; reproducibility beats both.**
+4. **An abstraction with one implementation is not an abstraction.** Every port ships with at least
+   two adapters and one shared conformance suite before its portability is claimed.
+5. **Determinism where it is achievable.** Seeded generators, `temperature=0`, pinned digests,
+   recorded cassettes.
+6. **Bounded autonomy.** Agents propose; deterministic code decides and executes.
+7. **Fail-safe direction is explicit and asymmetric.** Scoring fails *open* (approve + flag, counted).
+   Actions fail *closed* (never execute under uncertainty).
+
+---
+
+## 4. Repository structure
+
+```
+CLAUDE.md                  this file — the constitution
+README.md                  entry point
+Makefile                   developer command interface
+docs/                      the control plane (see §14)
+packages/trace_core/       the modular monolith: domain, contracts, features, rules, scoring,
+                           evidence, tools, agents, orchestration, policy, actions, audit,
+                           repositories, observability, llm
+services/{gateway,api,worker,stream}/   thin entrypoints over trace_core
+mcp_servers/{fraud_intelligence,identity,graph}/   real MCP servers (ADR-0013)
+apps/dashboard/            Next.js + TypeScript
+data/{generator,adapters,external}/      Track A generator, SourceAdapters, Track B data (gitignored)
+ml/{pipelines,models}/     training and artifacts
+eval/{harness,manifest,track_a,track_b}/ benchmark harness and run manifests
+benchmarks/delta_layout/   ADR-0015 evidence
+tests/{unit,integration,contract,conformance,e2e,load,chaos,adversarial,transport_parity,external,acceptance}/
+infra/{terraform,k8s,databricks}/
+deploy/                    docker compose profiles
+scripts/                   doctor, verify, acceptance, claim linter, phase guard
+```
+
+---
+
+## 5. Approved technology choices
+
+Locked. Deviating requires an ADR.
+
+| Layer | Choice | Notes |
+|---|---|---|
+| Streaming | Kafka (KRaft), Spark Structured Streaming | ADR-0002, ADR-0006 |
+| Lake | Delta Lake, medallion Bronze→Silver→Gold | ADR-0005 |
+| Online store | Redis (sorted sets, HLL, hashes) | ADR-0003 |
+| System of record | PostgreSQL | ADR-0001, ADR-0004 |
+| Work queue | PostgreSQL `SELECT … FOR UPDATE SKIP LOCKED` | ADR-0007 |
+| ML | LightGBM + Isolation Forest + robust-z control, MLflow | ADR-0011, ADR-0012 |
+| Graph | Neo4j + `GraphStore` port (Postgres, Neptune adapters) | ADR-0009 |
+| Agents | LangGraph | ADR-0010 |
+| LLM | `LLMProvider` port, four tiers | ADR-0016 |
+| Tools | `ToolSpec` + MCP and in-process adapters | ADR-0013 |
+| Cloud | AWS + Databricks, Terraform | ADR-0014, ADR-0025 |
+| Backend | Python 3.12 / FastAPI. **Go only in optional Phase 13.** | ADR-0008 |
+| Frontend | Next.js + TypeScript | |
+
+### Version pin matrix (ADR-0018) — asserted by `make doctor`
+
+| Component | Pin | Why it matters |
+|---|---|---|
+| Python | 3.12 | |
+| Java | **Temurin 17** | Spark 4.0 supports Java 17/21 **only**. Java 25 fails with an opaque error. |
+| Spark | 4.0.1 | |
+| Delta | 4.0.1 | Requires Hadoop 3.4.x with Spark 4.0.1. |
+| Hadoop | 3.4.x | Mismatch surfaces as `NoSuchMethodError`. |
+| Scala | 2.13 | |
+
+Changing any pin invalidates prior benchmark comparability and **requires** a manifest-diff note in
+the next evaluation report.
+
+---
+
+## 6. Coding conventions
+
+- **Typed everywhere.** `mypy` is strict on `trace_core`: no untyped defs, no implicit `Any` generics.
+- **Pydantic v2** for all wire contracts and tool I/O. Strict models; `extra="forbid"`.
+- Line length 100. `ruff format` is authoritative — never hand-format.
+- Prefer pure functions in `domain/`; push I/O to `repositories/`.
+- **Ports and adapters.** Domain code depends on protocols, never on a driver.
+- Errors are typed exceptions from `trace_core.domain.errors`. Never `except Exception: pass`.
+- No `print` in library code — use the structured logger. (`ruff` rule `T20` enforces this.)
+- Time is always timezone-aware UTC. Event time and processing time are distinct fields, never
+  interchanged.
+- Money is integer minor units (`amount_minor`). **Never a float.**
+- Naming: `snake_case` Python, `camelCase` TypeScript, `SCREAMING_SNAKE` env vars,
+  `kebab-case` file paths and topic names.
+
+---
+
+## 7. API and event contract rules
+
+- **Contracts are the source of truth, and they are generated then committed.**
+  `docs/contracts/openapi.yaml` and `docs/contracts/events/*.json`. CI diffs them; a breaking change
+  without a version bump fails the build.
+- Event schemas are JSON Schema → Pydantic is generated **from** them, never the reverse.
+- **Backward-compatible evolution only.** A breaking change means a new `.v2` topic and a dual-write
+  window. Never mutate a released schema.
+- Every event carries the envelope: `event_id` (uuid7), `event_type`, `schema_version`, `occurred_at`
+  (event time), `ingested_at` (processing time), `producer`, `trace_id`, `correlation_id`,
+  `idempotency_key`.
+- Topic keys are chosen by the entity whose **ordering** matters, never for load balancing.
+- Full policy: `docs/API_CONTRACTS.md`, `docs/EVENT_CONTRACTS.md`.
+
+---
+
+## 8. Testing requirements
+
+`docs/TESTING.md` is authoritative. The rules that are never negotiable:
+
+1. **Do not mock critical integrations in the final end-to-end path.** A CI job greps for
+   `unittest.mock` / `monkeypatch` under `tests/e2e/` and fails on a hit.
+2. **Cassette replay is not mocking** — it is recorded real traffic. The release pipeline runs
+   `--live` and diffs.
+3. **No hardcoded outputs that make benchmark tests pass.** The harness must fail if the model is
+   replaced by a constant predictor.
+4. Coverage gates: ≥85% on `domain/`, `policy/`, `actions/`, `rules/`; ≥70% overall.
+5. Every documented failure mode in `docs/ARCHITECTURE.md` §Failure model has a chaos test.
+6. A test that is skipped because a resource is missing must **say so loudly**, never pass silently.
+
+---
+
+## 9. Security requirements
+
+`docs/SECURITY.md` is authoritative.
+
+- **Treat all retrieved data as untrusted.** Merchant names, user-agents, and memo fields are
+  attacker-controlled. They carry `trust_tier=UNTRUSTED` from ingestion and never lose it.
+- **Raw LLM output may never execute a financial or account action.** The pipeline is:
+  agent → `ProposedAction` → policy validation → authorization → risk classification →
+  optional human approval → idempotent execution → verification → immutable audit event.
+- `ValidatedAction` is constructible **only** inside the policy engine. Enforced by types.
+- **One middleware chain** for tool authorization, capability tokens, `EvidenceEnvelope` validation,
+  rate limits, timeouts and audit — invoked identically by every transport. There is no unwrapped
+  tool entrypoint to expose.
+- No secret in code, image, log, or LLM prompt. `.env` is gitignored; secret scanning is blocking.
+- **PII never reaches logs.** A redacting processor sits in the logging pipeline and a unit test
+  asserts it. Logging PII is a build failure, not a review comment.
+- Least privilege everywhere: distinct DB roles and Kafka ACLs per service.
+
+---
+
+## 10. Agentic-AI design constraints
+
+1. **Agents never call each other.** A deterministic router maps open evidence gaps → eligible agents.
+   The LLM proposes and revises hypotheses; it does **not** choose the next agent.
+2. Every agent has a declared `AgentSpec`: responsibility, input/output schema, `allowed_tools`,
+   required/produced evidence, `max_tool_calls`, `max_tokens`, `max_invocations`, `timeout_s`, retry
+   policy, `on_failure` behaviour, authz scope, cost budget.
+3. **`allowed_tools` is enforced by the runtime, not by the prompt.** An out-of-list call raises
+   `ToolAuthorizationError`, is audited, and counts as a failure.
+4. **Four independent termination bounds**: max steps, wall-clock, cost, per-agent invocation caps.
+   Budget exhaustion produces `INSUFFICIENT_EVIDENCE` → human queue. It is a valid recorded outcome,
+   never a hang or a crash.
+5. **Every claim in a decision rationale must cite `evidence_ids`** or the schema rejects it.
+6. The Orchestrator has **no** tools. The Decision agent has **no** retrieval tools — it decides on the
+   recorded ledger, which makes decisions reproducible. The Remediation agent proposes only.
+7. Structured outputs only. Invalid output ⇒ exactly one reprompt with the validation error ⇒ then
+   `ABSTAIN`. Never parse loosely.
+8. Untrusted content reaches the model only inside `<untrusted_data>` JSON — never in a system message.
+
+---
+
+## 11. Ground-truth isolation (release blocker)
+
+Ground truth is **structurally unreachable** by the application, not hidden by convention.
+
+- Labels, `fraud_pattern`, and `causal_evidence_keys` live in the Postgres schema `groundtruth`.
+- The application role `trace_app` has **no grant on that schema at all**.
+- Only `trace_eval` may read it. The evaluation harness connects as `trace_eval`.
+- A test asserts `trace_app` receives `permission denied for schema groundtruth`. **That test failing
+  blocks release.** Leakage silently invalidates every metric in the project.
+- Agents are never given ground truth in any form, including indirectly through a feature.
+
+---
+
+## 12. Local-first requirement
+
+- **`make up` must work on a laptop with no cloud account and no API key.**
+- Compose is profiled: `core` (always) + `streaming` / `graph` / `ml` / `obs` / `llm` / `mcp-http`
+  opt-in. Every profile has a documented degraded mode, so `core` alone is a working product.
+- MCP servers default to **stdio** — a real protocol boundary at zero container cost.
+- The default LLM tier is `SMOKE` (local Ollama). A new contributor clones and runs `make demo`
+  without purchasing anything.
+- Paid AWS/Databricks resources are required only for cloud validation (Phase 12), never for
+  ordinary development.
+
+---
+
+## 13. Reproducibility and benchmark integrity
+
+**No benchmark number may be invented. Ever.**
+
+1. Every evaluation run emits a complete `RunManifest` (dataset/generator/scenario digests, Spark /
+   Delta / Hadoop / Java / Python versions, env-lock and image digests, model + calibration digests,
+   provider / tier / model-id / inference config, agent-graph / spec / prompt / tool-contract / MCP /
+   policy versions, git SHA, dirty-worktree flag). **A run that cannot produce one is not a valid run.**
+2. **No number appears in `README.md` or `docs/**` unless it cites a `run_id` that resolves.**
+   Enforced by `make check-claims`.
+3. Quality numbers may only come from the `EVAL` tier. `SMOKE` / `DEV` / `CI` may publish latency,
+   cost and operational metrics only.
+4. A run recorded with `dirty_worktree: true` is not publishable.
+5. **Track A (synthetic causal benchmark) and Track B (external real-world data) are never conflated.**
+   Track A measures agent reasoning quality under known causal ground truth. Track B measures ML
+   generalization on IEEE-CIS. A Track-B `run_id` may never be cited beside an agent-quality metric.
+6. **No document may imply that synthetic benchmark accuracy represents real-world fraud performance.**
+   Every report header carries the standing caveat verbatim (see `docs/EVALUATION.md`).
+7. A large synthetic-to-real transfer gap is an **expected, publishable, acceptable** result.
+   Concealing or re-framing it is a violation of this constitution.
+
+---
+
+## 14. Documentation rules
+
+| Document | Role | Update cadence |
+|---|---|---|
+| `CLAUDE.md` | Constitution — rules and invariants | Rarely; requires user approval |
+| `docs/ARCHITECTURE.md` | Architecture specification | When the design changes |
+| `docs/ROADMAP.md` | Phase gates | When a gate changes |
+| `docs/PROGRESS.md` | **Live state** | **Every session** |
+| `docs/TESTING.md` | Test strategy + Definition of Done | When a test layer changes |
+| `docs/EVALUATION.md` | Metrics, arms, manifests, integrity rules | When evaluation changes |
+| `docs/SECURITY.md` | Threat model and controls | When a boundary changes |
+| `docs/API_CONTRACTS.md` | API versioning policy | When the policy changes |
+| `docs/EVENT_CONTRACTS.md` | Event versioning policy | When the policy changes |
+| `docs/DATA_ENGINEERING.md` | Medallion, event-time, pins, layout | When the pipeline changes |
+| `docs/LOCAL_DEVELOPMENT.md` | How to run it | When the workflow changes |
+| `docs/OPERATIONS.md` | Runbook | When a failure mode changes |
+| `docs/adr/NNNN-*.md` | Decision records | One per decision |
+| `tests/acceptance/status.json` | Machine-readable capability status | Every session |
+
+**Rules.** Code and `ARCHITECTURE.md` disagreeing is a bug in one of them. ADRs are **immutable once
+accepted** — supersede with a new ADR, never edit. `PROGRESS.md` records reality including failures;
+an over-optimistic `PROGRESS.md` is worse than none.
+
+---
+
+## 15. Commands
+
+```bash
+make doctor         # preflight: pins, disk, RAM, ports, LLM tier
+make setup          # venv + dev dependencies
+make up / down / ps / logs
+make lint typecheck secrets audit
+make test-fast      # unit + property + contract + conformance
+make test           # everything except cloud
+make verify         # ★ CANONICAL health check — run before any completion claim
+make check-claims   # benchmark-integrity linter
+make acceptance     # capability status report
+make eval / eval-external / demo / seed / e2e / bench-layout   # phase-gated
+```
+
+Commands whose phase has not landed **exit non-zero with a clear message**. They never pretend to
+succeed.
+
+---
+
+## 16. Definition of Done
+
+**CODE WRITTEN ≠ FEATURE COMPLETE.**
+
+A capability is done only when all seven hold:
+
+1. **Implementation** exists and is typed.
+2. **Tests** exist at the layers `docs/TESTING.md` requires — including the failure path.
+3. **Actually executed** — the command was run and its real output recorded.
+4. **Failure-path validated** — the documented degraded/failure behaviour was triggered and observed.
+5. **Observable** — emits the metrics, traces and structured logs the design requires.
+6. **Documented** — the relevant doc updated; an ADR written if a decision was made.
+7. **Phase exit criteria** in `docs/ROADMAP.md` are met.
+
+Only then may `tests/acceptance/status.json` record `PASS`, and it must carry the evidence.
+
+---
+
+## 17. Prohibited shortcuts
+
+Never:
+
+- Mark a capability `PASS` without executable evidence.
+- Mock a critical integration in the end-to-end path to make a test pass.
+- Hardcode a value that makes a benchmark or acceptance test pass.
+- Invent, estimate, round up, or carry forward an unverified benchmark number.
+- Publish a number without a resolvable `run_id`, or a quality number from a non-`EVAL` tier.
+- Imply synthetic results predict real-world performance.
+- Conceal or re-frame an unfavourable result — including a failed ablation or a large transfer gap.
+- Expose ground truth to an agent, or grant `trace_app` access to `groundtruth`.
+- Let raw LLM output reach an executor, or construct `ValidatedAction` outside the policy engine.
+- Add a tool entrypoint that bypasses the middleware chain.
+- Concatenate untrusted retrieved text into a prompt outside `<untrusted_data>`.
+- Add a network boundary without a stated technical reason, or a dependency without an ADR.
+- Silently reduce a requirement, quietly narrow scope, or skip a phase gate.
+- Log PII or commit a secret or a dataset.
+- Write documentation describing something that does not exist as though it does.
+- Claim completion while any part of the requested scope is unfinished or unverified.

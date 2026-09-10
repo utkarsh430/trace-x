@@ -1,0 +1,30 @@
+name: claims
+
+# Benchmark integrity: no number may be published unless it maps to a
+# reproducible run manifest. See docs/EVALUATION.md §8.
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check-claims:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Every published number must cite a resolvable run_id
+        run: python scripts/check_claims.py
+
+      - name: The end-to-end path must never be mocked
+        run: |
+          if [ -d tests/e2e ] && grep -rnE 'unittest\.mock|MagicMock|monkeypatch' tests/e2e/; then
+            echo "::error::Mocking detected in the end-to-end path (CLAUDE.md §8.1)"
+            exit 1
+          fi
+          echo "No mocking in the end-to-end path."

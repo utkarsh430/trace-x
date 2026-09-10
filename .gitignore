@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+
+# Environment / secrets
+.env
+.env.local
+*.pem
+*.key
+!.env.example
+
+# Data — never commit datasets
+data/external/
+data/generated/
+data/lake/
+*.parquet
+*.csv
+!tests/**/*.csv
+
+# Spark / Delta
+_checkpoints/
+spark-warehouse/
+derby.log
+metastore_db/
+
+# ML artifacts
+mlruns/
+models/*.bin
+models/*.txt
+!models/.gitkeep
+
+# Eval cassettes are large; digests are committed, payloads are not
+eval/cassettes/
+
+# Node
+node_modules/
+.next/
+out/
+
+# OS / editor
+.DS_Store
+.idea/
+*.swp
+.claude/settings.local.json

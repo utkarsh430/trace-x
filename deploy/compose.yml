@@ -1,0 +1,166 @@
+# ============================================================================
+# TRACE-X local stack — PROFILED (ADR-0024)
+#
+# `core` is a complete working product on its own. Everything else is opt-in,
+# because the full stack does not fit alongside a laptop's other work.
+#
+#   make up              core                (postgres, redis)
+#   make up-streaming    core + streaming
+#   make up-full         everything          (needs ~15 GB free + 8 GB Docker RAM)
+#
+# Ports are deliberately non-standard to avoid collisions with other projects.
+# Every heavy service declares a memory limit — an unbounded JVM will consume
+# the whole VM and OOM-kill its neighbours.
+# ============================================================================
+
+name: tracex
+
+x-restart: &restart
+  restart: unless-stopped
+
+services:
+  # --------------------------------------------------------------- core ----
+  postgres:
+    image: postgres:16
+    profiles: ["core"]
+    <<: *restart
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-tracex}
+      POSTGRES_USER: ${POSTGRES_SUPERUSER:-tracex_owner}
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?set it in .env}
+      # Deterministic collation so ORDER BY is stable across machines.
+      POSTGRES_INITDB_ARGS: "--locale=C --encoding=UTF8"
+      # Role passwords are injected here and read by the init script via \getenv.
+      # They are never written into a committed file (CLAUDE.md §9).
+      TRACE_APP_DB_PASSWORD: ${TRACE_APP_DB_PASSWORD:?set it in .env}
+      TRACE_STREAM_DB_PASSWORD: ${TRACE_STREAM_DB_PASSWORD:?set it in .env}
+      TRACE_EVAL_DB_PASSWORD: ${TRACE_EVAL_DB_PASSWORD:?set it in .env}
+      TRACE_AUDITOR_DB_PASSWORD: ${TRACE_AUDITOR_DB_PASSWORD:?set it in .env}
+    ports:
+      - "${POSTGRES_PORT:-5442}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_SUPERUSER:-tracex_owner} -d ${POSTGRES_DB:-tracex}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+
+  redis:
+    image: redis:7-alpine
+    profiles: ["core"]
+    <<: *restart
+    # Online feature store only — derived state, authoritative for nothing (ADR-0003).
+    # allkeys-lru is correct here precisely because eviction is recoverable:
+    # Spark Gold reconciles the store, and a cold Redis degrades to rules-only.
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --save ""
+    ports:
+      - "${REDIS_PORT:-6389}:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    deploy:
+      resources:
+        limits:
+          memory: 640M
+
+  # ---------------------------------------------------------- streaming ----
+  # Phase 3. Not yet wired — declared so the profile shape is reviewable.
+  kafka:
+    image: apache/kafka:3.9.0
+    profiles: ["streaming"]
+    <<: *restart
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:${KAFKA_PORT:-9092}
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_HEAP_OPTS: "-Xmx768m -Xms768m"
+    ports:
+      - "${KAFKA_PORT:-9092}:9092"
+    volumes:
+      - kafkadata:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1280M
+
+  # -------------------------------------------------------------- graph ----
+  neo4j:
+    image: neo4j:5-community
+    profiles: ["graph"]
+    <<: *restart
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-change_me_locally}
+      NEO4J_server_memory_heap_max__size: 512M
+      NEO4J_server_memory_pagecache_size: 256M
+    ports:
+      - "${NEO4J_HTTP_PORT:-7474}:7474"
+      - "${NEO4J_BOLT_PORT:-7687}:7687"
+    volumes:
+      - neo4jdata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1280M
+
+  # ---------------------------------------------------------------- llm ----
+  # SMOKE tier (ADR-0016) — a bare clone runs the demo with NO API key.
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["llm"]
+    <<: *restart
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollamadata:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+volumes:
+  pgdata:
+  redisdata:
+  kafkadata:
+  neo4jdata:
+  ollamadata:

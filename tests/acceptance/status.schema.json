@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TRACE-X acceptance status",
+  "type": "object",
+  "required": ["project", "current_phase", "capabilities"],
+  "properties": {
+    "project": {"const": "TRACE-X"},
+    "current_phase": {"type": "string"},
+    "current_phase_name": {"type": "string"},
+    "updated_at": {"type": "string"},
+    "last_verified_commit": {"type": ["string", "null"]},
+    "legend": {"type": "object"},
+    "rules": {"type": "array", "items": {"type": "string"}},
+    "capabilities": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "phase", "name", "status", "evidence"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {"type": "string", "pattern": "^P[0-9]+B?\\.[a-z0-9-]+$"},
+          "phase": {"type": "string"},
+          "name": {"type": "string", "minLength": 8},
+          "status": {"enum": ["NOT_STARTED", "IN_PROGRESS", "PASS", "FAIL", "BLOCKED"]},
+          "notes": {"type": "string"},
+          "evidence": {
+            "type": "object",
+            "required": ["command", "verified_at", "result"],
+            "additionalProperties": false,
+            "properties": {
+              "command": {"type": "string", "minLength": 3},
+              "verified_at": {"type": ["string", "null"]},
+              "result": {"type": ["string", "null"]}
+            }
+          }
+        }
+      }
+    }
+  }
+}

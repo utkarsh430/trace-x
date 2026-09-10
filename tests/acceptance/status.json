@@ -1,0 +1,669 @@
+{
+  "$schema": "./status.schema.json",
+  "project": "TRACE-X",
+  "current_phase": "0",
+  "current_phase_name": "Foundation & Constitution",
+  "updated_at": "2026-09-10",
+  "last_verified_commit": null,
+  "legend": {
+    "NOT_STARTED": "No implementation exists.",
+    "IN_PROGRESS": "Implementation started; acceptance evidence incomplete.",
+    "PASS": "Implemented AND proven by an executed command recorded in `evidence`.",
+    "FAIL": "Implemented but its acceptance check currently fails.",
+    "BLOCKED": "Cannot proceed until the named blocker clears."
+  },
+  "rules": [
+    "A capability is PASS only with executable evidence: a command that was actually run and its result.",
+    "Code existing is never sufficient for PASS. See docs/TESTING.md, Definition of Done.",
+    "`evidence.verified_at` must be null whenever status is not PASS."
+  ],
+  "capabilities": [
+    {
+      "id": "P0.repo-skeleton",
+      "phase": "0",
+      "name": "Repository skeleton and control plane documents",
+      "status": "PASS",
+      "evidence": {
+        "command": "python3 scripts/acceptance.py check P0.repo-skeleton",
+        "verified_at": "2026-09-10",
+        "result": "pytest tests/unit/test_control_plane.py: 146 passed - 12 control-plane docs + 26 ADRs, no placeholders, no dangling ADR refs"
+      }
+    },
+    {
+      "id": "P0.doctor",
+      "phase": "0",
+      "name": "Preflight doctor asserts version pin matrix, disk, RAM, ports, LLM tier",
+      "status": "PASS",
+      "evidence": {
+        "command": "make doctor",
+        "verified_at": "2026-09-10",
+        "result": "exit 0; correctly flags Java 25 vs required Temurin 17"
+      }
+    },
+    {
+      "id": "P0.toolchain",
+      "phase": "0",
+      "name": "Lint, format, type-check, secret scan, dependency audit",
+      "status": "PASS",
+      "evidence": {
+        "command": "make lint && make typecheck && make secrets",
+        "verified_at": "2026-09-10",
+        "result": "ruff format+lint clean; mypy strict clean (16 files); bandit -ll clean (3 LOW verified false positives, documented in pyproject)"
+      }
+    },
+    {
+      "id": "P0.test-harness",
+      "phase": "0",
+      "name": "pytest harness with phase markers and fast lane",
+      "status": "PASS",
+      "evidence": {
+        "command": "make test-fast",
+        "verified_at": "2026-09-10",
+        "result": "pytest: 188 fast + 15 integration = 203 passed; phase markers registered; resource-gated tests skip loudly"
+      }
+    },
+    {
+      "id": "P0.compose-core",
+      "phase": "0",
+      "name": "docker compose core profile (postgres, redis) starts clean",
+      "status": "PASS",
+      "evidence": {
+        "command": "make up && make ps",
+        "verified_at": "2026-09-10",
+        "result": "make up: postgres+redis healthy on 5442/6389; init script created 5 schemas + 4 roles from env-injected passwords (no credential in any committed file); trace_eval authenticates; trace_app still denied on groundtruth; redis PONG"
+      }
+    },
+    {
+      "id": "P0.migrations",
+      "phase": "0",
+      "name": "Alembic migrations, five-schema role separation, up/down round-trip",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "make migrate && make migrate-down",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P0.groundtruth-isolation",
+      "phase": "0",
+      "name": "trace_app is DENIED access to the groundtruth schema (release blocker)",
+      "status": "PASS",
+      "evidence": {
+        "command": "pytest tests/integration/test_groundtruth_isolation.py",
+        "verified_at": "2026-09-10",
+        "result": "pytest tests/integration/test_groundtruth_isolation.py: 15 passed against live PostgreSQL 16 - trace_app/trace_stream/trace_auditor DENIED with 'permission denied for schema groundtruth'; trace_eval permitted; app schema still readable; no write path"
+      },
+      "notes": "Structural control, not convention. ADR-0004. Must assert 'permission denied for schema groundtruth'."
+    },
+    {
+      "id": "P0.pii-redaction",
+      "phase": "0",
+      "name": "PII never reaches log output",
+      "status": "PASS",
+      "evidence": {
+        "command": "pytest tests/unit/test_pii_redaction.py",
+        "verified_at": "2026-09-10",
+        "result": "pytest tests/unit/test_pii_redaction.py: 13 passed - email/PAN/IPv4/IPv6/IBAN/account redacted incl. nested; Luhn guard prevents false positives"
+      }
+    },
+    {
+      "id": "P0.claim-linter",
+      "phase": "0",
+      "name": "Benchmark-integrity linter rejects unbacked numeric claims",
+      "status": "PASS",
+      "evidence": {
+        "command": "make check-claims",
+        "verified_at": "2026-09-10",
+        "result": "exit 0; self-test proves a fabricated number fails the build"
+      }
+    },
+    {
+      "id": "P0.ci",
+      "phase": "0",
+      "name": "CI runs lint and test-fast on every push",
+      "status": "IN_PROGRESS",
+      "evidence": {
+        "command": "gh workflow list",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P1.domain-model",
+      "phase": "1",
+      "name": "Domain entities and both state machines",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "pytest -m property tests/unit/test_state_machines.py",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P1.generator",
+      "phase": "1",
+      "name": "Deterministic transaction generator, 10 fraud scenarios",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "make seed",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P1.source-adapter",
+      "phase": "1",
+      "name": "SourceAdapter port with field_coverage, no silent imputation",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "pytest -m conformance tests/conformance/test_source_adapter.py",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P1.causal-evidence",
+      "phase": "1",
+      "name": "causal_evidence_keys written to groundtruth only",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "pytest tests/integration/test_ground_truth_write_path.py",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P2.gateway",
+      "phase": "2",
+      "name": "Synchronous scoring gateway meets its p99 budget",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "make load-gateway",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P2.online-features",
+      "phase": "2",
+      "name": "Redis online feature store",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "pytest tests/unit/test_online_features.py",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P2.rules-engine",
+      "phase": "2",
+      "name": "Declarative rule engine, hot-reloadable",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "pytest tests/unit/test_rules.py",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P2.degraded-mode",
+      "phase": "2",
+      "name": "Redis outage degrades to rules-only, never 5xx",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "pytest -m chaos tests/chaos/test_redis_down.py",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P2.idempotency",
+      "phase": "2",
+      "name": "Duplicate transaction_id yields one effect",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "pytest tests/unit/test_idempotency.py",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P3.medallion",
+      "phase": "3",
+      "name": "Bronze/Silver/Gold Delta medallion",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "pytest -m integration tests/integration/test_medallion.py",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P3.event-time",
+      "phase": "3",
+      "name": "Watermarks, dedup, late-event routing, out-of-order correctness",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "pytest -m integration tests/integration/test_event_time.py",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P3.checkpoint-resume",
+      "phase": "3",
+      "name": "Checkpoint kill/resume: no loss, no double-count",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "pytest -m chaos tests/chaos/test_spark_resume.py",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P3.feature-parity",
+      "phase": "3",
+      "name": "Online vs offline feature parity within tolerance",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "pytest -m parity",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P3.layout-benchmark",
+      "phase": "3",
+      "name": "Delta layout benchmark backing ADR-0015",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "make bench-layout",
+        "verified_at": null,
+        "result": null
+      },
+      "notes": "ADR-0015 may not be merged until this produces committed output."
+    },
+    {
+      "id": "P4.training",
+      "phase": "4",
+      "name": "Point-in-time-correct training, temporal splits, no leakage",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "pytest tests/unit/test_leakage.py",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P4.calibration",
+      "phase": "4",
+      "name": "Calibrated probabilities improve Brier score",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "pytest tests/unit/test_calibration.py",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P4.model-serving",
+      "phase": "4",
+      "name": "Digest-pinned artifact; corrupt artifact refuses boot",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "pytest tests/unit/test_model_pinning.py",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P4B.external-ingest",
+      "phase": "4B",
+      "name": "IEEE-CIS ingests through UNMODIFIED medallion code",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "make eval-external",
+        "verified_at": null,
+        "result": null
+      },
+      "notes": "Proven by an empty git diff of the stream package across the phase."
+    },
+    {
+      "id": "P4B.no-imputation",
+      "phase": "4B",
+      "name": "UNAVAILABLE features are never zero-imputed",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "pytest -m external tests/external/test_no_imputation.py",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P4B.transfer-gap",
+      "phase": "4B",
+      "name": "Synthetic-to-real gap quantified and published",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "make eval-external",
+        "verified_at": null,
+        "result": null
+      },
+      "notes": "A large gap is an accepted, expected result and does not fail the phase."
+    },
+    {
+      "id": "P4B.track-separation",
+      "phase": "4B",
+      "name": "Track A and Track B results cannot be conflated",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "pytest tests/unit/test_track_separation.py",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P5.evidence-ledger",
+      "phase": "5",
+      "name": "Evidence ledger with provenance and trust tiers",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "pytest tests/unit/test_evidence_ledger.py",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P5.tool-authz",
+      "phase": "5",
+      "name": "Out-of-allow-list tool call is denied and audited",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "pytest -m adversarial tests/adversarial/test_tool_authz.py",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P5.mcp-servers",
+      "phase": "5",
+      "name": "Three real MCP servers reachable over stdio and HTTP",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "pytest -m transport_parity",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P5.transport-parity",
+      "phase": "5",
+      "name": "MCP and in-process behave identically incl. authz denial",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "pytest -m transport_parity",
+        "verified_at": null,
+        "result": null
+      },
+      "notes": "Highest-severity new risk: authz enforced on one path and forgotten on the other."
+    },
+    {
+      "id": "P5.audit-chain",
+      "phase": "5",
+      "name": "Hash-chained audit detects tampering",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "pytest tests/unit/test_audit_chain.py",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P5.graph-adapters",
+      "phase": "5",
+      "name": "Neo4j and Postgres adapters pass one conformance suite",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "pytest -m conformance tests/conformance/test_graph_store.py",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P5.policy-engine",
+      "phase": "5",
+      "name": "ValidatedAction unconstructable outside the policy engine",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "pytest tests/unit/test_policy_engine.py",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P6.llm-tiers",
+      "phase": "6",
+      "name": "Four LLM tiers pass one provider conformance suite",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "pytest -m conformance tests/conformance/test_llm_provider.py",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P6.keyless-clone",
+      "phase": "6",
+      "name": "A clone with NO API key completes an investigation",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "make demo",
+        "verified_at": null,
+        "result": null
+      },
+      "notes": "CI runs this with secrets unavailable."
+    },
+    {
+      "id": "P6.budget-bounds",
+      "phase": "6",
+      "name": "Budget exhaustion yields INSUFFICIENT_EVIDENCE, never a hang",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "pytest -m property tests/unit/test_budget_termination.py",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P6.worker-resume",
+      "phase": "6",
+      "name": "Worker crash resumes from LangGraph checkpoint",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "pytest -m chaos tests/chaos/test_worker_resume.py",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P6.baseline-arm-d",
+      "phase": "6",
+      "name": "Single-agent baseline (Arm D) runs end to end",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "make eval -- --arm D",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P7.dynamic-routing",
+      "phase": "7",
+      "name": "Investigation path is NOT predetermined",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "pytest tests/unit/test_path_variability.py",
+        "verified_at": null,
+        "result": null
+      },
+      "notes": "Device-farm and impossible-travel cases must visit provably different agent sequences."
+    },
+    {
+      "id": "P7.skeptic-loop",
+      "phase": "7",
+      "name": "Skeptic challenges create new gaps and cause rerouting",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "pytest tests/unit/test_skeptic_rerouting.py",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P7.injection-defense",
+      "phase": "7",
+      "name": "Prompt-injection corpus does not move decisions",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "pytest -m adversarial tests/adversarial/test_prompt_injection.py",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P7.evidence-citation",
+      "phase": "7",
+      "name": "Every rationale claim cites resolvable evidence_ids",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "pytest tests/unit/test_citation_enforcement.py",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P8.action-safety",
+      "phase": "8",
+      "name": "Raw LLM output can never reach the executor",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "pytest tests/unit/test_action_pipeline.py",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P8.human-approval",
+      "phase": "8",
+      "name": "Zero unapproved HIGH-risk executions (hard zero)",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "pytest -m integration tests/integration/test_approval.py",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P8.compensation",
+      "phase": "8",
+      "name": "Verification failure compensates and escalates",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "pytest -m integration tests/integration/test_compensation.py",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P9.run-manifest",
+      "phase": "9",
+      "name": "Complete run manifest; incomplete runs are rejected",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "pytest tests/unit/test_run_manifest.py",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P9.benchmark-arms",
+      "phase": "9",
+      "name": "Arms A-G execute and report honestly",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "make eval",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P9.no-hardcoding",
+      "phase": "9",
+      "name": "Harness fails if the model is a constant predictor",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "pytest tests/unit/test_harness_integrity.py",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P10.dashboard",
+      "phase": "10",
+      "name": "Analyst can understand and act on a decision without code",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "npm run test:e2e",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P11.trace-continuity",
+      "phase": "11",
+      "name": "One trace_id spans ingest to audit",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "pytest -m e2e tests/e2e/test_trace_continuity.py",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P11.chaos-suite",
+      "phase": "11",
+      "name": "Every documented failure mode is asserted",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "make chaos",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P12.cloud-validation",
+      "phase": "12",
+      "name": "IaC applies, smoke passes, destroys to zero residual cost",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "make cloud-validate",
+        "verified_at": null,
+        "result": null
+      },
+      "notes": "BLOCKED on AWS credentials; no credentials configured on the reference machine."
+    },
+    {
+      "id": "P13.go-gateway",
+      "phase": "13",
+      "name": "OPTIONAL: Go gateway beats recorded Python p99",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "make bench-gateway-go",
+        "verified_at": null,
+        "result": null
+      },
+      "notes": "Optional. Abandoned with an ADR if the margin does not justify a second toolchain."
+    }
+  ]
+}

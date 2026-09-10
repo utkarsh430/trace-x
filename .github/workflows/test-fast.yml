@@ -1,0 +1,46 @@
+name: test-fast
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: test-fast-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dev dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Unit, property, contract, conformance
+        run: |
+          pytest -m "not integration and not e2e and not load and not chaos and not external and not cloud and not slow" \
+                 --cov --cov-report=term-missing
+
+      - name: Acceptance status integrity
+        run: python scripts/acceptance.py validate
+
+      # The Definition of Done forbids commands that pretend to succeed.
+      - name: Phase-gated commands must fail explicitly
+        run: |
+          set +e
+          make seed >/dev/null 2>&1; rc=$?
+          set -e
+          if [ "$rc" -eq 0 ]; then
+            echo "::error::'make seed' exited 0 but Phase 1 is not implemented"
+            exit 1
+          fi
+          echo "Phase-gated commands correctly exit non-zero (rc=$rc)."
