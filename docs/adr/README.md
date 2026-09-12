@@ -42,6 +42,7 @@ been thought through.
 | [0028](0028-event-model-codegen.md) | Event models generated from JSON Schema, with a drift gate and a release ledger | 1 | Accepted |
 | [0029](0029-deterministic-generation.md) | Deterministic generation — stdlib RNG, named substreams, row-JSON digests | 1 | Accepted |
 | [0030](0030-fraud-scenario-taxonomy.md) | Fraud scenario taxonomy and the causal evidence key contract | 1 | Accepted |
+| [0031](0031-trace-generator-write-only-role.md) | `trace_generator` — a write-only ground-truth role | 1 | Accepted |
 
 ## Notes on status
 

@@ -36,12 +36,17 @@ ROLE_PWS = {
     "trace_stream": "isolation_stream_pw",
     "trace_eval": "isolation_eval_pw",
     "trace_auditor": "isolation_auditor_pw",
+    # Added by migration 0002 (ADR-0031). The migration refuses to create a role
+    # without a password, so omitting this fails the whole upgrade -- which is
+    # the intended behaviour, and is why it is listed here rather than defaulted.
+    "trace_generator": "isolation_generator_pw",
 }
 ENV_VARS = {
     "trace_app": "TRACE_APP_DB_PASSWORD",
     "trace_stream": "TRACE_STREAM_DB_PASSWORD",
     "trace_eval": "TRACE_EVAL_DB_PASSWORD",
     "trace_auditor": "TRACE_AUDITOR_DB_PASSWORD",
+    "trace_generator": "TRACE_GENERATOR_DB_PASSWORD",
 }
 
 
@@ -181,12 +186,20 @@ def test_migration_creates_all_five_schemas(seeded: str) -> None:
 
 def test_migration_creates_all_service_roles(seeded: str) -> None:
     r = _as(seeded, OWNER, "select rolname from pg_roles where rolname like 'trace\\_%' order by 1")
-    assert sorted(r.stdout.split()) == ["trace_app", "trace_auditor", "trace_eval", "trace_stream"]
+    assert sorted(r.stdout.split()) == [
+        "trace_app",
+        "trace_auditor",
+        "trace_eval",
+        "trace_generator",
+        "trace_stream",
+    ]
 
 
 def test_migration_is_recorded_in_the_version_table(seeded: str) -> None:
+    """Pinned to the current head, so adding a migration is a deliberate edit
+    here rather than something that slips through unnoticed."""
     r = _as(seeded, OWNER, "select version_num from app.alembic_version")
-    assert r.stdout.strip() == "0001"
+    assert r.stdout.strip() == "0002"
 
 
 def test_ground_truth_schema_carries_an_explanatory_comment(seeded: str) -> None:
