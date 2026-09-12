@@ -14,7 +14,7 @@ been thought through.
 |---|---|---|---|
 | [0001](0001-modular-monolith-process-boundaries.md) | Modular monolith with four justified process boundaries | 0 | Accepted |
 | [0002](0002-dual-path-spark-not-on-hot-path.md) | Dual-path architecture — Spark is not on the hot path | 0 | Accepted |
-| [0003](0003-redis-online-feature-store.md) | Redis as the online feature store | 0 | Accepted |
+| [0003](0003-redis-online-feature-store.md) | Redis as the online feature store | 0 | Accepted — distinct-cardinality row amended by [0034](0034-hybrid-distinct-cardinality-storage.md) |
 | [0004](0004-postgres-system-of-record-ground-truth-isolation.md) | PostgreSQL system of record; ground-truth isolation by schema and role | 0 | Accepted |
 | [0005](0005-delta-lake-medallion.md) | Delta Lake medallion architecture | 0 | Accepted |
 | [0006](0006-kafka-kraft-event-backbone.md) | Kafka (KRaft) as the event backbone | 0 | Accepted |
@@ -45,6 +45,7 @@ been thought through.
 | [0031](0031-trace-generator-write-only-role.md) | `trace_generator` — a write-only ground-truth role | 1 | Accepted |
 | [0032](0032-declarative-feature-semantics.md) | Features declare their semantics, not just their implementation | 2 | Accepted |
 | [0033](0033-declarative-rule-packs.md) | Rule packs are data in a closed grammar, digest-pinned and fail-safe on reload | 2 | Accepted |
+| [0034](0034-hybrid-distinct-cardinality-storage.md) | Hybrid distinct-cardinality storage — exact where bounded, estimated where not | 2 | Accepted (amends 0003) |
 
 ## Notes on status
 

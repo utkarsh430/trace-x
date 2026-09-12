@@ -442,3 +442,32 @@ def test_an_incomplete_benchmark_record_cannot_back_anything(linter) -> None:
     )
     assert violations
     assert any("missing" in v and "tool_version" in v for v in violations)
+
+
+def test_a_latency_result_is_caught_in_either_word_order(linter) -> None:
+    """ "p99 was 42 ms" and "measured 42 ms p99" are the same claim."""
+    assert linter("The gateway p99 was 42 ms under load.")
+    assert linter("The gateway measured 42 ms p99 under load.")
+
+
+def test_a_budget_reference_is_not_mistaken_for_a_result(linter) -> None:
+    """The asymmetry in the two latency patterns, stated as a test.
+
+    "a 100 ms p99" is how every document in this repo refers to the BUDGET, and
+    ADR-0001 and ADR-0002 both do so correctly. Neither may be edited to suit a
+    linter -- ADRs are immutable once accepted -- so the reversed pattern requires
+    a measurement verb. A gate that cries wolf on correct prose is one people
+    learn to override.
+    """
+    assert linter("Cold starts are fatal to a 100 ms p99; Spark cannot serve one.") == []
+    assert linter("Investigations are far too slow for a 100 ms p99 synchronous path.") == []
+
+
+def test_a_comparator_only_exempts_prose_when_a_quantity_follows(linter) -> None:
+    """ "under 100 ms" is a budget; "under load" is not a statement about size.
+
+    Listing "under" as a bare target word exempted the single phrasing most
+    likely to carry a real measurement.
+    """
+    assert linter("Scoring stays under 100 ms at the chosen operating point.") == []
+    assert linter("The gateway p99 was 42 ms under load.")

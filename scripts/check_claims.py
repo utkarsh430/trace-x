@@ -46,6 +46,22 @@ QUALITY_PATTERNS = [
 ]
 OPERATIONAL_PATTERNS = [
     re.compile(r"\bp(?:50|95|99)\b[^.\n]{0,30}?(\d+(?:\.\d+)?)\s*(ms|s)\b", re.I),
+    # The same claim written the other way round -- "measured 0.765 ms p99". The
+    # first pattern requires the percentile to precede the number, so this
+    # ordering went unchecked, and it is how a results table actually reads.
+    #
+    # A measurement verb is required here, and the asymmetry is deliberate rather
+    # than lazy: "p99 was 42 ms" is nearly always a reported result, while
+    # "a 100 ms p99" is nearly always a reference to the BUDGET -- which
+    # ADR-0001 and ADR-0002 both make, correctly, and neither may be edited to
+    # suit a linter (ADRs are immutable once accepted). Without the verb this
+    # pattern flags every mention of the budget, and a gate that cries wolf on
+    # correct prose is one people learn to override.
+    re.compile(
+        r"\b(?:measured|observed|recorded|reached|sustained|achieved|came in at)\b"
+        r"[^.\n]{0,30}?(\d+(?:\.\d+)?)\s*(ms|s)\b[^.\n]{0,15}?\bp(?:50|95|99)\b",
+        re.I,
+    ),
     re.compile(r"\b(?:throughput|sustained)\b[^.\n]{0,30}?(\d[\d,]*)\s*(?:tx|events|req)/s", re.I),
     re.compile(r"\bcost[^.\n]{0,30}?\$(\d+(?:\.\d+)?)\s*(?:per|/)\s*investigation", re.I),
     # Any rate expressed per second, however it is worded. The two patterns
@@ -68,17 +84,25 @@ CLAIM_PATTERNS = [(p, "quality") for p in QUALITY_PATTERNS] + [
 # Prose that states a budget/target/threshold/example rather than a measured result.
 TARGET_WORDS = re.compile(
     r"\b(target|budget|threshold|goal|must|should|require[sd]?|aim|SLO|limit|cap|"
-    r"tolerance|floor|ceiling|at most|at least|under|below|above|no more than|"
+    r"tolerance|floor|ceiling|at most|at least|no more than|"
     r"example|placeholder|TBD|not yet|unmeasured|hypothetical|illustrative|"
     r"would be|expected|suppose)\b",
     re.I,
 )
+# "under", "below" and "above" are comparative ONLY when a quantity follows.
+# Listed among the bare words above, "under" matched "under load" -- so
+# "the gateway p99 was 42 ms under load" was silently exempted as a budget
+# statement. That is a reported measurement, and it was the one phrasing most
+# likely to appear in a real report.
+TARGET_COMPARATORS = re.compile(r"\b(under|below|above|over)\s+[~<>]?\s*\d", re.I)
 # Handled separately: these do not sit on word boundaries.
 TARGET_SYMBOLS = re.compile(r"(<|>|≤|≥|e\.g\.|i\.e\.)")
 
 
 def is_target_prose(line: str) -> bool:
-    return bool(TARGET_WORDS.search(line) or TARGET_SYMBOLS.search(line))
+    return bool(
+        TARGET_WORDS.search(line) or TARGET_COMPARATORS.search(line) or TARGET_SYMBOLS.search(line)
+    )
 
 
 # The separator class includes backticks and quotes because a markdown report
