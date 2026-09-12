@@ -108,7 +108,35 @@ parallelism is what keeps the mandatory data-engineering track from serialising 
 
 **DEPENDENCIES:** P0.
 
-**ENTRY CONDITIONS** — P0 exit conditions met.
+**ENTRY CONDITIONS**
+- **Phase 0 exit conditions met** — all five, with evidence. Confirm in one command: `make verify`
+  (expect 9/9) plus `make ci-status` (expect 4/4). `tests/acceptance/status.json` must show
+  Phase 0 at 10/10 PASS.
+- Working tree clean and pushed; `docs/PROGRESS.md` current.
+- **No new environment prerequisites.** Phase 1 is pure Python: it needs neither Docker, Java/Spark
+  (Phase 3), Ollama (Phase 6), nor cloud credentials (Phase 12). `make setup` is sufficient.
+  Docker is needed only to re-run the Phase 0 integration suite.
+
+**FIRST TASKS** — in dependency order; each is independently testable.
+
+1. **Domain enums and errors** — `trace_core/domain/`: `FraudPattern`, `EvidenceKind`, `RiskBand`,
+   `ActionType`, `TrustTier`, plus typed exceptions. Everything downstream references these, so they
+   land first.
+2. **Both state machines** — case lifecycle (`docs/ARCHITECTURE.md` §13) and agent lifecycle (§12), as
+   pure functions with an explicit legal-transition table. Illegal transitions must raise, not warn.
+   Property-tested before anything imports them.
+3. **Event JSON Schemas** — `docs/contracts/events/*.json` with the mandatory envelope
+   (`docs/EVENT_CONTRACTS.md` §2). **Schemas first, Pydantic generated from them** — never the reverse.
+4. **`CanonicalTransaction` + `SourceAdapter` port + `field_coverage`** (ADR-0022), with
+   `GeneratorAdapter` as the first implementation and the conformance suite that Phase 4B's second
+   adapter must also pass.
+5. **Feature `required_fields` declarations** — the mechanism that makes an uncovered feature
+   `UNAVAILABLE` rather than silently zero. Test it before any feature depends on it.
+6. **Transaction generator** — seeded and digest-reproducible first; realistic diurnal, merchant and
+   geographic distributions second.
+7. **The 10 fraud scenarios**, each with its documented signature and its `causal_evidence_keys`
+   written **only** to the `groundtruth` schema.
+8. **CLI** emitting N transactions to file or Kafka, then freeze `eval-v1` and commit its digest.
 
 **IMPLEMENTATION**
 - Domain entities; agent state machine and case state machine.

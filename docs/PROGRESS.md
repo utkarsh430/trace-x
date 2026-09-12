@@ -49,6 +49,33 @@ regression tests — see COMPLETED WORK.
 **No TRACE-X product functionality exists yet.** No transaction processing, ML, streaming, agents or
 frontend code has been written, by instruction.
 
+## COLD-START CHECKLIST (read this first in a new session)
+
+```bash
+make setup      # venv + dev/db/obs extras
+make verify     # expect: 9 passed, 0 failed  -> VERIFY OK
+make ci-status  # expect: all 4 workflows pass
+```
+
+If both pass, Phase 0 is intact and **Phase 1 may begin**. If either fails, fix that before any new
+work — the failure is the current task.
+
+| Question a cold session will ask | Answer |
+|---|---|
+| What phase are we in? | Phase 0 **complete**. Phase 1 not started. |
+| What do I do next? | `docs/ROADMAP.md` § Phase 1 → **FIRST TASKS**, an ordered list of 8. |
+| What is already built? | Control plane only: docs, ADRs, tooling, migrations, observability scaffold. **No product code.** |
+| What must I never do? | `CLAUDE.md` §17, and §11 (ground-truth isolation) above all. |
+| Do I need Docker / Java / an API key? | Not for Phase 1. Docker only to re-run the Phase 0 integration suite. |
+| Where do I record results? | This file and `tests/acceptance/status.json` (which refuses `PASS` without evidence). |
+
+**Known environment gaps — not blocking Phase 1:**
+`JAVA_HOME` unset and system Java is 25 (Spark 4.0 needs Temurin 17) — blocks **Phase 3**.
+Ollama not installed — blocks **Phase 6**. No AWS credentials — blocks **Phase 12**.
+`gh` unauthenticated, so CI logs cannot be downloaded; failures are diagnosed by local reproduction.
+
+---
+
 ## LAST VERIFIED COMMIT
 
 `7cf30ed` — *Close Phase 0: CI green, add ci-status, harden the Actions API client*
