@@ -14,9 +14,10 @@ makes "same seed, same digest" a meaningful claim.
 from __future__ import annotations
 
 import hashlib
-import json
 from collections.abc import Iterable, Iterator
 from typing import Any
+
+from trace_core.contracts.canonical_json import canonical_bytes
 
 
 class DatasetDigest:
@@ -56,14 +57,12 @@ class DatasetDigest:
         return "sha256:" + self._hasher.hexdigest()
 
 
-def canonical_bytes(row: Any) -> bytes:
-    """Sorted keys, no incidental whitespace, UTF-8.
-
-    `sort_keys` matters: a dict literal's insertion order is an implementation
-    detail, and letting it into the digest would make an unrelated refactor look
-    like a data change.
-    """
-    return json.dumps(row, sort_keys=True, separators=(",", ":"), default=str).encode()
+# Re-exported, not redefined. The envelope's `idempotency_key` hashes the same
+# way this digest does, and two implementations of a hash's input drift silently
+# -- so the encoding lives in `trace_core.contracts.canonical_json` and both
+# callers import it. Kept importable from here because `eval-v1`'s manifest and
+# several tests already reference this name.
+__all__ = ["DatasetDigest", "canonical_bytes", "digest_of", "tee_digest"]
 
 
 def digest_of(rows: Iterable[Any]) -> tuple[str, int]:
