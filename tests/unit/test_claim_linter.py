@@ -136,3 +136,88 @@ def test_operational_metrics_publish_from_any_tier(linter) -> None:
     assert not any("only EVAL may publish" in x for x in v), (
         "tier gating must not block operational metrics; it would get bypassed if it did"
     )
+
+
+# ------------------------------------- generator run records (Phase 1) ------
+#
+# Phase 1 produces real measurements before the full RunManifest of ADR-0017
+# exists. These tests exist because the linter did NOT catch a generation rate
+# written into an ADR during step 6: the throughput pattern required the words
+# "throughput" or "sustained" nearby, so "54.6k tx/s" passed silently. A number
+# nobody checks is worse than one that is blocked, because it reads as though it
+# had been checked.
+
+
+def _generator_record(**over: object) -> dict:
+    base: dict = {
+        "run_id": "gen-20260912-probe-abcd1234",
+        "record_type": "GENERATOR",
+        "track": "SYNTHETIC",
+        "git_commit_sha": "0" * 40,
+        "dirty_worktree": False,
+        "generator_version": "1.0.0",
+        "seed": 42,
+        "fraud_scenario_config_digest": "sha256:" + "a" * 64,
+        "dataset_version": "probe-v1",
+        "dataset_digest": "sha256:" + "b" * 64,
+        "row_count": 1000,
+        "env_lock_digest": "sha256:" + "c" * 64,
+        "python_version": "3.12.0",
+        "started_at": "2026-09-12T10:00:00Z",
+        "finished_at": "2026-09-12T10:00:10Z",
+        "validation_policy": "all",
+        "measured": {"generation_rate_tx_per_s": 54000.0},
+    }
+    base.update(over)
+    return base
+
+
+CITED = "(run_id: gen-20260912-probe-abcd1234)"
+
+
+def test_a_generation_rate_without_a_run_id_is_rejected(linter) -> None:
+    """The exact gap that let an unbacked number into an ADR."""
+    violations = linter("The generator produced 54,000 tx/s on the reference machine.")
+    assert violations
+    assert "without a run_id" in violations[0]
+
+
+def test_a_generation_rate_with_a_resolvable_run_id_passes(linter) -> None:
+    assert linter(f"Generation reached 54,000 tx/s {CITED}.", _generator_record()) == []
+
+
+def test_a_dataset_size_without_a_run_id_is_rejected(linter) -> None:
+    assert linter("The dataset occupies 412 MB on disk.")
+
+
+def test_a_generator_record_cannot_back_a_quality_claim(linter) -> None:
+    """A generation run has no model and no inference: it can substantiate
+    throughput and size, never accuracy."""
+    violations = linter(f"PR-AUC was 0.91 {CITED}.", _generator_record())
+    assert violations
+    assert any("GENERATOR record" in v for v in violations)
+
+
+def test_an_incomplete_generator_record_cannot_back_anything(linter) -> None:
+    """A number whose provenance is incomplete is indistinguishable from one
+    that was invented (ADR-0017)."""
+    record = _generator_record()
+    del record["dataset_digest"]
+    violations = linter(f"Generation reached 54,000 tx/s {CITED}.", record)
+    assert violations
+    assert any("missing" in v for v in violations)
+
+
+def test_a_dirty_worktree_record_cannot_back_a_number(linter) -> None:
+    """docs/EVALUATION.md §8 rule 4."""
+    violations = linter(
+        f"Generation reached 54,000 tx/s {CITED}.", _generator_record(dirty_worktree=True)
+    )
+    assert violations
+    assert any("dirty worktree" in v for v in violations)
+
+
+def test_target_prose_is_still_exempt(linter) -> None:
+    """A budget is not a measured result. Gating it would be obstructive, and an
+    obstructive rule gets worked around."""
+    assert linter("The target is at least 50,000 tx/s single-process.") == []

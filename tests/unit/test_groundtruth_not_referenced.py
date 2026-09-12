@@ -27,7 +27,15 @@ ALLOWED = {
     Path("data/generator/groundtruth.py"),
     Path("migrations/versions/0002_groundtruth_tables.py"),
     Path("migrations/versions/0001_schemas_roles_grants.py"),
+    # The CLI orchestrates: it owns the --groundtruth/--no-groundtruth flag and
+    # calls the writer. It must not itself touch the schema, and
+    # `test_the_cli_orchestrates_but_does_not_access_the_schema` bounds the
+    # permission to exactly that -- no SQL, no table names.
+    Path("data/generator/cli.py"),
 }
+
+# Table names that would indicate direct schema access rather than delegation.
+GROUNDTRUTH_TABLES = ("transaction_labels", "causal_evidence", "scenario_instances")
 
 SCANNED_ROOTS = ("packages", "data", "services", "mcp_servers")
 # No word boundaries: `groundtruth_labels = ...` must be caught too, and the
@@ -122,6 +130,20 @@ def test_docstrings_about_the_control_are_not_flagged(tmp_path: Path) -> None:
     documented = tmp_path / "documented.py"
     documented.write_text('"""Never reads the groundtruth schema."""\nx = 1\n')
     assert not GROUNDTRUTH.search(_executable_source(documented))
+
+
+def test_the_cli_orchestrates_but_does_not_access_the_schema() -> None:
+    """The CLI is allow-listed only because it delegates.
+
+    It decides WHETHER ground truth is written; `groundtruth.py` decides HOW. If
+    the CLI ever grew SQL or a table name, the containment boundary would have
+    quietly become two files instead of one.
+    """
+    source = (ROOT / "data/generator/cli.py").read_text()
+    assert "SELECT" not in source.upper().replace("SELECTION", "")
+    assert "INSERT INTO" not in source.upper()
+    for table in GROUNDTRUTH_TABLES:
+        assert table not in source, f"the CLI names the ground-truth table {table!r}"
 
 
 def test_the_allowed_modules_exist() -> None:

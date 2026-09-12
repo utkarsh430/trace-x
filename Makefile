@@ -133,8 +133,8 @@ verify: ## CANONICAL health check: doctor + lint + typecheck + test-fast + claim
 ## ---------------------------------------------------------------------------
 ## Phase-gated commands (fail explicitly until their phase lands)
 ## ---------------------------------------------------------------------------
-seed:           ## [Phase 1] Generate and load a development dataset
-	@$(PY) scripts/phase_guard.py seed 1 "transaction generator + ground truth"
+seed: ## Generate a Track A dataset, write ground truth, record the run
+	@set -a; [ -f .env ] && . ./.env; set +a; $(VPY) -m data.generator.cli $(ARGS)
 e2e:            ## [Phase 11] Full-stack end-to-end run, no mocks
 	@$(PY) scripts/phase_guard.py e2e 11 "full compose stack with all services"
 demo:           ## [Phase 7] Scripted end-to-end investigation (no API key required)

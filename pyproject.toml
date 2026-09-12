@@ -114,6 +114,19 @@ explicit_package_bases = true
 # editable install) and the repo root (so data.* and tests.conformance.* do).
 mypy_path = "packages:."
 
+# Phase-gated optional dependencies. Each is imported INSIDE a function and
+# guarded by a MissingDependencyError that names the extra, so absence is a loud,
+# actionable failure rather than a silent degradation. They are not installed
+# until their phase, so mypy cannot see them -- and must not be told they are
+# required, which would make `make setup` install the whole stack on day one.
+# Modules that are genuinely required stay in test_toolchain_consistency's
+# SCOPE_REQUIREMENTS, which asserts they are installed everywhere mypy runs.
+[[tool.mypy.overrides]]
+# Listed as they are actually referenced; mypy warns about unused sections,
+# so pyspark and delta join this list in Phase 3 rather than pre-emptively.
+module = ["confluent_kafka.*"]
+ignore_missing_imports = true
+
 # trace_core is the domain core: strict typing is non-negotiable there.
 [[tool.mypy.overrides]]
 module = "trace_core.*"
