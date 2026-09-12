@@ -33,7 +33,18 @@ class DatasetDigest:
         self._rows = 0
 
     def update(self, row: Any) -> None:
-        self._hasher.update(canonical_bytes(row))
+        """Digest a structured row, encoding it here."""
+        self.update_bytes(canonical_bytes(row))
+
+    def update_bytes(self, payload: bytes) -> None:
+        """Digest an ALREADY-encoded row.
+
+        The writer encodes every row anyway -- to validate it and to write it --
+        so re-encoding here would double the serialisation cost of the whole
+        pipeline. The docstring of `emit` claims one serialisation; this is what
+        makes that true rather than aspirational.
+        """
+        self._hasher.update(payload)
         self._hasher.update(b"\n")
         self._rows += 1
 

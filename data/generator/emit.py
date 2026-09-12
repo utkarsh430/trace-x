@@ -271,7 +271,8 @@ def write_rows(
         # how many episodes happened to need a login event, which is not what
         # "this dataset" means.
         if row.topic == "tx.raw.v1":
-            digest.update(row.event)
+            # The bytes encoded just above, not a second encoding of the same row.
+            digest.update_bytes(payload)
         # A columnar sink stores the structured row, not the encoded bytes. The
         # bytes are still produced above because that is what validation and the
         # digest read -- one encoding, several consumers.
