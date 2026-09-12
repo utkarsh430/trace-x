@@ -127,6 +127,14 @@ mypy_path = "packages:."
 module = ["confluent_kafka.*"]
 ignore_missing_imports = true
 
+# pyarrow ships no py.typed marker, so mypy cannot see its types even though it
+# IS installed (the `gen` extra). Distinct from the block above: that one is
+# about dependencies deliberately absent until their phase; this one is about a
+# present dependency that simply is not typed.
+[[tool.mypy.overrides]]
+module = ["pyarrow.*"]
+ignore_missing_imports = true
+
 # trace_core is the domain core: strict typing is non-negotiable there.
 [[tool.mypy.overrides]]
 module = "trace_core.*"

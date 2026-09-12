@@ -150,6 +150,75 @@ class JsonlSink:
 
 
 @dataclass
+class ParquetSink:
+    """One Parquet file per topic, written in batches.
+
+    Parquet because the ROADMAP sizes the frozen dataset in it, and because Phase
+    3 reads the medallion from columnar storage -- JSONL is the wire format, not
+    the storage format.
+
+    Batched rather than accumulated: holding a million nested dicts to build one
+    table would cost more memory than generating them did. `row_group_size`
+    trades compression ratio against memory, and the default is deliberately
+    modest so a laptop can produce the full dataset.
+    """
+
+    directory: Path
+    batch_rows: int = 50_000
+    compression: str = "zstd"
+    _writers: dict[str, Any] = field(default_factory=dict)
+    _buffers: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    bytes_written: int = 0
+
+    def write_row(self, topic: str, event: dict[str, Any]) -> None:
+        """Parquet needs the structured row, not the encoded bytes."""
+        buffer = self._buffers.setdefault(topic, [])
+        buffer.append(event)
+        if len(buffer) >= self.batch_rows:
+            self._flush(topic)
+
+    def write(self, topic: str, payload: bytes) -> None:
+        # Satisfies the Sink protocol; the byte payload is not what Parquet
+        # stores, so `write_rows` calls `write_row` when the sink supports it.
+        del topic, payload
+
+    def _flush(self, topic: str) -> None:
+        rows = self._buffers.get(topic)
+        if not rows:
+            return
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        table = pa.Table.from_pylist(rows)
+        if topic not in self._writers:
+            self.directory.mkdir(parents=True, exist_ok=True)
+            self._writers[topic] = pq.ParquetWriter(
+                self.directory / f"{topic}.parquet",
+                table.schema,
+                compression=self.compression,
+            )
+        self._writers[topic].write_table(table)
+        rows.clear()
+
+    def close(self) -> None:
+        for topic in list(self._buffers):
+            self._flush(topic)
+        for writer in self._writers.values():
+            writer.close()
+        self._writers.clear()
+        self.bytes_written = sum(p.stat().st_size for p in self.paths())
+
+    def paths(self) -> list[Path]:
+        return sorted(self.directory.glob("*.parquet"))
+
+    def __enter__(self) -> ParquetSink:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+
+@dataclass
 class KafkaSink:
     """Publish to Kafka. Requires the `stream` extra and a running broker."""
 
@@ -203,5 +272,12 @@ def write_rows(
         # "this dataset" means.
         if row.topic == "tx.raw.v1":
             digest.update(row.event)
-        sink.write(row.topic, payload)
+        # A columnar sink stores the structured row, not the encoded bytes. The
+        # bytes are still produced above because that is what validation and the
+        # digest read -- one encoding, several consumers.
+        writer = getattr(sink, "write_row", None)
+        if writer is not None:
+            writer(row.topic, row.event)
+        else:
+            sink.write(row.topic, payload)
         yield row

@@ -34,6 +34,7 @@ from data.generator.emit import (
     JsonlSink,
     KafkaSink,
     NullSink,
+    ParquetSink,
     Sink,
     ValidationPolicy,
     write_rows,
@@ -59,7 +60,7 @@ def seed(
         str, typer.Option(help="Dataset identity, e.g. eval-v1.")
     ] = "dev-v1",
     out: Annotated[Path, typer.Option(help="Output directory.")] = DEFAULT_OUT,
-    sink: Annotated[str, typer.Option(help="jsonl | kafka | none")] = "jsonl",
+    sink: Annotated[str, typer.Option(help="jsonl | parquet | kafka | none")] = "jsonl",
     validate: Annotated[str, typer.Option(help="all | sample | none")] = ValidationPolicy.ALL,
     fraud_rate: Annotated[float, typer.Option(help="Target fraudulent share.")] = 0.005,
     accounts: Annotated[int, typer.Option(help="Account population size.")] = 2_000,
@@ -144,12 +145,14 @@ def seed(
 def _build_sink(kind: str, directory: Path, compress: bool, bootstrap: str) -> Sink:
     if kind == "jsonl":
         return JsonlSink(directory=directory, compress=compress)
+    if kind == "parquet":
+        return ParquetSink(directory=directory)
     if kind == "kafka":
         # Fails loudly without the `stream` extra. Never silently a file.
         return KafkaSink(bootstrap_servers=bootstrap)
     if kind == "none":
         return NullSink()
-    raise typer.BadParameter(f"unknown sink {kind!r}; expected jsonl, kafka or none")
+    raise typer.BadParameter(f"unknown sink {kind!r}; expected jsonl, parquet, kafka or none")
 
 
 def _write_groundtruth(
