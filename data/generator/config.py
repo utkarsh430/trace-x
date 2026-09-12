@@ -51,6 +51,22 @@ class GeneratorConfig(StrictModel):
     volume. A uniform choice would make merchant-risk aggregates meaningless
     because every merchant would have a similar transaction count."""
 
+    fraud_rate: Annotated[float, Field(ge=0.0, le=0.5)] = 0.005
+    """Target share of transactions that are fraudulent.
+
+    ~0.5% matches the order of magnitude `docs/ARCHITECTURE.md` §7 assumes
+    ("roughly one in two hundred"), which is why PR-AUC rather than ROC-AUC is
+    the primary metric.
+
+    **This is a target, and there is a floor beneath it.** Ten mandatory
+    instances -- one per pattern -- are planted before the weighted mix runs, so
+    that no dataset is missing a pattern. On a dataset small enough that those
+    ten already exceed `row_count * fraud_rate`, the realised rate is set by the
+    floor and this value has no effect. Coverage matters more than hitting a rate
+    on a toy dataset, but the consequence is real, so the realised rate is
+    measured and recorded rather than assumed equal to the target.
+    """
+
     habitual_merchant_ratio: Annotated[float, Field(ge=0.0, le=1.0)] = 0.75
     """Share of an account's legitimate spend going to merchants it already
     uses. Without this there is no 'usual behaviour' for fraud to depart from."""

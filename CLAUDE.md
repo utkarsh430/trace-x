@@ -269,6 +269,7 @@ Ground truth is **structurally unreachable** by the application, not hidden by c
 | `docs/API_CONTRACTS.md` | API versioning policy | When the policy changes |
 | `docs/EVENT_CONTRACTS.md` | Event versioning policy | When the policy changes |
 | `docs/DATA_ENGINEERING.md` | Medallion, event-time, pins, layout | When the pipeline changes |
+| `docs/FRAUD_SCENARIOS.md` | The ten Track A fraud scenarios and their causal evidence keys | When a scenario changes |
 | `docs/LOCAL_DEVELOPMENT.md` | How to run it | When the workflow changes |
 | `docs/OPERATIONS.md` | Runbook | When a failure mode changes |
 | `docs/adr/NNNN-*.md` | Decision records | One per decision |
