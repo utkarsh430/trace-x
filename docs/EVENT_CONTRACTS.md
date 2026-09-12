@@ -10,9 +10,10 @@
 
 | Artifact | Path | Status |
 |---|---|---|
-| Event JSON Schemas | `docs/contracts/events/<topic>.v<N>.json` | **Source of truth.** Phase 1. |
-| Generated Pydantic models | `packages/trace_core/contracts/events/` | Generated **from** the schemas |
-| Topic configuration | `deploy/kafka/topics.yaml` | Partitions, retention, cleanup policy |
+| Event JSON Schemas | `docs/contracts/events/<topic>.v<N>.json` | **Source of truth.** Released in Phase 1 for the three ingress topics |
+| Release ledger | `docs/contracts/RELEASED.json` | Which topics are RELEASED vs PLANNED, each released schema's sha256, and each key's stated reason (ADR-0028) |
+| Generated Pydantic models | `packages/trace_core/contracts/events/` | Generated **from** the schemas by `make codegen`; a drift gate reverts hand edits |
+| Topic configuration | `deploy/kafka/topics.yaml` | Partitions, retention, cleanup policy. Phase 3 |
 
 **Direction of truth for events is the opposite of APIs:** JSON Schema → Pydantic. A schema is a
 cross-language, cross-runtime contract (Python producers, Spark consumers, future Go); deriving it from
@@ -55,18 +56,25 @@ Envelope fields are never nested inside `payload`, and `payload` never redefines
 
 ## 3. Topics
 
-| Topic | Key | Partitions (local/cloud) | Retention | Cleanup |
-|---|---|---|---|---|
-| `tx.raw.v1` | `account_id` | 6 / 24 | 7 d | delete |
-| `identity.events.v1` | `account_id` | 3 / 12 | 30 d | delete |
-| `device.events.v1` | `device_id` | 3 / 12 | 30 d | delete |
-| `tx.scored.v1` | `account_id` | 6 / 24 | 7 d | delete |
-| `investigation.requested.v1` | `investigation_id` | 3 / 6 | 30 d | delete |
-| `investigation.events.v1` | `investigation_id` | 3 / 6 | 90 d | delete |
-| `action.proposed.v1` | `investigation_id` | 3 / 6 | 90 d | delete |
-| `action.executed.v1` | `action_id` | 3 / 6 | ∞ | compact |
-| `audit.v1` | `entity_id` | 3 / 6 | ∞ | compact |
-| `<topic>.dlq` | original key | 1 / 3 | 30 d | delete |
+**Status is not decoration.** A schema file is immutable once merged, so a topic is **RELEASED** only
+in the phase that gains a real producer for it. Releasing earlier freezes a contract nobody has
+exercised, and the only correction is a `.vN+1` topic plus a dual-write window. Everything else is
+**PLANNED**: documented here so the event surface is reviewable, with no schema file and no frozen
+contract. `docs/contracts/RELEASED.json` is the machine-readable ledger, and a test fails the build if
+any code references a topic that is not RELEASED (ADR-0028).
+
+| Topic | Key | Partitions (local/cloud) | Retention | Cleanup | Status |
+|---|---|---|---|---|---|
+| `tx.raw.v1` | `account_id` | 6 / 24 | 7 d | delete | **RELEASED** (Phase 1) |
+| `identity.events.v1` | `account_id` | 3 / 12 | 30 d | delete | **RELEASED** (Phase 1) |
+| `device.events.v1` | `device_id` | 3 / 12 | 30 d | delete | **RELEASED** (Phase 1) |
+| `tx.scored.v1` | `account_id` | 6 / 24 | 7 d | delete | PLANNED (Phase 2) |
+| `investigation.requested.v1` | `investigation_id` | 3 / 6 | 30 d | delete | PLANNED (Phase 2) |
+| `investigation.events.v1` | `investigation_id` | 3 / 6 | 90 d | delete | PLANNED (Phase 7) |
+| `action.proposed.v1` | `investigation_id` | 3 / 6 | 90 d | delete | PLANNED (Phase 8) |
+| `action.executed.v1` | `action_id` | 3 / 6 | ∞ | compact | PLANNED (Phase 8) |
+| `audit.v1` | `entity_id` | 3 / 6 | ∞ | compact | PLANNED (Phase 5) |
+| `<topic>.dlq` | original key | 1 / 3 | 30 d | delete | created with its parent topic |
 
 **Keying rule: the key is the entity whose *ordering* matters, never a load-balancing choice.**
 Transactions key on `account_id` because per-account velocity is order-sensitive; device events key on

@@ -1660,6 +1660,7 @@ referencing==0.37.0 \
     # via
     #   jsonschema
     #   jsonschema-specifications
+    #   types-jsonschema
 requests==2.34.2 \
     --hash=sha256:2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0 \
     --hash=sha256:f288924cae4e29463698d6d60bc6a4da69c89185ad1e0bcc4104f584e960b9ed
@@ -1954,6 +1955,10 @@ typeguard==4.6.0 \
 typer==0.27.2 \
     --hash=sha256:269b7eb9d3c202ca84b4bc9618cb04ebb43d3d4d1e567e4c768607232c05f945 \
     --hash=sha256:b3a5fc4342d5fc8fda8fc3010b1cf117e9249aab7fae800c2eff62fd3842d97d
+    # via trace-x (pyproject.toml)
+types-jsonschema==4.26.0.20260518 \
+    --hash=sha256:30b30a518c7fe335df85c919fcbcc631b69c03d4a4b5b632fa916bea03065307 \
+    --hash=sha256:e1dd53dc97a64f5eccdd6fa9839666e09bb500a8ebba2db6fdaf1789faea81a6
     # via trace-x (pyproject.toml)
 typing-extensions==4.16.0 \
     --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8 \

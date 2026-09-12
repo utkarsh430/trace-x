@@ -14,7 +14,7 @@ VPIP  := $(VENV)/bin/pip
 COMPOSE := docker compose -f deploy/compose.yml --env-file .env
 
 .PHONY: help doctor setup up up-streaming up-full down ps logs test-fast test e2e lint typecheck \
-        secrets audit audit-full migrate migrate-down migrate-status lock ci-status \
+        secrets audit audit-full migrate migrate-down migrate-status lock ci-status codegen \
         verify eval eval-external demo seed fetch-external pull-model bench-layout \
         check-claims acceptance clean not-implemented
 
@@ -94,6 +94,9 @@ lock: ## Regenerate the hashed dependency lockfile
 ## ---------------------------------------------------------------------------
 ## Quality gates
 ## ---------------------------------------------------------------------------
+codegen: ## Regenerate Pydantic event models FROM the committed JSON Schemas
+	@$(VPY) scripts/generate_event_models.py
+
 lint: ## ruff format check + lint
 	@$(VPY) -m ruff format --check . && $(VPY) -m ruff check .
 
