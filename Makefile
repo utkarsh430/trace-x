@@ -14,7 +14,7 @@ VPIP  := $(VENV)/bin/pip
 COMPOSE := docker compose -f deploy/compose.yml --env-file .env
 
 .PHONY: help doctor setup up up-streaming up-full down ps logs test-fast test e2e lint typecheck \
-        secrets audit audit-full migrate migrate-down migrate-status lock \
+        secrets audit audit-full migrate migrate-down migrate-status lock ci-status \
         verify eval eval-external demo seed fetch-external pull-model bench-layout \
         check-claims acceptance clean not-implemented
 
@@ -113,6 +113,9 @@ test-fast: ## Unit + property + contract + conformance (no external services)
 
 test: ## Full local suite except cloud
 	@$(VPY) -m pytest -m "not cloud"
+
+ci-status: ## Show GitHub Actions conclusions for the current commit
+	@$(VPY) scripts/ci_status.py
 
 acceptance: ## Render the machine-readable acceptance status
 	@$(VPY) scripts/acceptance.py report

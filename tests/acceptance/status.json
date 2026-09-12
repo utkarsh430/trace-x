@@ -3,7 +3,7 @@
   "project": "TRACE-X",
   "current_phase": "0",
   "current_phase_name": "Foundation & Constitution",
-  "updated_at": "2026-09-10",
+  "updated_at": "2026-09-12",
   "last_verified_commit": "51c2af8",
   "legend": {
     "NOT_STARTED": "No implementation exists.",
@@ -122,11 +122,11 @@
       "id": "P0.ci",
       "phase": "0",
       "name": "CI runs lint and test-fast on every push",
-      "status": "IN_PROGRESS",
+      "status": "PASS",
       "evidence": {
-        "command": "gh workflow list",
-        "verified_at": null,
-        "result": null
+        "command": "make ci-status",
+        "verified_at": "2026-09-12",
+        "result": "make ci-status on 03278d5: all 4 workflows PASS (lint, test-fast, claims, test-integration) on GitHub Actions. Two prior red runs root-caused and fixed: mypy missing db/obs extras, and an unpinned+duplicated secret scan"
       }
     },
     {

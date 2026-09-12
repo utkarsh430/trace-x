@@ -124,4 +124,7 @@ exclude_dirs = ["tests", ".venv"]
 #                                 password" heuristic because its dict key is "PASS"
 #   B404/B603 scripts/doctor.py - subprocess is intentional; every argument is a
 #                                 fixed literal, never user input
+#   B310 scripts/ci_status.py   - annotated inline with `# nosec B310`: constant
+#                                 https template, regex-validated slug and sha,
+#                                 explicit scheme assertion before the call
 # Run `make audit-full` (bandit without -ll) to see LOW findings again.

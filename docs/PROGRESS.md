@@ -16,8 +16,12 @@ Gate: `docs/ROADMAP.md` § Phase 0.
 
 ## CURRENT STATUS
 
-**Phase 0 implementation is complete. `make verify` is 8/8 green. 249 tests pass**
-(226 fast + 23 integration against real PostgreSQL).
+**Phase 0 is COMPLETE. All 10 capabilities PASS. All five exit criteria are met and verified.**
+
+`make verify` is 9/9 green locally, **and all four GitHub Actions workflows pass on the current
+commit**. 257 tests pass (234 fast + 23 integration against real PostgreSQL).
+
+Phase 1 has not begun and must not begin without explicit user approval.
 
 ### Recovery after an unexpected machine shutdown (2026-09-12)
 
@@ -207,11 +211,12 @@ Nothing in flight. This is a clean stopping point.
 | # | Item | Impact | When |
 |---|---|---|---|
 | ~~D1~~ | ~~No Alembic migration layer~~ | **RESOLVED** — Alembic owns schemas, roles and grants; round-trip verified against real PostgreSQL | done |
-| D2 | CI execution | **Remote added and pushed; all four workflows have run.** `lint` failed on mypy (see recovery findings) and is fixed; awaiting a green run on the fix before `P0.ci` may be marked PASS | In progress |
+| ~~D2~~ | ~~CI execution~~ | **RESOLVED** — remote added, pushed, and all four workflows pass (`make ci-status`). Two red runs were root-caused and fixed, not waived | done |
 | ~~D3~~ | ~~No OpenTelemetry wiring~~ | **RESOLVED** — tracer/meter providers, W3C context propagation for non-HTTP hops, `trace_id` in every log line | done |
 | D4 | `compose.yml` declares `streaming`/`graph`/`llm` services that nothing consumes yet | Profile shape is reviewable but unexercised | Phases 3, 5, 6 |
 | D5 | `postgres:16` used instead of `postgres:16-alpine` | ~250 MB more disk; chosen because `postgres:16` was already local and disk is the binding constraint | Revisit if disk is freed |
 | D10 | No declarative SQLAlchemy models yet, so Alembic autogenerate is unused | Migrations are hand-written. Correct for the security-critical grants; will matter once tables arrive | Phase 1 |
+| D11 | CI job **logs** need repo-admin rights to download, so a CI-only failure cannot be read directly | Both CI failures this session had to be diagnosed by reproducing them locally. That is a healthier default, but it is slow. `gh auth login` would remove the friction | Optional |
 | ~~D6~~ | ~~No dependency lockfile~~ | **RESOLVED** — `requirements.lock`, 92 packages, hashed, installable; `env_lock_digest` is computable | done |
 | ~~D7~~ | ~~`make up-streaming` / `up-full` documented but undefined~~ | **RESOLVED** — both targets exist | done |
 | D8 | macOS Docker keychain credential helper hangs, blocking all registry pulls | Blocks `make up` on a cold image cache; workaround documented in `LOCAL_DEVELOPMENT.md` | Environment issue, not code |
@@ -247,25 +252,32 @@ Nothing in flight. This is a clean stopping point.
 
 ---
 
+## PHASE 0 EXIT CRITERIA — all met
+
+| # | Criterion | Status | Evidence |
+|---|---|---|---|
+| 1 | All control-plane documents exist and are non-placeholder | ✅ | `pytest tests/unit/test_control_plane.py` — 146 passed (12 docs, 26 ADRs, no placeholders, no dangling ADR refs) |
+| 2 | `make verify` green | ✅ | 9/9 gates locally; 4/4 workflows green in CI (`make ci-status`) |
+| 3 | Ground-truth isolation test passing | ✅ | `pytest -m integration` — 23 passed against real PostgreSQL 16 with real Alembic |
+| 4 | Claim linter active | ✅ | `make check-claims` in `make verify` and in CI; 12 self-tests prove it rejects fabricated numbers |
+| 5 | ADRs merged | ✅ | 26 ADRs; ADR-0015 deliberately still `Proposed` pending its Phase 3 benchmark |
+
+Phase 0 targets also met: `make up` 6.4 s (target < 90 s), core RSS ~42 MiB (target < 2.7 GB),
+`test-fast` < 1 s (target < 5 min), and `make doctor` flags Java 25 loudly.
+
 ## NEXT EXECUTABLE TASKS
 
-Phase 0 implementation is complete. Two items remain before the gate can be closed, and **neither is
-a coding task** — both need something only the user can provide.
+**Phase 0 is closed.** The next action is a decision, not a task:
 
-1. **Free ~3 GB of disk** so `make doctor` passes and `make verify` returns fully green. This
-   project occupies 291 MB; the space must come from elsewhere on a disk that is 99% full.
-   Candidates deliberately left untouched because they belong to other projects:
-   `docker image prune -a` (~1.9 GB) and `docker volume prune` (~1 GB). **Ask before running either.**
-   Phase 3 will need ~15 GB.
-2. **Add a git remote and push**, so the four CI workflows actually execute. Their YAML validates and
-   the gates run locally, but "CI passes" is an unverified claim until a runner has run them (D2).
+1. **Await explicit user approval to begin Phase 1** — domain model, both state machines, event JSON
+   Schemas, `CanonicalTransaction` + `SourceAdapter` + `field_coverage`, the transaction generator with
+   all 10 fraud scenarios, and `causal_evidence_keys` written to `groundtruth` only.
 
-Then:
-
-3. **Close Phase 0** against the gate in `docs/ROADMAP.md` and request approval to begin Phase 1.
-
-**Do not begin Phase 1** (domain model, generator, source adapters) until Phase 0 exit conditions are
-met and the user approves.
+### Recommended before Phase 3 (not blocking Phase 1)
+- Set `JAVA_HOME` to Temurin 17 permanently. `JAVA_HOME` is currently unset and the system default is
+  Java 25, which Spark 4.0 does not support. `make doctor` warns.
+- Install Ollama and run `make pull-model` for the keyless `SMOKE` tier (needed from Phase 6).
+- Optionally `gh auth login`, so CI job logs can be read directly instead of reproduced locally (D11).
 
 ### Optional, before Phase 3
 - Set `JAVA_HOME` to Temurin 17 permanently (`make doctor` warns; Spark 4.0 will fail on Java 25).
@@ -279,48 +291,47 @@ Recorded from actual runs on 2026-09-12, after the shutdown-recovery fixes.
 
 ```
 TRACE-X verify
-  PASS  doctor              disk ~28 GB free; docker v29.2.1 reachable, 7.7 GB RAM, 10 CPU
-                            (2 expected warnings: Java 25 vs Temurin 17, pyspark/delta not installed)
+  PASS  doctor              disk ~28 GB; docker v29.2.1 reachable, 7.7 GB RAM, 10 CPU
+                            (2 expected warnings: Java 25 vs Temurin 17, pyspark/delta absent)
   PASS  acceptance-status   58 capabilities, internally consistent
-  PASS  check-claims        41 documents scanned, 0 manifests, no unbacked numeric claim
+  PASS  check-claims        40 documents scanned, 0 manifests, no unbacked numeric claim
   PASS  ruff-format         clean
   PASS  ruff-lint           clean
-  PASS  mypy                clean, strict on trace_core (24 files, incl. migrations/)
-  PASS  test-fast           226 passed
+  PASS  mypy                clean, strict on trace_core (27 files, incl. migrations/)
+  PASS  test-fast           234 passed
   PASS  bandit              clean at MEDIUM+
+  PASS  secret-scan         detect-secrets 1.5.0, no findings
 ======================================================================
-  phase 0   8 passed   0 failed   0 skipped     VERIFY OK
+  phase 0   9 passed   0 failed   0 skipped     VERIFY OK
 ```
 
-Full suite:
+Full suite: `pytest -m "not cloud"` — **257 passed** (234 fast + 23 integration).
+
+GitHub Actions (`make ci-status`) — **all 4 workflows pass**:
 ```
-  pytest -m "not cloud"    249 passed   (226 fast + 23 integration)
+  claims  success | lint  success | test-fast  success | test-integration  success
 ```
 
-CI-equivalent environment (throwaway venv built exactly as the runner builds one):
+CI history this session, which is the point of recording it:
 ```
-  before the fix:  mypy -> 6 errors in 3 files (missing alembic, sqlalchemy, OTLP exporter)
-  after the fix:   mypy -> Success: no issues found in 23 source files
+  fa048a6  lint FAILURE   mypy: missing db/obs extras
+  bf38f45  lint FAILURE   secret scan: unpinned tool + duplicated definition (masked by the above)
+  03278d5  ALL GREEN
 ```
+
+Fresh-clone validation (throwaway clone, no API keys, all key env vars unset):
+```
+  make setup && make doctor && make verify   ->  all pass
+```
+This is the check the `make setup` defect would have broken, so it is now run explicitly rather than
+assumed.
 
 Live stack (`make up`, then torn down):
 ```
-  startup                  6.4 s            (target < 90 s)
-  postgres + redis         both healthy     ports 5442 / 6389
-  migrations               auto-applied, alembic at 0001 (head)
-  core profile RSS         ~42 MiB          (target < 2.7 GB)
-  trace_app -> groundtruth ERROR: permission denied for schema groundtruth
-  trace_eval -> groundtruth permitted
+  startup 6.4 s (target < 90 s) | postgres + redis healthy on 5442 / 6389
+  migrations auto-applied, alembic at 0001 (head) | core RSS ~42 MiB (target < 2.7 GB)
+  trace_app -> groundtruth: ERROR permission denied | trace_eval -> groundtruth: permitted
 ```
 
-GitHub Actions on `fa048a6` (the pre-fix commit):
-```
-  lint               FAILURE   <- mypy; root-caused and fixed during recovery
-  test-fast          success
-  claims             success
-  test-integration   success
-```
-
-**Acceptance status: 9 PASS · 1 IN_PROGRESS · 48 NOT_STARTED · 0 FAIL · 0 BLOCKED** across 58 tracked
-capabilities. `P0.ci` stays IN_PROGRESS until a green `lint` run lands on the fix — CI having *run* is
-not the same as CI *passing*. `tests/acceptance/status.json` is the authoritative record.
+**Acceptance status: 10 PASS · 0 IN_PROGRESS · 48 NOT_STARTED · 0 FAIL · 0 BLOCKED** across 58 tracked
+capabilities. `tests/acceptance/status.json` is the authoritative machine-readable record.
