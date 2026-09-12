@@ -49,6 +49,13 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["packages"]
 
+# PEP 561: `trace_core` ships inline type information. Without the marker,
+# anything importing it from outside the source tree (mypy resolving the
+# editable install, a future service package, a consumer of the wheel) silently
+# treats it as untyped -- which would quietly void "mypy is strict on trace_core".
+[tool.setuptools.package-data]
+trace_core = ["py.typed"]
+
 # ----------------------------------------------------------------------------
 # Version pin matrix (ADR-0018). `make doctor` asserts these at runtime.
 # Changing any value invalidates prior benchmark comparability and REQUIRES a
@@ -95,6 +102,14 @@ no_implicit_optional = true
 strict_equality = true
 # `eval` is added once the harness has Python modules (Phase 9).
 files = ["packages", "scripts", "tests", "migrations", "data"]
+# `tests/conformance/` is a real package (it holds shared suites that concrete
+# test modules subclass), while `tests/` itself is not. Without an explicit base
+# mypy cannot decide whether that file is `source_adapter_suite` or
+# `tests.conformance.source_adapter_suite` and refuses to check anything.
+explicit_package_bases = true
+# Two bases: `packages/` (so trace_core.* resolves from source, not from the
+# editable install) and the repo root (so data.* and tests.conformance.* do).
+mypy_path = "packages:."
 
 # trace_core is the domain core: strict typing is non-negotiable there.
 [[tool.mypy.overrides]]
