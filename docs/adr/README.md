@@ -51,6 +51,7 @@ been thought through.
 | [0037](0037-openapi-breaking-change-gate.md) | The API breaking-change gate is `oasdiff`, not a bespoke rule engine | 2 | Accepted |
 | [0038](0038-hot-path-cpu-budget.md) | The hot path is CPU-bound; the online snapshot reads only what the features declare | 2 | Accepted |
 | [0039](0039-event-loop-over-threadpool.md) | The hot path stays on the event loop; the workload, not the scheduler, is the bottleneck | 2 | Accepted |
+| [0040](0040-two-workload-profiles.md) | Two workload profiles: a representative acceptance gate and an adversarial saturation benchmark | 2 | Accepted |
 
 ## Notes on status
 

@@ -1,4 +1,4 @@
-"""Load-harness self-test (`scripts/load_gateway.py`, `tests/load/k6/gateway.js`).
+"""Load-harness self-test (`scripts/load_gateway.py`, `tests/load/k6/representative.js`).
 
 The harness exists to produce numbers that can be published, so what has to be
 proven is not that it runs but that it **refuses**: refuses to invent a metric it
@@ -30,7 +30,6 @@ import pytest
 pytestmark = pytest.mark.unit
 
 ROOT = Path(__file__).resolve().parents[2]
-K6_SCRIPT = ROOT / "tests" / "load" / "k6" / "gateway.js"
 
 
 def _load_script(name: str, relative: str) -> Any:
@@ -44,6 +43,17 @@ def _load_script(name: str, relative: str) -> Any:
 
 
 harness = _load_script("load_gateway", "scripts/load_gateway.py")
+
+K6_SCRIPTS = {
+    name: ROOT / "tests" / "load" / "k6" / filename for name, filename in harness.PROFILES.items()
+}
+"""Every workload profile, checked against the same invariants.
+
+Parameterised rather than pointed at one file: the two profiles differ in the
+traffic they generate and must not differ in the properties that make a run
+measurable at all. A profile that quietly stopped sending unique idempotency
+keys would serve most of its run from the replay cache and report a beautiful
+p99 for work it never did -- and it would do that whichever file it lived in."""
 linter = _load_script("check_claims_under_test", "scripts/check_claims.py")
 
 
@@ -432,6 +442,7 @@ def test_the_service_token_never_reaches_the_docker_argument_list() -> None:
     # hide a real credential added here later (CLAUDE.md §9).
     presented_token = "loadtest.a-fabricated-value-that-must-not-appear"
     command = harness.k6_command(
+        script=harness.PROFILES["representative"],
         docker="/usr/bin/docker",
         image="grafana/k6:0.49.0@sha256:" + "8" * 64,
         base_url="http://localhost:8010",
@@ -472,7 +483,8 @@ def test_a_non_http_base_url_is_refused() -> None:
 # ----------------------------------------------------------- the k6 script --
 
 
-def test_the_k6_script_sends_a_unique_idempotency_key_per_request() -> None:
+@pytest.mark.parametrize("profile", sorted(K6_SCRIPTS))
+def test_the_k6_script_sends_a_unique_idempotency_key_per_request(profile: str) -> None:
     """The single change that would turn this benchmark into a cache measurement.
 
     The gateway caches responses against `X-Idempotency-Key`. A constant or
@@ -480,7 +492,7 @@ def test_the_k6_script_sends_a_unique_idempotency_key_per_request() -> None:
     run reports the latency of a Redis GET under a scoring heading. The per-run
     nonce matters for the same reason across runs, not just within one.
     """
-    source = K6_SCRIPT.read_text()
+    source = K6_SCRIPTS[profile].read_text()
     assert "'X-Idempotency-Key': `${RUN_NONCE}-${exec.vu.idInTest}-${iteration}`" in source, (
         "the idempotency key must vary by run, VU and iteration; anything else "
         "measures the replay cache"
@@ -491,28 +503,67 @@ def test_the_k6_script_sends_a_unique_idempotency_key_per_request() -> None:
     )
 
 
-def test_the_k6_script_varies_every_entity_the_features_are_keyed_on() -> None:
+@pytest.mark.parametrize("profile", sorted(K6_SCRIPTS))
+def test_the_k6_script_varies_every_entity_the_features_are_keyed_on(profile: str) -> None:
     """One repeated transaction measures one hot Redis key, not a system."""
-    source = K6_SCRIPT.read_text()
+    source = K6_SCRIPTS[profile].read_text()
     for field_name in ("account_id", "merchant_id", "device_id", "ip_id", "amount_minor"):
         assert f"{field_name}:" in source, f"{field_name} is not present in the generated payload"
-    assert "skewedIndex" in source, (
-        "entities must be drawn with a heavy tail: a uniform spread makes every "
-        "feature read a miss, and a single key makes every read a hit"
-    )
     assert "mulberry32" in source, (
         "the traffic must be seeded, or two runs differ by the load rather than by "
         "the system under test (CLAUDE.md §3.5)"
     )
 
 
-def test_the_k6_script_declares_the_thresholds_that_force_the_metrics_to_exist() -> None:
+DISTRIBUTION_MECHANISM = {
+    # The heavy tail that makes this profile adversarial: 80% of load onto 5% of
+    # each pool. It is the reason ~92% of its requests triage, and it is kept.
+    "triage-saturation": "skewedIndex",
+    # Affinity instead of skew. Each account's devices, IPs and merchants are
+    # derived from its own index, so they are stable across the run the way the
+    # frozen dataset's are -- which is what makes `merchant_is_habitual` and
+    # `device_is_known_for_account` mean anything.
+    "representative": "derived(",
+}
+
+
+@pytest.mark.parametrize("profile", sorted(K6_SCRIPTS))
+def test_each_profile_keeps_its_own_distribution_mechanism(profile: str) -> None:
+    """The two profiles must not converge on one distribution.
+
+    This assertion used to demand `skewedIndex` of every script, which encoded
+    the adversarial profile's hot-entity skew as though it were a general
+    requirement. It is the opposite: that skew is exactly what made the old
+    workload unrepresentative, and requiring it of the acceptance gate would
+    reintroduce the defect the gate exists to avoid. So each profile declares
+    the mechanism it is supposed to use, and a profile that lost its mechanism
+    fails here rather than silently becoming the other one.
+    """
+    source = K6_SCRIPTS[profile].read_text()
+    expected = DISTRIBUTION_MECHANISM[profile]
+    assert expected in source, (
+        f"the `{profile}` profile no longer uses `{expected}`. The acceptance gate needs "
+        f"per-account affinity and the saturation profile needs hot-entity skew; a profile "
+        f"that drifts into the other's distribution stops measuring what its report claims."
+    )
+    if profile == "representative":
+        assert "skewedIndex" not in source, (
+            "the acceptance gate must not concentrate load onto a small hot pool. That is "
+            "what put 1,440 transactions per account per hour against a 40-per-hour "
+            "threshold and drove 91.7% of requests into triage (ADR-0040)."
+        )
+
+
+@pytest.mark.parametrize("profile", sorted(K6_SCRIPTS))
+def test_the_k6_script_declares_the_thresholds_that_force_the_metrics_to_exist(
+    profile: str,
+) -> None:
     """`dropped_iterations` is absent from the summary unless a threshold registers it.
 
     Verified against the pinned image. Without the threshold the post-processor
     would have to infer zero from absence, which is the inference the whole
     harness is built to avoid.
     """
-    source = K6_SCRIPT.read_text()
+    source = K6_SCRIPTS[profile].read_text()
     assert "dropped_iterations: ['count==0']" in source
     assert "gateway_http_5xx: ['count==0']" in source

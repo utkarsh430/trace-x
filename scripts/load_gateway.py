@@ -72,9 +72,39 @@ from trace_core.security.service_tokens import (  # noqa: E402
 )
 
 MANIFEST_DIR: Final = ROOT / "eval" / "manifest"
-REPORT: Final = ROOT / "benchmarks" / "gateway" / "REPORT.md"
+REPORT_FOR: Final[dict[str, Path]] = {
+    "representative": ROOT / "benchmarks" / "gateway" / "REPORT.md",
+    "triage-saturation": ROOT / "benchmarks" / "gateway" / "ADVERSARIAL.md",
+}
+"""One report per profile, never a shared path.
+
+If both wrote to `REPORT.md` the adversarial run would silently overwrite the
+acceptance evidence with numbers from a workload that is not the gate -- and the
+file would still look like the gate's report."""
 K6_SCRIPT_DIR: Final = ROOT / "tests" / "load" / "k6"
-K6_SCRIPT: Final = K6_SCRIPT_DIR / "gateway.js"
+PROFILES: Final[dict[str, str]] = {
+    "representative": "representative.js",
+    "triage-saturation": "triage_saturation.js",
+}
+"""The two workload profiles, and why there are two.
+
+`representative` is the **canonical Phase 2 acceptance gate**. Its entity model
+is derived from `eval/track_a/eval-v1.manifest.json` -- the project's own frozen
+statement of what normal traffic looks like -- and its population is derived from
+the offered rate so that per-account velocity stays realistic as the rate changes.
+
+`triage-saturation` is the original profile, preserved unweakened. It
+concentrates 80% of load onto 5% of a 20,000-account pool, which at 500 TPS is
+1,440 transactions per account per hour against velocity thresholds of 5/minute
+and 40/hour. It measured 91.7% of requests opening an investigation where the
+frozen dataset produces 0.222%. That makes it a genuine and useful adversarial
+benchmark -- it characterises the system when nearly every request triages -- and
+a misleading acceptance gate, because it measures the cost of opening
+investigations rather than the cost of scoring. Both facts are worth having, so
+both profiles exist and the report says which one produced it.
+"""
+
+DEFAULT_PROFILE: Final = "representative"
 SERVICE: Final = "trace-gateway"
 TOOL: Final = "k6"
 
@@ -405,6 +435,7 @@ def container_base_url(base_url: str) -> str:
 
 def k6_command(
     *,
+    script: str,
     docker: str,
     image: str,
     base_url: str,
@@ -460,12 +491,13 @@ def k6_command(
     if os.name == "posix":
         # So the summary lands owned by the operator rather than by root.
         command[3:3] = ["--user", f"{os.getuid()}:{os.getgid()}"]
-    command += [image, "run", "/scripts/gateway.js"]
+    command += [image, "run", f"/scripts/{script}"]
     return command
 
 
 def run_k6(
     *,
+    script: str,
     image: str,
     base_url: str,
     token: str,
@@ -485,6 +517,7 @@ def run_k6(
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     command = k6_command(
+        script=script,
         docker=docker_binary(),
         image=image,
         base_url=base_url,
@@ -544,7 +577,7 @@ def trend(summary: dict[str, Any], name: str, stat: str) -> float:
     if stat not in values:
         raise LoadHarnessError(
             f"the '{name}' trend in the k6 summary has no '{stat}'. Check "
-            f"`summaryTrendStats` in tests/load/k6/gateway.js."
+            f"`summaryTrendStats` in the profile's k6 script."
         )
     return float(values[stat])
 
@@ -759,6 +792,13 @@ class LoadTestRunRecord:
     measured: dict[str, Any]
     started_at: str
     finished_at: str
+    workload_profile: str = DEFAULT_PROFILE
+    """Which workload produced these numbers.
+
+    Recorded because the same gateway measured 91.7% triage under one profile and
+    0.222% under the frozen dataset's own distribution: a latency figure without
+    its workload is as unattributable as one without its rule pack digest."""
+
     record_type: str = "LOADTEST"
     track: str = "SYNTHETIC"
     tool: str = TOOL
@@ -802,6 +842,29 @@ def new_run_id(started: dt.datetime) -> str:
 # ------------------------------------------------------------- the report ---
 
 
+def _profile_preamble(profile: str) -> str:
+    """Say plainly, at the top, whether this report is the acceptance gate.
+
+    Both profiles produce a report in the same shape, and the shape is
+    persuasive. Without this line a reader has no way to tell the gate from the
+    adversarial characterisation, and the adversarial numbers are the alarming
+    ones -- so the ambiguity fails in the direction of overstating a problem, or
+    of quietly passing a gate that was never run.
+    """
+    if profile == "representative":
+        return (
+            "> **Workload: `representative` — this IS the Phase 2 acceptance gate.** Its entity "
+            "model is derived from `eval/track_a/eval-v1.manifest.json`, and its population is "
+            "derived from the offered rate so per-account velocity stays realistic."
+        )
+    return (
+        "> **Workload: `triage-saturation` — this is NOT the acceptance gate.** It concentrates "
+        "80% of load onto 5% of a 20,000-account pool, which drives nearly every request over "
+        "the velocity thresholds and into triage. It characterises the system under saturation; "
+        "the gate is `benchmarks/gateway/REPORT.md`."
+    )
+
+
 def render_report(record: LoadTestRunRecord, measured: Measured, verdicts: list[Verdict]) -> str:
     """Render `benchmarks/gateway/REPORT.md` from the record and the measurement.
 
@@ -825,6 +888,8 @@ def render_report(record: LoadTestRunRecord, measured: Measured, verdicts: list[
         "> substantiate latency, throughput and availability, and the claim linter refuses",
         "> to let it back a quality claim (`docs/EVALUATION.md` §8 rule 2).",
         "",
+        _profile_preamble(record.workload_profile),
+        "",
         f"## Run — `run_id: {rid}`",
         "",
         "| field | value |",
@@ -832,6 +897,7 @@ def render_report(record: LoadTestRunRecord, measured: Measured, verdicts: list[
         f"| service | `{record.service}` {record.service_version} |",
         f"| instrument | `{record.tool}` {record.tool_version} |",
         f"| image | `{record.tool_image}` |",
+        f"| workload profile | **{record.workload_profile}** |",
         f"| offered rate | {record.target_tps} TPS |",
         f"| window | {record.duration_s} s |",
         f"| traffic seed | {record.seed} |",
@@ -888,7 +954,7 @@ def render_report(record: LoadTestRunRecord, measured: Measured, verdicts: list[
         "Reported because a run in which every transaction banded the same way exercised",
         "one branch of the rule engine at the offered rate, and its p99 would not describe",
         "production. The traffic is seeded and skewed (80% of it over 5% of the entities);",
-        "`tests/load/k6/gateway.js` says why.",
+        "the workload profile's k6 script says why.",
         "",
         "| band | count |",
         "|---|---|",
@@ -933,6 +999,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--base-url", default=os.environ.get("TRACE_GATEWAY_URL", "http://localhost:8010")
     )
+    parser.add_argument(
+        "--profile",
+        choices=sorted(PROFILES),
+        default=DEFAULT_PROFILE,
+        help=(
+            "which workload to run. `representative` is the acceptance gate; "
+            "`triage-saturation` is the adversarial characterisation and is NOT the gate."
+        ),
+    )
     parser.add_argument("--target-tps", type=int, default=DEFAULT_TARGET_TPS)
     parser.add_argument("--duration-s", type=int, default=DEFAULT_DURATION_S)
     parser.add_argument("--seed", type=int, default=20260912)
@@ -975,6 +1050,7 @@ def main(argv: list[str] | None = None) -> int:
         nonce = uuid.uuid4().hex[:12]
         started = dt.datetime.now(dt.UTC)
         exit_code = run_k6(
+            script=PROFILES[args.profile],
             image=image,
             base_url=args.base_url,
             token=token,
@@ -1004,6 +1080,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
         record = LoadTestRunRecord(
+            workload_profile=args.profile,
             run_id=new_run_id(started),
             service=identity.service,
             service_version=identity.service_version,
@@ -1040,9 +1117,10 @@ def main(argv: list[str] | None = None) -> int:
             print("  Commit the worktree and re-run to publish.")
             return 1
 
-        REPORT.parent.mkdir(parents=True, exist_ok=True)
-        REPORT.write_text(render_report(record, measured, verdicts))
-        print(f"  report:     {REPORT.relative_to(ROOT)}")
+        report_path = REPORT_FOR[args.profile]
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(render_report(record, measured, verdicts))
+        print(f"  report:     {report_path.relative_to(ROOT)}")
 
         target_failures = failures(verdicts, TARGET)
         if target_failures:
