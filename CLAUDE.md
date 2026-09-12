@@ -339,3 +339,272 @@ Never:
 - Log PII or commit a secret or a dataset.
 - Write documentation describing something that does not exist as though it does.
 - Claim completion while any part of the requested scope is unfinished or unverified.
+
+## Accuracy-First Engineering & Diagnostic Autonomy
+
+TRACE-X should optimize first for correctness, evidence quality, reliability,
+security, and reproducibility.
+
+Performance, simplicity, cost, and speed of implementation matter, but must not
+silently reduce correctness or evaluation integrity.
+
+### 1. Think before changing
+
+For non-trivial failures, unexpected measurements, or ambiguous behaviour:
+
+1. inspect the actual implementation and evidence
+2. identify plausible competing hypotheses
+3. challenge the first diagnosis
+4. look for confounding variables
+5. design the smallest controlled experiment that distinguishes the hypotheses
+6. run that experiment when it is safe, reversible, and within the current phase
+7. fix the root cause rather than the visible symptom
+8. verify the fix with executable evidence
+
+Do not immediately ask the user what to do when the answer can first be learned
+through inspection, testing, profiling, benchmarking, or controlled experiments.
+
+Prefer evidence over intuition.
+
+---
+
+### 2. Use deep reasoning on difficult problems
+
+When a problem is technically difficult, subtle, safety-critical, performance-
+critical, or capable of silently producing plausible but incorrect results,
+spend additional reasoning effort before acting.
+
+Examples include:
+
+- concurrency and race conditions
+- distributed state
+- idempotency
+- transaction boundaries
+- cache consistency
+- event ordering
+- schema evolution
+- authorization
+- ground-truth isolation
+- feature correctness
+- model/evaluation leakage
+- agent/tool permissions
+- benchmark interpretation
+- performance bottlenecks
+- data distribution changes
+- cross-system identifiers
+- failure recovery
+
+Do not choose the first plausible solution merely because it works.
+
+Compare alternatives and choose the strongest evidence-backed design.
+
+---
+
+### 3. Proactively improve accuracy
+
+Do not restrict yourself to making tests pass.
+
+While implementing the authorized phase, actively look for ways to improve
+correctness and accuracy without unnecessary scope expansion.
+
+Pay particular attention to:
+
+- silent failure modes
+- plausible-but-wrong outputs
+- incorrect joins or identifiers
+- stale or inconsistent state
+- race conditions
+- data leakage
+- ground-truth leakage
+- temporal leakage
+- incorrect feature semantics
+- online/offline feature drift
+- unrealistic workload assumptions
+- distribution shift
+- false-positive / false-negative tradeoffs
+- calibration
+- evidence quality
+- unsupported claims
+- missing negative tests
+- weak invariants
+- benchmark confounding
+- retry/idempotency defects
+- security boundaries
+- degraded-mode correctness
+
+If a low-risk local improvement materially increases correctness, testability,
+or robustness and remains within the current phase, implement it.
+
+If the improvement changes architecture or an accepted external contract,
+surface it for review instead.
+
+---
+
+### 4. Accuracy Review
+
+Before considering an important component complete, ask:
+
+- Can this produce a believable but incorrect result?
+- Are identifiers and references guaranteed to point to real entities?
+- Are retries and concurrent requests safe?
+- Are transaction boundaries correct?
+- Can state become stale or partially committed?
+- Can evaluation data influence runtime behaviour?
+- Can hidden labels or ground truth leak?
+- Are absent/missing values handled explicitly?
+- Are failure modes safe and observable?
+- Are tests proving behaviour rather than merely exercising code?
+- Are negative and adversarial cases covered?
+- Is the benchmark workload representative of what the target claims?
+- Are comparisons controlled?
+- Are numerical claims reproducible and backed by recorded evidence?
+- Could the test itself be giving a misleading pass?
+
+If any answer is uncertain, investigate before declaring completion.
+
+---
+
+### 5. Controlled experimentation
+
+When comparing implementations, configurations, optimizations, models, agents,
+or architectures, control relevant variables.
+
+Do not infer causality from two runs that differ in multiple important ways.
+
+Where practical:
+
+- preserve identical datasets
+- preserve identical service state
+- preserve identical workload
+- preserve identical hardware/resource limits
+- use reproducible seeds/configuration
+- record environment and commit SHA
+- compare before/after using the same measurement methodology
+
+If a comparison is confounded, say so and design a better experiment.
+
+---
+
+### 6. Do not game targets
+
+Never make a target pass by:
+
+- weakening the target after seeing the result
+- silently changing the workload
+- removing difficult examples
+- hiding failed runs
+- cherry-picking favourable measurements
+- disabling correctness/security behaviour
+- changing semantics to improve benchmark numbers
+- presenting diagnostic measurements as acceptance evidence
+
+A missed target is useful evidence.
+
+Investigate it, improve the implementation where justified, and record the
+truth if it remains missed.
+
+---
+
+### 7. Architectural evolution
+
+Existing architecture and ADRs are the current baseline, not unquestionable
+dogma.
+
+Implementation evidence may justify improvements.
+
+Existing architecture wins by default unless a proposed change has a materially
+better evidence-backed tradeoff.
+
+When evidence suggests an architectural improvement, evaluate:
+
+1. current design
+2. proposed design
+3. evidence motivating the change
+4. expected correctness/accuracy benefit
+5. performance benefit
+6. complexity added
+7. migration cost
+8. new risks
+9. effect on later phases
+10. recommendation
+
+Do not silently change accepted architecture.
+
+Use a new ADR or approved amendment where required.
+
+---
+
+### 8. Diagnostic autonomy
+
+Before escalating a problem to the user, ask:
+
+- Can I answer this by reading the code?
+- Can I answer this with a test?
+- Can I profile it?
+- Can I run a controlled A/B experiment?
+- Can I inspect runtime state?
+- Can I reproduce the failure?
+- Have I challenged my first explanation?
+- Are there confounding variables?
+- Is this actually an implementation problem, workload problem, environment
+  problem, architecture problem, or acceptance-specification problem?
+
+If safe reversible investigation can answer the question, investigate first.
+
+Do not ask the user to choose between alternatives that evidence can eliminate.
+
+---
+
+### 9. When to escalate
+
+Escalate only when the remaining decision involves one or more of:
+
+- irreversible architectural change
+- immutable external/event/API contract
+- security or safety policy
+- acceptance criteria changing
+- destructive operation
+- significant paid cloud resources
+- irreversible data migration
+- multiple materially different choices remain after reasonable investigation
+- product/business preference
+- an issue genuinely outside available evidence or capability
+
+When escalating, provide:
+
+1. problem
+2. evidence gathered
+3. hypotheses tested
+4. experiments performed
+5. root cause, if known
+6. viable options
+7. tradeoffs
+8. your recommendation
+
+Do not merely ask "what should I do?"
+
+---
+
+### 10. Completion standard
+
+A feature is complete only when appropriate evidence demonstrates:
+
+- correct implementation
+- correctness tests
+- negative/failure tests
+- concurrency behaviour where relevant
+- integration behaviour
+- observability
+- security boundaries
+- reproducibility
+- documentation
+- acceptance evidence
+
+Passing tests are necessary but not sufficient if there is evidence that the
+tests do not represent the real behaviour.
+
+At phase completion, perform one final adversarial review:
+
+"What is most likely to be wrong even though the current suite is green?"
+
+Investigate credible high-impact answers before declaring the phase complete.
