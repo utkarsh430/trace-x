@@ -40,6 +40,7 @@ dev = [
   "detect-secrets>=1.5",
   "datamodel-code-generator>=0.25",
   "types-jsonschema>=4.21",   # contract tests validate the committed schemas
+  "types-PyYAML>=6.0",        # rule packs are YAML and are parsed in typed code
   # Phase 2: property-based contract testing against the committed OpenAPI
   # (docs/TESTING.md §3). It drives the real app, so it lives in `dev` rather
   # than `api` -- CI runs it, a deployment never does.
@@ -58,7 +59,11 @@ where = ["packages"]
 # editable install, a future service package, a consumer of the wheel) silently
 # treats it as untyped -- which would quietly void "mypy is strict on trace_core".
 [tool.setuptools.package-data]
-trace_core = ["py.typed"]
+# The rule packs ship WITH the package: they are behaviour, not documentation.
+# A wheel whose rules had to be supplied separately would be a gateway that
+# cannot boot, and the pack digest recorded on every decision would resolve to
+# nothing (ADR-0034).
+trace_core = ["py.typed", "rules/packs/*.yaml"]
 
 # ----------------------------------------------------------------------------
 # Version pin matrix (ADR-0018). `make doctor` asserts these at runtime.
