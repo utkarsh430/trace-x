@@ -67,6 +67,16 @@ def seed(
     merchants: Annotated[int, typer.Option(help="Merchant population size.")] = 400,
     compress: Annotated[bool, typer.Option(help="gzip the JSONL output.")] = False,
     groundtruth: Annotated[bool, typer.Option(help="Write labels to PostgreSQL.")] = True,
+    replace: Annotated[
+        bool,
+        typer.Option(
+            help=(
+                "Overwrite an existing dataset_version. NEVER use on a frozen dataset: "
+                "eval-v1 is referenced by digest and must not be regenerated in place "
+                "(docs/EVALUATION.md section 2). Recorded in the run record."
+            )
+        ),
+    ] = False,
     bootstrap: Annotated[str, typer.Option(help="Kafka bootstrap servers.")] = "localhost:9092",
     record_dir: Annotated[Path | None, typer.Option(help="Where to write the run record.")] = None,
 ) -> None:
@@ -117,6 +127,9 @@ def seed(
         "realised_fraud_rate": round(fraud_count / max(1, digest.row_count), 6),
         "output_bytes": getattr(active_sink, "bytes_written", None),
         "sink": sink,
+        # Recorded, not implicit: a dataset written over an earlier one of the
+        # same version is a different artefact from one written once.
+        "replaced_existing": replace,
     }
 
     record = GeneratorRunRecord(
@@ -134,7 +147,7 @@ def seed(
     )
 
     if groundtruth:
-        _write_groundtruth(record, labels, list(instances.values()))
+        _write_groundtruth(record, labels, list(instances.values()), replace=replace)
     else:
         console.print("  [yellow]ground truth NOT written[/yellow] (--no-groundtruth)")
 
@@ -159,6 +172,8 @@ def _write_groundtruth(
     record: GeneratorRunRecord,
     labels: list[TransactionLabel],
     instances: list[ScenarioInstance],
+    *,
+    replace: bool = False,
 ) -> None:
     from data.generator.groundtruth import DatasetRecord, write_dataset
 
@@ -174,6 +189,7 @@ def _write_groundtruth(
             ),
             labels,
             instances,
+            replace=replace,
         )
     except (GroundTruthAccessError, MissingDependencyError) as exc:
         # Loud and fatal. A dataset whose ground truth was not written is
