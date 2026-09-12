@@ -29,6 +29,7 @@ from trace_core.features import FEATURE_COUNT, FEATURE_SET_VERSION, FeatureConte
 from trace_core.features.definitions import ONLINE_FEATURES
 from trace_core.features.semantics import (
     Aggregation,
+    CardinalityStorage,
     PairwiseWithPrevious,
     ProfileAttribute,
     RowLocal,
@@ -89,26 +90,61 @@ def test_every_feature_has_a_known_offline_translation() -> None:
         ), f"{spec.feature_id} has no declared offline translation"
 
 
-def test_only_distinct_counts_and_robust_z_are_approximate() -> None:
+def test_exactly_the_declared_features_are_approximate() -> None:
     """Approximation is a property to be declared, not discovered later.
 
-    HyperLogLog (~0.81%, ADR-0003) and a running median estimate are inexact by
-    construction; everything else must agree exactly with the offline
-    computation, and a parity tolerance above zero anywhere else would be hiding
-    a bug (docs/DATA_ENGINEERING.md §4).
+    Only three features are estimates, and each for a stated reason (ADR-0034):
+    two distinct counts whose cardinality is bounded by the population sharing an
+    entity rather than by one entity's own behaviour, and a robust z-score whose
+    online median is computed over a bounded recent sample. Everything else must
+    agree EXACTLY with the offline computation, and a parity tolerance above zero
+    anywhere else would be hiding a bug (docs/DATA_ENGINEERING.md §4).
     """
     approximate = {s.feature_id for s in ONLINE_FEATURES if s.approximate}
     expected = {
-        "account_distinct_merchants_1h",
-        "account_distinct_mcc_5m",
-        "account_distinct_devices_24h",
-        "account_distinct_countries_24h",
-        "device_distinct_accounts_24h",
         "ip_distinct_accounts_1h",
         "merchant_distinct_accounts_1h",
         "amount_zscore_vs_account",
     }
     assert approximate == expected
+
+
+def test_every_distinct_count_declares_a_storage_class() -> None:
+    """Declared, never inferred. A feature that chose its representation from
+    observed cardinality would change its own error characteristics under load --
+    exactly when a reader most needs to know what a value means."""
+    for spec in ONLINE_FEATURES:
+        semantics = spec.semantics
+        if isinstance(semantics, WindowedAggregate) and (
+            semantics.aggregation is Aggregation.DISTINCT_COUNT
+        ):
+            assert semantics.storage is not None, spec.feature_id
+            assert spec.approximate == (semantics.storage is CardinalityStorage.APPROXIMATE)
+
+
+def test_the_storage_class_split_follows_the_stated_criterion() -> None:
+    """EXACT where cardinality is bounded by one entity's own behaviour;
+    APPROXIMATE where it is bounded by the population sharing that entity.
+
+    Pinned because the split is the whole substance of ADR-0034: a feature moved
+    across it silently changes whether its parity comparison is an equality or a
+    tolerance.
+    """
+    exact: set[str] = set()
+    approximate: set[str] = set()
+    for spec in ONLINE_FEATURES:
+        semantics = spec.semantics
+        if isinstance(semantics, WindowedAggregate) and semantics.storage is not None:
+            target = approximate if semantics.storage is CardinalityStorage.APPROXIMATE else exact
+            target.add(spec.feature_id)
+    assert exact == {
+        "account_distinct_merchants_1h",
+        "account_distinct_mcc_5m",
+        "account_distinct_devices_24h",
+        "account_distinct_countries_24h",
+        "device_distinct_accounts_24h",
+    }
+    assert approximate == {"ip_distinct_accounts_1h", "merchant_distinct_accounts_1h"}
 
 
 def test_amount_aggregates_require_currency() -> None:

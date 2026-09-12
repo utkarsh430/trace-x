@@ -86,6 +86,35 @@ class Aggregation(StrEnum):
     """
 
 
+class CardinalityStorage(StrEnum):
+    """How a distinct count is represented online (ADR-0034).
+
+    **Declared per feature and never switched at runtime.** A feature that chose
+    its representation from observed cardinality would change its own error
+    characteristics under load -- exactly when a reader most needs to know what a
+    value means -- and would make a recorded parity tolerance unattributable.
+
+    The classification criterion is whether the counted dimension's cardinality
+    is bounded by ONE entity's own behaviour, or by the size of the population
+    sharing that entity. See ADR-0034 for the measurements behind it.
+    """
+
+    EXACT = "EXACT"
+    """Sorted set keyed by the counted VALUE, scored by event time (`ZADD … GT`).
+
+    `ZCOUNT` over the window is then exactly the distinct count: each value holds
+    its latest observation, so a value last seen inside the window counts once and
+    one last seen before it does not. Memory is O(distinct cardinality), which is
+    why this is reserved for dimensions with a natural bound."""
+
+    APPROXIMATE = "APPROXIMATE"
+    """Bucketed HyperLogLog: one HLL per time bucket, unioned by `PFCOUNT`.
+
+    Memory is bounded regardless of cardinality, at the cost of two compounding
+    error sources -- HLL's own, and the bucket boundary. Used only where exact
+    representation is materially more expensive."""
+
+
 class Dimension(StrEnum):
     """What `DISTINCT_COUNT` counts."""
 
@@ -161,6 +190,8 @@ class WindowedAggregate:
     aggregation: Aggregation
     stream: Stream = Stream.TRANSACTION
     dimension: Dimension | None = None
+    storage: CardinalityStorage | None = None
+    """Required on DISTINCT_COUNT, forbidden elsewhere. Declared, never inferred."""
 
     def __post_init__(self) -> None:
         needs_dimension = self.aggregation is Aggregation.DISTINCT_COUNT
@@ -168,11 +199,23 @@ class WindowedAggregate:
             raise ValueError("DISTINCT_COUNT must say what it counts")
         if not needs_dimension and self.dimension is not None:
             raise ValueError(f"{self.aggregation} does not count a dimension")
+        if needs_dimension and self.storage is None:
+            raise ValueError(
+                "DISTINCT_COUNT must declare its storage class. Whether a value is "
+                "exact or estimated is part of what the feature MEANS, not an "
+                "implementation detail a caller can be left to discover (ADR-0034)."
+            )
+        if not needs_dimension and self.storage is not None:
+            raise ValueError(f"{self.aggregation} does not have a cardinality storage class")
 
     @property
     def is_approximate(self) -> bool:
-        """Online only: HyperLogLog trades exactness for bounded memory."""
-        return self.aggregation is Aggregation.DISTINCT_COUNT
+        """Whether the ONLINE value is an estimate.
+
+        A function of the declared storage class, not of the aggregation: an
+        exact sorted-set distinct count is exact, and reporting it as approximate
+        would put a tolerance on a comparison that should be equality."""
+        return self.storage is CardinalityStorage.APPROXIMATE
 
 
 @dataclass(frozen=True, slots=True)

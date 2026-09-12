@@ -319,6 +319,42 @@ class FeatureSemanticsConformanceSuite(ABC):
             [Expectation("device_distinct_accounts_24h", 5.0, tolerance=HLL_TOLERANCE)],
         )
 
+    def test_an_approximately_stored_distinct_count_is_read_back(self) -> None:
+        """The APPROXIMATE storage class, exercised positively (ADR-0034).
+
+        Kept at low cardinality deliberately: HyperLogLog is exact in its sparse
+        encoding there, so both implementations must agree EXACTLY and this test
+        measures the wiring rather than the estimator. The estimator's error is
+        characterised across the cardinality range by the benchmark, which is the
+        right instrument for it -- a tolerance chosen to make a unit test pass
+        would be a number nobody measured.
+        """
+        history = [
+            tx_event(occurred_at=at(-60 * i), account_id=f"acct_00000{i}") for i in range(1, 5)
+        ]
+        self.check(
+            history,
+            transaction(occurred_at=T0),
+            [
+                Expectation("merchant_distinct_accounts_1h", 4.0),
+                Expectation("ip_distinct_accounts_1h", 4.0),
+            ],
+        )
+
+    def test_approximate_values_declare_themselves_approximate(self) -> None:
+        """Callers, tests, observability and Phase 3 parity all need to know a
+        value is an estimate. Carried on the VALUE, not on the response, so it
+        survives being logged, stored and compared."""
+        history = [
+            tx_event(occurred_at=at(-60 * i), account_id=f"acct_00000{i}") for i in range(1, 5)
+        ]
+        subject = transaction(occurred_at=T0)
+        ctx = self.build_context(history, as_of=T0, subject=subject)
+        approximate = ONLINE_FEATURES.get("merchant_distinct_accounts_1h").evaluate(subject, ctx)
+        exact = ONLINE_FEATURES.get("account_distinct_merchants_1h").evaluate(subject, ctx)
+        assert approximate.is_available and approximate.approximate
+        assert exact.is_available and not exact.approximate
+
     # -- profiles -----------------------------------------------------------
 
     def test_robust_z_is_absent_until_there_is_enough_history(self) -> None:

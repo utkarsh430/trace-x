@@ -16,6 +16,7 @@ COMPOSE := docker compose -f deploy/compose.yml --env-file .env
 .PHONY: help doctor setup up up-streaming up-full down ps logs test-fast test e2e lint typecheck \
         secrets audit audit-full migrate migrate-down migrate-status lock ci-status codegen \
         verify eval eval-external demo seed fetch-external pull-model bench-layout \
+        bench-features \
         check-claims acceptance clean not-implemented
 
 ## ---------------------------------------------------------------------------
@@ -124,6 +125,10 @@ ci-status: ## Show GitHub Actions conclusions for the current commit
 
 acceptance: ## Render the machine-readable acceptance status
 	@$(VPY) scripts/acceptance.py report
+
+bench-features: ## Measure the hybrid distinct-cardinality strategy (ADR-0034)
+	@$(VPY) benchmarks/features/bench_cardinality.py \
+	  --host $${REDIS_HOST:-localhost} --port $${REDIS_PORT:-6389}
 
 check-claims: ## Every published number must map to a reproducible run manifest
 	@$(VPY) scripts/check_claims.py

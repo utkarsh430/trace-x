@@ -57,6 +57,7 @@ from trace_core.features.semantics import (
 )
 from trace_core.features.semantics import (
     Aggregation,
+    CardinalityStorage,
     Dimension,
     Entity,
     PairwiseMetric,
@@ -225,6 +226,20 @@ _register_window(
 
 # --------------------------------------------- distinct cardinality (8-14) ---
 
+# Storage class per distinct-count feature (ADR-0034, constraint: declared, never
+# inferred at runtime). The criterion is whether the counted dimension's
+# cardinality is bounded by ONE entity's own behaviour or by the population
+# sharing that entity:
+#
+#   EXACT       -- an account touches tens of merchants, categories, devices and
+#                  countries in a window, and one device is used by a household
+#                  or, at the extreme the feature exists to catch, a farm of
+#                  dozens. Bounded, so a sorted set costs single-digit KB and is
+#                  exactly comparable to the offline computation.
+#   APPROXIMATE -- an IP can be a carrier NAT and a popular merchant can take
+#                  thousands of distinct accounts an hour. Unbounded in normal
+#                  operation, where the measured 20x memory difference is
+#                  material and bounded memory is worth an estimator error.
 _DISTINCTS: Final = (
     (
         "account_distinct_merchants_1h",
@@ -233,6 +248,7 @@ _DISTINCTS: Final = (
         W1H,
         Dimension.MERCHANT,
         _ACCOUNT_TX | {F.MERCHANT_ID},
+        CardinalityStorage.EXACT,
     ),
     (
         "account_distinct_mcc_5m",
@@ -242,6 +258,7 @@ _DISTINCTS: Final = (
         W5M,
         Dimension.MCC,
         _ACCOUNT_TX | {F.MERCHANT_MCC},
+        CardinalityStorage.EXACT,
     ),
     (
         "account_distinct_devices_24h",
@@ -250,6 +267,7 @@ _DISTINCTS: Final = (
         W24H,
         Dimension.DEVICE,
         _ACCOUNT_TX | {F.DEVICE_ID},
+        CardinalityStorage.EXACT,
     ),
     (
         "account_distinct_countries_24h",
@@ -259,6 +277,7 @@ _DISTINCTS: Final = (
         W24H,
         Dimension.COUNTRY,
         _ACCOUNT_TX | {F.MERCHANT_COUNTRY},
+        CardinalityStorage.EXACT,
     ),
     (
         "device_distinct_accounts_24h",
@@ -268,6 +287,7 @@ _DISTINCTS: Final = (
         W24H,
         Dimension.ACCOUNT,
         frozenset({F.DEVICE_ID, F.ACCOUNT_ID, F.OCCURRED_AT}),
+        CardinalityStorage.EXACT,
     ),
     (
         "ip_distinct_accounts_1h",
@@ -277,6 +297,7 @@ _DISTINCTS: Final = (
         W1H,
         Dimension.ACCOUNT,
         frozenset({F.IP_ID, F.ACCOUNT_ID, F.OCCURRED_AT}),
+        CardinalityStorage.APPROXIMATE,
     ),
     (
         "merchant_distinct_accounts_1h",
@@ -285,11 +306,18 @@ _DISTINCTS: Final = (
         W1H,
         Dimension.ACCOUNT,
         frozenset({F.MERCHANT_ID, F.ACCOUNT_ID, F.OCCURRED_AT}),
+        CardinalityStorage.APPROXIMATE,
     ),
 )
 
-for _fid, _desc, _entity, _window, _dimension, _required in _DISTINCTS:
-    _spec = WindowedAggregate(_entity, _window, Aggregation.DISTINCT_COUNT, dimension=_dimension)
+for _fid, _desc, _entity, _window, _dimension, _required, _storage in _DISTINCTS:
+    _spec = WindowedAggregate(
+        _entity,
+        _window,
+        Aggregation.DISTINCT_COUNT,
+        dimension=_dimension,
+        storage=_storage,
+    )
     _register_window(_fid, _desc, _required, _spec, _distinct(_spec))
 
 

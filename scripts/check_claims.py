@@ -24,7 +24,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 MANIFEST_DIR = ROOT / "eval" / "manifest"
-SCAN = [ROOT / "README.md", *sorted((ROOT / "docs").rglob("*.md"))]
+SCAN = [
+    ROOT / "README.md",
+    *sorted((ROOT / "docs").rglob("*.md")),
+    # Benchmark reports are where measurements are actually published, so leaving
+    # them unscanned left the largest surface uncovered by the gate that exists
+    # to cover exactly it.
+    *sorted((ROOT / "benchmarks").rglob("*.md")),
+]
 
 # A claim is either a QUALITY assertion (accuracy/evidence quality -- gated to the
 # EVAL tier) or an OPERATIONAL one (latency/throughput/cost -- publishable from any
@@ -74,7 +81,11 @@ def is_target_prose(line: str) -> bool:
     return bool(TARGET_WORDS.search(line) or TARGET_SYMBOLS.search(line))
 
 
-RUN_ID = re.compile(r"run_id[=:\s]+([A-Za-z0-9._-]{4,})", re.I)
+# The separator class includes backticks and quotes because a markdown report
+# writes `run_id`: `gen-...`, and a gate that only understood `run_id: gen-...`
+# would report a correctly-cited number as unbacked -- a false alarm that teaches
+# people to ignore the gate.
+RUN_ID = re.compile(r"run_id[`'\"]*[=:\s]+[`'\"]*([A-Za-z0-9._-]{4,})", re.I)
 AGENT_METRIC = re.compile(
     r"\b(evidence[ _-]precision|evidence[ _-]recall|unsupported[ _-]claim|"
     r"investigation[ _-]accuracy|agent[ _-]disagreement|override[ _-]rate)\b",
@@ -142,9 +153,29 @@ EVAL_REQUIRED = (
     "llm_tier",
 )
 
+# A component benchmark measures one subsystem in isolation -- an estimator's
+# error, a representation's memory. It names its subject and its tool, because a
+# number whose instrument is unknown cannot be reproduced or compared.
+BENCHMARK_REQUIRED = (
+    "run_id",
+    "record_type",
+    "track",
+    "git_commit_sha",
+    "dirty_worktree",
+    "env_lock_digest",
+    "python_version",
+    "started_at",
+    "finished_at",
+    "subject",
+    "tool",
+    "tool_version",
+    "measured",
+)
+
 REQUIRED_BY_TYPE: dict[str, tuple[str, ...]] = {
     "GENERATOR": GENERATOR_REQUIRED,
     "LOADTEST": LOADTEST_REQUIRED,
+    "BENCHMARK": BENCHMARK_REQUIRED,
     "EVAL": EVAL_REQUIRED,
 }
 
@@ -181,6 +212,9 @@ def manifests() -> dict[str, dict[str, object]]:
     return out
 
 
+HEADING = re.compile(r"^\s{0,3}#{1,6}\s")
+
+
 def scan() -> list[str]:
     known = manifests()
     violations: list[str] = []
@@ -190,23 +224,35 @@ def scan() -> list[str]:
             continue
         rel = path.relative_to(ROOT)
         in_code = False
+        # A run_id declared under a heading covers the numbers reported beneath
+        # it, and is cleared by the next heading. Requiring every line to repeat
+        # the id would make a report unreadable -- and a rule that forces bad
+        # writing gets worked around, which is worse than a slightly wider one.
+        # The scope is deliberately narrow: one section, never the whole file.
+        section_rid: str | None = None
         for n, line in enumerate(path.read_text().splitlines(), 1):
+            if HEADING.match(line):
+                section_rid = None
             if line.lstrip().startswith("```"):
                 in_code = not in_code
                 continue
-            if in_code or is_target_prose(line):
+            if in_code:
+                continue
+            if (declared := RUN_ID.search(line)) is not None:
+                section_rid = declared.group(1)
+            if is_target_prose(line):
                 continue
             for pat, kind in CLAIM_PATTERNS:
                 if not pat.search(line):
                     continue
                 rid_m = RUN_ID.search(line)
-                if not rid_m:
+                rid = rid_m.group(1) if rid_m else section_rid
+                if not rid:
                     violations.append(
                         f"{rel}:{n}: numeric result published without a run_id\n"
                         f"      {line.strip()[:110]}"
                     )
                     break
-                rid = rid_m.group(1)
                 man = known.get(rid)
                 if man is None:
                     violations.append(f"{rel}:{n}: run_id '{rid}' does not resolve to a manifest")
@@ -235,6 +281,7 @@ def scan() -> list[str]:
                 if kind == "quality" and str(man.get("record_type", "")).upper() in {
                     "GENERATOR",
                     "LOADTEST",
+                    "BENCHMARK",
                 }:
                     violations.append(
                         f"{rel}:{n}: run_id '{rid}' is a "

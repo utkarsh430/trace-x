@@ -69,6 +69,32 @@ class Event:
     longitude: float | None = None
     channel: TransactionChannel | None = None
     authorization_outcome: AuthorizationOutcome | None = None
+    event_id: str = ""
+    """Stable identity for this observation.
+
+    The online store uses it as the sorted-set member, so replaying the same
+    event updates in place instead of double-counting -- delivery is at-least-once
+    by design (docs/EVENT_CONTRACTS.md §5) and every consumer must be idempotent.
+    Defaults to empty for the reference implementation, which holds observations
+    in a list and never deduplicates: the two agree because tests supply distinct
+    events, and a test that replays one asserts the difference deliberately.
+    """
+
+    @property
+    def dedup_key(self) -> str:
+        """What identifies this observation inside a sorted set.
+
+        Falls back to the full field tuple when no `event_id` is supplied, so two
+        genuinely different observations never collide -- a collision would
+        silently undercount velocity, which is the feature family hardest to
+        notice being wrong.
+        """
+        if self.event_id:
+            return self.event_id
+        return (
+            f"{self.stream.value}|{self.occurred_at.timestamp()}|{self.account_id}"
+            f"|{self.amount_minor}|{self.merchant_id}|{self.device_id}|{self.card_id}"
+        )
 
     def entity_id(self, entity: Entity) -> str | None:
         return {

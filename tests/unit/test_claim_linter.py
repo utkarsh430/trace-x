@@ -313,3 +313,132 @@ def test_a_dirty_worktree_loadtest_record_cannot_back_a_number(linter) -> None:
     )
     assert violations
     assert any("dirty worktree" in v for v in violations)
+
+
+# --- section-scoped run_id resolution ---------------------------------------
+#
+# Benchmark reports declare a run_id under a heading and then report several
+# numbers beneath it. Requiring every line to repeat the id would make reports
+# unreadable, and a rule that forces bad writing gets worked around. The scope is
+# deliberately ONE section: a heading clears it, so a number cannot inherit
+# provenance from an unrelated run earlier in the file.
+
+
+def test_a_run_id_declared_in_a_section_covers_numbers_beneath_it(linter) -> None:
+    report = "\n".join(
+        [
+            "## Run: generation rate",
+            "",
+            "- `run_id`: `gen-20260912-probe-abcd1234`",
+            "- **34,413.1 tx/s**",
+        ]
+    )
+    assert linter(report, _generator_record()) == []
+
+
+def test_a_heading_clears_the_section_run_id(linter) -> None:
+    """Otherwise a number could inherit provenance from an unrelated run."""
+    report = "\n".join(
+        [
+            "## Run: one",
+            "- run_id: gen-20260912-probe-abcd1234",
+            "",
+            "## Run: two",
+            "- **54,000 tx/s**",
+        ]
+    )
+    violations = linter(report, _generator_record())
+    assert violations
+    assert "without a run_id" in violations[0]
+
+
+def test_a_section_run_id_that_does_not_resolve_is_still_a_violation(linter) -> None:
+    report = "\n".join(
+        [
+            "## Run: invented",
+            "- run_id: gen-does-not-exist",
+            "- **54,000 tx/s**",
+        ]
+    )
+    violations = linter(report, _generator_record())
+    assert violations
+    assert "does not resolve" in violations[0]
+
+
+def test_a_section_run_id_still_enforces_the_tier_gate(linter) -> None:
+    """Widening WHERE an id may be declared must not widen WHAT it licenses."""
+    report = "\n".join(
+        [
+            "## Results",
+            "- `run_id`: `gen-20260912-probe-abcd1234`",
+            "- PR-AUC of 0.91",
+        ]
+    )
+    violations = linter(report, _generator_record())
+    assert violations
+    assert any("GENERATOR record" in v for v in violations)
+
+
+def test_a_number_with_no_run_id_anywhere_is_still_rejected(linter) -> None:
+    assert linter("The gateway sustained 54,000 req/s in production.")
+
+
+def test_benchmark_reports_are_in_scope() -> None:
+    """The largest surface where measurements are actually published.
+
+    Leaving `benchmarks/` unscanned meant the gate covered the documents least
+    likely to carry a raw number and skipped the ones written to carry them.
+    """
+    import importlib.util
+    import sys
+
+    spec = importlib.util.spec_from_file_location(
+        "check_claims_scope", ROOT / "scripts" / "check_claims.py"
+    )
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["check_claims_scope"] = mod
+    spec.loader.exec_module(mod)
+    scanned = {p.relative_to(ROOT).parts[0] for p in mod.SCAN}
+    assert "benchmarks" in scanned
+    assert "docs" in scanned
+
+
+def test_a_benchmark_record_cannot_back_a_quality_claim(linter) -> None:
+    """A component benchmark exercises no model: it can substantiate an
+    estimator's error and a representation's memory, never accuracy."""
+    record = {
+        "run_id": "bench-20260912-cardinality-abcd1234",
+        "record_type": "BENCHMARK",
+        "track": "SYNTHETIC",
+        "git_commit_sha": "0" * 40,
+        "dirty_worktree": False,
+        "env_lock_digest": "sha256:" + "c" * 64,
+        "python_version": "3.12.0",
+        "started_at": "2026-09-12T10:00:00Z",
+        "finished_at": "2026-09-12T10:05:00Z",
+        "subject": "online-feature-store-cardinality",
+        "tool": "redis",
+        "tool_version": "7.4.0",
+        "measured": {"max_relative_error_approximate": 0.0105},
+    }
+    cited = "(run_id: bench-20260912-cardinality-abcd1234)"
+    assert linter(f"Read p99 was 0.25 ms {cited}.", record) == []
+    violations = linter(f"PR-AUC was 0.91 {cited}.", record)
+    assert any("BENCHMARK record" in v for v in violations)
+
+
+def test_an_incomplete_benchmark_record_cannot_back_anything(linter) -> None:
+    record = {
+        "run_id": "bench-20260912-cardinality-abcd1234",
+        "record_type": "BENCHMARK",
+        "track": "SYNTHETIC",
+        "git_commit_sha": "0" * 40,
+        "dirty_worktree": False,
+        "measured": {"x": 1},
+    }
+    violations = linter(
+        "Read p99 was 0.25 ms (run_id: bench-20260912-cardinality-abcd1234).", record
+    )
+    assert violations
+    assert any("missing" in v and "tool_version" in v for v in violations)
