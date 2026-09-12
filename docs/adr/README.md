@@ -54,6 +54,7 @@ been thought through.
 | [0040](0040-two-workload-profiles.md) | Two workload profiles: a representative acceptance gate and an adversarial saturation benchmark | 2 | Accepted |
 | [0041](0041-online-store-memory-and-eviction.md) | Online-store memory classes: a best-effort cache must not evict correctness-relevant state | 2 | Superseded by 0042 |
 | [0042](0042-online-store-memory-corrected.md) | Online-store memory corrected: AOF was the latency cause, eviction is the correctness cause | 2 | Accepted |
+| [0043](0043-small-threadpool-measured.md) | The small-threadpool middle ground is measured, and it is worse | 2 | Accepted |
 
 ## Notes on status
 
