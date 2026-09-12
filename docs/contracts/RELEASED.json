@@ -34,20 +34,24 @@
       "key_reason": "device-sharing detection is order-sensitive on the device, not the account",
       "released_in_phase": 1,
       "producer": "data.generator"
+    },
+    {
+      "topic": "investigation.requested.v1",
+      "schema": "investigation.requested.v1.json",
+      "sha256": "335d56bf81db363e30cf2f625e65bec7c7960be37ec4442992360f5549fa7538",
+      "key": "case_id",
+      "key_reason": "one message exists per case, and the case is the entity that exists at produce time; an investigation_id is minted later by the worker that leases it (ADR-0027)",
+      "released_in_phase": 2,
+      "producer": "trace-gateway triage (transactional outbox)"
     }
   ],
   "planned": [
     {
       "topic": "tx.scored.v1",
       "key": "account_id",
-      "expected_phase": 2,
-      "expected_producer": "trace-gateway"
-    },
-    {
-      "topic": "investigation.requested.v1",
-      "key": "investigation_id",
-      "expected_phase": 2,
-      "expected_producer": "trace-gateway triage"
+      "expected_phase": 3,
+      "expected_producer": "trace-gateway",
+      "note": "Deferred from Phase 2 to Phase 3 by approved decision. A topic is released only in the phase that gains a real producer for it (docs/EVENT_CONTRACTS.md \u00a73), and the gateway cannot publish it until Kafka lands: writing a scored row per transaction to the outbox instead would put Postgres on the hot path for the ~97% of traffic that opens no case, against ADR-0002."
     },
     {
       "topic": "investigation.events.v1",

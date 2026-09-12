@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://trace-x.local/contracts/events/investigation.requested.v1.json",
+  "title": "InvestigationRequestedV1",
+  "description": "Triage opened a case and is asking for an investigation. Topic investigation.requested.v1, keyed by case_id because one message exists per case and the case is the entity that exists at produce time (docs/EVENT_CONTRACTS.md §3). Written to the transactional outbox in the SAME database transaction as the case and queue rows, so the event cannot announce a case that does not exist (ADR-0007).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["envelope", "payload"],
+  "properties": {
+    "envelope": { "$ref": "envelope.v1.json" },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "case_id",
+        "transaction_id",
+        "account_id",
+        "risk_band",
+        "score",
+        "rule_pack_id",
+        "rule_pack_digest",
+        "threshold_config_digest",
+        "feature_set_version",
+        "feature_source",
+        "degraded",
+        "fired_rule_ids"
+      ],
+      "properties": {
+        "case_id": {
+          "type": "string",
+          "description": "The case this request is for. Distinct from an investigation_id: the case is what an analyst sees and exists at triage time, while an investigation is how the orchestrator runs and is created by the worker that leases it (ADR-0027).",
+          "pattern": "^case_[0-9a-f]{32}$"
+        },
+        "transaction_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "account_id": { "type": "string", "pattern": "^acct_\\d{6,}$" },
+        "risk_band": {
+          "type": "string",
+          "description": "Only HIGH and CRITICAL open an investigation (docs/ARCHITECTURE.md §3). LOW and MEDIUM are absent from this enum deliberately: a message carrying one would mean triage fired when it should not have.",
+          "enum": ["HIGH", "CRITICAL"]
+        },
+        "score": {
+          "type": "number",
+          "description": "Combined rules score at triage time, bounded [0, 1].",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "rule_pack_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "rule_pack_digest": {
+          "type": "string",
+          "description": "sha256 of the rule pack that produced the decision. Rules hot-reload, so without this a consumer cannot tell which behaviour opened the case.",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "threshold_config_digest": {
+          "type": "string",
+          "description": "sha256 of the banding configuration in force at triage time.",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "feature_set_version": {
+          "type": "string",
+          "description": "Semantic version of the online feature set (ADR-0032). A score produced by a different feature set is not comparable to one produced by this one.",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$"
+        },
+        "feature_source": {
+          "type": "string",
+          "description": "Whether the warm path had reconciled the features this decision read. Consumers must tolerate an unseen value (docs/EVENT_CONTRACTS.md §4).",
+          "enum": ["ONLINE_ONLY", "RECONCILED"]
+        },
+        "degraded": {
+          "type": "boolean",
+          "description": "True when the decision was made with a dependency unavailable. Every fail-open decision is tagged and counted (CLAUDE.md §3.7), and an investigation opened on degraded features is weaker evidence than one opened on complete features."
+        },
+        "degraded_reasons": {
+          "type": "array",
+          "description": "Why the decision was degraded, when it was.",
+          "items": { "type": "string", "maxLength": 64 },
+          "maxItems": 16
+        },
+        "fired_rule_ids": {
+          "type": "array",
+          "description": "The rules that fired, so a consumer knows what to investigate without re-deriving the decision. Rule IDS ONLY: the feature values a predicate read stay in the synchronous response and the case record, because this topic is retained for 30 days and an event is a poor place for data that is already stored.",
+          "items": { "type": "string", "pattern": "^R\\d{3}_[a-z0-9_]+$" },
+          "maxItems": 200
+        },
+        "abstained_rule_count": {
+          "type": "integer",
+          "description": "How many rules could not reach a verdict because an input was absent. Carried so a consumer can tell a decision made with a blind pack from one made with a quiet one (ADR-0032, ADR-0033).",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

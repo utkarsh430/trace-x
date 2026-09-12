@@ -162,7 +162,7 @@ records Redpanda as a documented alternative if the RAM ceiling binds).
 | `identity.events.v1` | `account_id` | 3 / 12 | 30 d | gateway → stream |
 | `device.events.v1` | `device_id` | 3 / 12 | 30 d | gateway → stream |
 | `tx.scored.v1` | `account_id` | 6 / 24 | 7 d | gateway → stream, triage |
-| `investigation.requested.v1` | `investigation_id` | 3 / 6 | 30 d | triage → worker |
+| `investigation.requested.v1` | `case_id` | 3 / 6 | 30 d | triage → worker |
 | `investigation.events.v1` | `investigation_id` | 3 / 6 | 90 d | worker → api, audit, eval |
 | `action.proposed.v1` | `investigation_id` | 3 / 6 | 90 d | worker → policy |
 | `action.executed.v1` | `action_id` | 3 / 6 | ∞ compacted | executor → audit |

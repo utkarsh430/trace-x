@@ -5,11 +5,18 @@ schema, then run `make codegen`. A CI gate runs the same command and fails on
 any diff, so an edit made here is reverted rather than merged.
 """
 
-from trace_core.contracts.events import device_events_v1, envelope_v1, identity_events_v1, tx_raw_v1
+from trace_core.contracts.events import (
+    device_events_v1,
+    envelope_v1,
+    identity_events_v1,
+    investigation_requested_v1,
+    tx_raw_v1,
+)
 
 __all__ = [
     "device_events_v1",
     "envelope_v1",
     "identity_events_v1",
+    "investigation_requested_v1",
     "tx_raw_v1",
 ]

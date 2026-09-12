@@ -29,6 +29,7 @@ from trace_core.domain.errors import ContractError, UnreleasedTopicError
 TX_RAW_V1: Final = "tx.raw.v1"
 IDENTITY_EVENTS_V1: Final = "identity.events.v1"
 DEVICE_EVENTS_V1: Final = "device.events.v1"
+INVESTIGATION_REQUESTED_V1: Final = "investigation.requested.v1"
 
 PARTITION_KEY_FIELD: Final[dict[str, str]] = {
     # Keyed by the entity whose ORDERING matters, never for load balancing
@@ -37,6 +38,11 @@ PARTITION_KEY_FIELD: Final[dict[str, str]] = {
     TX_RAW_V1: "account_id",
     IDENTITY_EVENTS_V1: "account_id",
     DEVICE_EVENTS_V1: "device_id",
+    # One message per case, and the case is the entity that exists at produce
+    # time -- an investigation_id is minted later by the worker that leases it
+    # (ADR-0027), so keying on one would mean keying on something that does
+    # not yet exist.
+    INVESTIGATION_REQUESTED_V1: "case_id",
 }
 """Released topic -> the PAYLOAD field whose value is the partition key.
 
