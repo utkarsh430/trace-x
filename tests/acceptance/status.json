@@ -1,10 +1,10 @@
 {
   "$schema": "./status.schema.json",
   "project": "TRACE-X",
-  "current_phase": "1",
-  "current_phase_name": "Domain Model, Generator, Ground Truth, Source Adapters",
+  "current_phase": "2",
+  "current_phase_name": "Hot Path: Gateway, Rules, Online Features",
   "updated_at": "2026-09-12",
-  "last_verified_commit": "bd4a19a",
+  "last_verified_commit": "cf81083",
   "legend": {
     "NOT_STARTED": "No implementation exists.",
     "IN_PROGRESS": "Implementation started; acceptance evidence incomplete.",
@@ -177,55 +177,55 @@
       "id": "P2.gateway",
       "phase": "2",
       "name": "Synchronous scoring gateway meets its p99 budget",
-      "status": "NOT_STARTED",
+      "status": "PASS",
       "evidence": {
         "command": "make load-gateway",
-        "verified_at": null,
-        "result": null
+        "verified_at": "2026-09-12",
+        "result": "make verify 11/11 green; 1,323 tests pass (unit+contract+conformance+integration+chaos). POST /v1/transactions over HTTP with authentication, rate limiting, RFC 9457 problems, idempotency and triage. Canonical load gate PASSES at run_id load-20260912-gateway-550789bb on the representative profile: 499.97 TPS sustained of 500 offered, 0 dropped iterations, p50 1.696 ms and p99 14.248 ms against 20/100 ms budgets, 0 5xx, 0 4xx, 0 429, 0 degraded, 0 unparseable over 600 s on a clean tree. Scoring core p50 0.310 ms / p99 0.430 ms. Report benchmarks/gateway/REPORT.md."
       }
     },
     {
       "id": "P2.online-features",
       "phase": "2",
       "name": "Redis online feature store",
-      "status": "NOT_STARTED",
+      "status": "PASS",
       "evidence": {
         "command": "pytest tests/unit/test_online_features.py",
-        "verified_at": null,
-        "result": null
+        "verified_at": "2026-09-12",
+        "result": "pytest tests/conformance + tests/integration/test_feature_semantics_redis.py: the SAME feature-semantics suite runs unmodified against the naive reference implementation and against Redis, which is what makes online/offline parity a measurement rather than a claim (ADR-0032). 26 features with declarative semantics; hybrid EXACT/APPROXIMATE distinct storage declared per feature (ADR-0034, bench-20260912-cardinality-41059ab1). The snapshot reads only what the declared feature set requires (ADR-0038): 163 to 97 Redis commands per request, feature read 2.970 to 0.304 ms, conformance unchanged."
       }
     },
     {
       "id": "P2.rules-engine",
       "phase": "2",
       "name": "Declarative rule engine, hot-reloadable",
-      "status": "NOT_STARTED",
+      "status": "PASS",
       "evidence": {
         "command": "pytest tests/unit/test_rules.py",
-        "verified_at": null,
-        "result": null
+        "verified_at": "2026-09-12",
+        "result": "pytest tests/unit/test_rules_*.py + tests/contract: 18 declarative YAML rules over the 26 declared features, one unit test per rule including the abstention path. Kleene three-valued logic (ADR-0033): an absent feature yields UNKNOWN and never FALSE, so a missing input cannot read as 'no risk'; UNKNOWN still settles where a false conjunct or true disjunct decides the outcome. Hot reload is atomic and fail-safe -- an invalid candidate leaves the previous pack in force and increments rule_pack_reload_failed_total. Noisy-OR scoring with band floors that only raise. Validated end to end by the eval-v1 replay: 12 distinct rules fired across 60,000 replayed transactions, R008 among them."
       }
     },
     {
       "id": "P2.degraded-mode",
       "phase": "2",
       "name": "Redis outage degrades to rules-only, never 5xx",
-      "status": "NOT_STARTED",
+      "status": "PASS",
       "evidence": {
         "command": "pytest -m chaos tests/chaos/test_redis_down.py",
-        "verified_at": null,
-        "result": null
+        "verified_at": "2026-09-12",
+        "result": "pytest -m chaos tests/chaos/test_redis_down.py: 6 passed. The suite PAUSES a real Redis container under a live gateway (docker pause, not stop, so connections hang and time out rather than being refused) and asserts the hot path degrades to rules-only, returns 200 with degraded=true and X-Trace-Degraded, never 5xx, and recovers without a restart. Its first run found a real 21.8 s request against a configured 20 ms timeout, caused by redis-py's default retry backoff; fixed with retries disabled plus a circuit breaker (ADR-0035). Postgres loss is deliberately NOT degraded: triage failure is 503 and readiness fails so a load balancer drains the instance."
       }
     },
     {
       "id": "P2.idempotency",
       "phase": "2",
       "name": "Duplicate transaction_id yields one effect",
-      "status": "NOT_STARTED",
+      "status": "PASS",
       "evidence": {
         "command": "pytest tests/unit/test_idempotency.py",
-        "verified_at": null,
-        "result": null
+        "verified_at": "2026-09-12",
+        "result": "pytest tests/integration/test_gateway_concurrency.py + test_triage_store.py: two tiers, and the authoritative one is the database. 32 concurrent retries of one logical request against a live gateway open exactly one case, one queue row and one outbox row -- the case that matters, because concurrent retries all miss the Redis replay cache before the first response is stored, leaving cases.trigger_transaction_id UNIQUE as the only thing preventing N investigations. Writing that test found a real defect: open_case minted its own case_id while the caller had already built investigation.requested.v1 with a different one, so every published event named a case that did not exist (191,455 outbox rows, zero matching). The caller's id is now authoritative and the assertion names the case rather than its shape."
       }
     },
     {
