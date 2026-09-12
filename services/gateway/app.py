@@ -34,7 +34,12 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import ValidationError
 
-from services.gateway.config import SERVICE_NAME, SERVICE_VERSION, GatewaySettings
+from services.gateway.config import (
+    REDIS_TIMEOUT_S,
+    SERVICE_NAME,
+    SERVICE_VERSION,
+    GatewaySettings,
+)
 from services.gateway.errors import classify, describe, problem
 from services.gateway.pipeline import (
     REASON_RATE_LIMIT,
@@ -58,6 +63,7 @@ from trace_core.features.semantics import Stream
 from trace_core.observability.logging import configure_logging
 from trace_core.observability.metrics import HotPathMetrics
 from trace_core.observability.telemetry import configure_telemetry, current_trace_id
+from trace_core.repositories.circuit_breaker import CircuitBreaker
 from trace_core.repositories.postgres_triage import PostgresTriageStore, new_case_id
 from trace_core.repositories.redis_idempotency import RedisIdempotencyCache, ReplayVerdict
 from trace_core.repositories.redis_ratelimit import RedisRateLimiter
@@ -94,6 +100,10 @@ class GatewayState:
     triage: PostgresTriageStore | None = None
     redis: Any = None
     pool: Any = None
+    breaker: CircuitBreaker | None = None
+    """One breaker for the whole Redis dependency, shared by the feature store,
+    the limiter and the replay cache. Per-collaborator breakers would each have
+    to learn the outage separately, which is three timeouts instead of one."""
 
     def ready(self) -> tuple[bool, dict[str, str]]:
         """Readiness, per ADR-0035.
@@ -146,14 +156,25 @@ def build_state(settings: GatewaySettings | None = None) -> GatewayState:
     feature_store: Any = None
     try:
         import redis as redis_module
+        from redis.backoff import NoBackoff
+        from redis.retry import Retry
 
         from trace_core.repositories.redis_features import RedisOnlineFeatureStore
 
+        # Retries DISABLED, deliberately and with a measurement behind it.
+        # redis-py applies a default retry policy with exponential backoff, so
+        # `socket_timeout` bounds one ATTEMPT rather than one call: a chaos run
+        # measured a single GET against a paused Redis at 4.10 s under a 50 ms
+        # timeout, and 0.053 s with retries off. On a path with a 100 ms budget a
+        # retry is not resilience -- the caller has already given up, and the
+        # retry is load the gateway adds to an outage (ADR-0035).
         redis_client = redis_module.Redis.from_url(
             resolved.redis_url,
             decode_responses=True,
-            socket_timeout=0.02,
-            socket_connect_timeout=0.02,
+            socket_timeout=REDIS_TIMEOUT_S,
+            socket_connect_timeout=REDIS_TIMEOUT_S,
+            retry=Retry(NoBackoff(), 0),
+            retry_on_timeout=False,
         )
         feature_store = RedisOnlineFeatureStore(redis_client)
         limiter = RedisRateLimiter(
@@ -180,6 +201,7 @@ def build_state(settings: GatewaySettings | None = None) -> GatewayState:
     except ModuleNotFoundError:  # pragma: no cover - the db extra is required
         log.error("postgres_pool_unavailable", detail="triage cannot be recorded")
 
+    breaker = CircuitBreaker("redis")
     return GatewayState(
         settings=resolved,
         verifier=verifier,
@@ -189,6 +211,7 @@ def build_state(settings: GatewaySettings | None = None) -> GatewayState:
             thresholds=thresholds,
             feature_store=feature_store,
             producer_version=SERVICE_VERSION,
+            breaker=breaker,
         ),
         metrics=HotPathMetrics(),
         limiter=limiter,
@@ -196,6 +219,7 @@ def build_state(settings: GatewaySettings | None = None) -> GatewayState:
         triage=triage,
         redis=redis_client,
         pool=pool,
+        breaker=breaker,
     )
 
 
@@ -410,7 +434,13 @@ def _register_routes(app: FastAPI) -> None:
 
         degraded_reasons: list[str] = []
         limit_decision = None
-        if state.limiter is not None:
+        redis_usable = state.breaker is None or state.breaker.allows()
+        if state.limiter is not None and not redis_usable:
+            # The circuit is open: skip rather than pay the timeout to re-learn
+            # what it already knows. Fails OPEN and is counted, per CLAUDE.md §3.7.
+            degraded_reasons.append(REASON_RATE_LIMIT)
+            state.metrics.degraded.add(1, {"reason": REASON_RATE_LIMIT})
+        elif state.limiter is not None:
             limit_decision = state.limiter.check(token.token_id, request_id=request_id)
             if limit_decision.degraded:
                 degraded_reasons.append(REASON_RATE_LIMIT)
@@ -425,7 +455,7 @@ def _register_routes(app: FastAPI) -> None:
                 )
 
         payload = body.model_dump(mode="json", exclude_none=True)
-        if state.idempotency is not None:
+        if state.idempotency is not None and redis_usable:
             try:
                 lookup = state.idempotency.lookup(idempotency_key, payload)
             except Exception:

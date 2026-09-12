@@ -43,6 +43,7 @@ from trace_core.features import FeatureContext, FeatureState, FeatureValue
 from trace_core.features.definitions import ONLINE_FEATURES
 from trace_core.features.reference import Event
 from trace_core.features.semantics import Stream
+from trace_core.repositories.circuit_breaker import CircuitBreaker
 from trace_core.rules.engine import Evaluation, evaluate_pack
 from trace_core.rules.pack import CompiledPack
 from trace_core.scoring.banding import ThresholdConfig
@@ -97,6 +98,10 @@ class ScoringPipeline:
     reference implementation stand in during tests without the pipeline knowing.
     """
     producer_version: str = "0.1.0"
+    breaker: CircuitBreaker | None = None
+    """Opened after repeated store failures so an outage costs one probe per
+    cooldown rather than one timeout per call per request. Measured: without it,
+    a paused Redis made a single scored request take 21.8 s (ADR-0035)."""
     _observed: list[Event] = field(default_factory=list, repr=False)
 
     # -- canonical mapping ---------------------------------------------------
@@ -162,6 +167,11 @@ class ScoringPipeline:
         as_of = event_time(canonical.occurred_at)
         if self.feature_store is None:
             return FeatureContext(as_of=as_of), 0.0, REASON_REDIS
+        if self.breaker is not None and not self.breaker.allows():
+            # Skipped, not attempted: the circuit already established that the
+            # store is unavailable, and paying the timeout again to re-learn it
+            # is what turns an outage into a latency incident.
+            return FeatureContext(as_of=as_of), 0.0, REASON_REDIS
         began = time.perf_counter()
         try:
             context = self.feature_store.snapshot(
@@ -176,7 +186,11 @@ class ScoringPipeline:
         except Exception:
             # Never re-raised: §18 says Redis loss degrades to rules-only and
             # never 5xx. The reason is returned so the caller counts it.
+            if self.breaker is not None:
+                self.breaker.record_failure()
             return FeatureContext(as_of=as_of), time.perf_counter() - began, REASON_REDIS
+        if self.breaker is not None:
+            self.breaker.record_success()
         return context, time.perf_counter() - began, None
 
     def observe(self, canonical: CanonicalTransaction) -> str | None:
@@ -187,10 +201,16 @@ class ScoringPipeline:
         """
         if self.feature_store is None:
             return REASON_REDIS
+        if self.breaker is not None and not self.breaker.allows():
+            return REASON_REDIS
         try:
             self.feature_store.observe(_as_event(canonical))
         except Exception:
+            if self.breaker is not None:
+                self.breaker.record_failure()
             return REASON_REDIS
+        if self.breaker is not None:
+            self.breaker.record_success()
         return None
 
     # -- the sequence --------------------------------------------------------

@@ -126,6 +126,11 @@ ignore = ["S101"]  # assert is expected in tests and in invariant guards
 # is never printed is one nobody reads. Scoped to tests/load/ rather than
 # all tests, so an accidental debug print elsewhere is still caught.
 "tests/load/**" = ["ARG", "S105", "S106", "S311", "S607", "S608", "T201"]
+# T201: a chaos test that swallows a teardown error silently is how a broken
+# fixture hides the assertion failure that led to it. Printing the reason is the
+# minimum, and scoped to tests/chaos/ so a stray debug print elsewhere is still
+# caught.
+"tests/chaos/**" = ["ARG", "S105", "S106", "S311", "S607", "S608", "T201"]
 "scripts/**" = ["T20"]   # CLI tooling prints by design
 # A benchmark exists to report a measurement, and a measurement nobody prints is
 # one nobody reads (T201). S311: the load generator is deliberately seeded so a
