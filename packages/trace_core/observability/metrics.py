@@ -16,9 +16,10 @@ a pack that has quietly gone blind looks exactly like a quiet day in
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
 from typing import Final
 
-from opentelemetry.metrics import Counter, Histogram
+from opentelemetry.metrics import CallbackOptions, Counter, Histogram, Observation
 
 from trace_core.observability.telemetry import get_meter
 
@@ -70,6 +71,25 @@ RATE_LIMITED_TOTAL: Final = "rate_limited_total"
 UNAUTHENTICATED_TOTAL: Final = "unauthenticated_total"
 RULE_PACK_RELOAD_FAILED_TOTAL: Final = "rule_pack_reload_failed_total"
 
+ONLINE_STORE_EVICTED_KEYS: Final = "online_store_evicted_keys_total"
+"""Keys Redis has discarded under its own memory pressure.
+
+**The only signal that distinguishes two indistinguishable things.** An evicted
+feature key reads back empty, and an empty read is what an account with no
+history looks like -- so eviction silently converts `INSUFFICIENT_HISTORY` from
+"this account is new" into "we lost what we knew about this account". The rules
+tier then abstains, the score falls, and a transaction that should have been
+CRITICAL is scored LOW with `degraded=false`. Nothing in the decision says so.
+
+The remedies are opposite (wait, versus provision memory) and the consequences
+are opposite (a correct abstention, versus a missed detection), which is exactly
+why ADR-0032 refused to fold the two feature states together. This counter is
+what lets an operator tell which one is happening. A measured run reached
+**393,176 evicted keys** with a 63% keyspace-miss rate and reported nothing."""
+
+ONLINE_STORE_MEMORY_BYTES: Final = "online_store_memory_bytes"
+"""Redis `used_memory`, so the approach to the cap is visible before the cliff."""
+
 HOT_PATH_METRICS: Final[frozenset[str]] = frozenset(
     {
         TX_SCORE_LATENCY,
@@ -85,6 +105,8 @@ HOT_PATH_METRICS: Final[frozenset[str]] = frozenset(
         RATE_LIMITED_TOTAL,
         UNAUTHENTICATED_TOTAL,
         RULE_PACK_RELOAD_FAILED_TOTAL,
+        ONLINE_STORE_EVICTED_KEYS,
+        ONLINE_STORE_MEMORY_BYTES,
     }
 )
 
@@ -176,3 +198,55 @@ class HotPathMetrics:
             RULE_PACK_RELOAD_FAILED_TOTAL,
             description="Rule-pack reloads refused; the previous pack stayed in force.",
         )
+
+
+def observe_reading(values: dict[str, int], key: str) -> list[Observation]:
+    """One observation, or none at all. Never a zero.
+
+    Absent is not zero. A gauge that published 0 when it could not read the store
+    would assert "nothing has been evicted" on precisely the occasions it does not
+    know -- the same error as imputing a missing feature to zero, which
+    docs/DATA_ENGINEERING.md §5 prohibits for the same reason: a fabricated value
+    is indistinguishable from a measured one downstream.
+    """
+    if key not in values:
+        return []
+    return [Observation(values[key])]
+
+
+def register_online_store_gauges(meter_name: str, info: Callable[[], dict[str, int]]) -> None:
+    """Publish Redis's own memory and eviction counters as observable gauges.
+
+    Read through a callback rather than recorded on the hot path: these are
+    properties of the store, not of a request, and issuing an `INFO` per scored
+    transaction would spend hot-path budget asking a question whose answer
+    changes on a timescale of seconds.
+
+    `info` returns the two values already extracted, so this module never learns
+    what a Redis client is (CLAUDE.md §3.4 — domain code depends on protocols,
+    not drivers) and the caller decides how to fail. A callback that raises would
+    take the whole `/metrics` scrape down with it, so the caller is expected to
+    swallow and return an empty mapping instead; an absent gauge is a visible
+    gap, while a failed scrape hides every other metric too.
+    """
+    meter = get_meter(meter_name)
+
+    def _evicted(options: CallbackOptions) -> Iterable[Observation]:
+        del options
+        return observe_reading(info(), "evicted_keys")
+
+    def _memory(options: CallbackOptions) -> Iterable[Observation]:
+        del options
+        return observe_reading(info(), "used_memory")
+
+    meter.create_observable_gauge(
+        ONLINE_STORE_EVICTED_KEYS,
+        callbacks=[_evicted],
+        description="Keys Redis discarded under memory pressure; feature state lost silently.",
+    )
+    meter.create_observable_gauge(
+        ONLINE_STORE_MEMORY_BYTES,
+        callbacks=[_memory],
+        unit="By",
+        description="Redis used_memory, so approaching the cap is visible before eviction starts.",
+    )

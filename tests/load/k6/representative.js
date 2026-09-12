@@ -109,9 +109,37 @@ const MERCHANTS_PER_ACCOUNT = 3000 / 40000;
 const DEVICES_PER_ACCOUNT = 48000 / 40000;
 const IPS_PER_ACCOUNT = 20000 / 40000;
 
+/** The canonical acceptance window (ROADMAP: a ten-minute run). */
+const CANONICAL_WINDOW_S = 600;
+
+/** Feature retention, from `RETENTION_S` in the online store: 25 hours. */
+const RETENTION_S = 25 * 3600;
+
+/**
+ * Expected prior events per account inside the retention window, in `eval-v1`.
+ *
+ * This is the number the population is derived from, and deriving from it
+ * rather than from the instantaneous rate is the correction that matters.
+ * Matching the per-account *rate* alone gives a population of ~100 million, at
+ * which no account recurs inside a ten-minute window: 0.3% of reads find any
+ * history where eval-v1's steady state has 36%. The gate would then measure an
+ * empty store and understate the cost of parsing populated windows — passing
+ * for the wrong reason.
+ *
+ * Matching *history depth* satisfies both constraints at once. At 500 TPS it
+ * gives ~670,000 accounts: 2.7 transactions per account per hour, a 15x margin
+ * under R006's 40/hour threshold, and the same 36% warm-read fraction the
+ * frozen dataset has.
+ */
+const EVAL_V1_HISTORY_DEPTH = (EVAL_V1_TX_PER_ACCOUNT_PER_DAY * RETENTION_S) / 86400;
+
+// Derived from the CANONICAL window, not from `DURATION`, so a shorter
+// diagnostic run uses the same population as the gate and stays comparable to
+// it. A short run simply accumulates proportionally less history, which is a
+// property of the run rather than of a different workload.
 const ACCOUNTS = Math.max(
   40000,
-  Math.round((TARGET_TPS * 86400) / EVAL_V1_TX_PER_ACCOUNT_PER_DAY)
+  Math.round((TARGET_TPS * CANONICAL_WINDOW_S) / EVAL_V1_HISTORY_DEPTH)
 );
 const MERCHANTS = Math.max(3000, Math.round(ACCOUNTS * MERCHANTS_PER_ACCOUNT));
 const DEVICES = Math.max(48000, Math.round(ACCOUNTS * DEVICES_PER_ACCOUNT));
@@ -167,7 +195,14 @@ function derived(accountIndex, salt, modulo) {
   let h = (accountIndex ^ (salt * 0x9e3779b1)) >>> 0;
   h = Math.imul(h ^ (h >>> 16), 0x85ebca6b) >>> 0;
   h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35) >>> 0;
-  return (h ^ (h >>> 16)) % modulo;
+  // `>>> 0` before the modulo, and it is load-bearing: `^` yields a SIGNED
+  // int32, so without it half of all derived values are negative and
+  // `mrch_${pad(-50422, 5)}` becomes `mrch_-50422`, which the released contract
+  // rejects. The first run of this profile sent 253,199 such requests, and the
+  // harness's `no_client_errors` integrity gate is what caught it -- the
+  // latency numbers underneath were a validation-layer measurement wearing a
+  // scoring-path label.
+  return ((h ^ (h >>> 16)) >>> 0) % modulo;
 }
 
 function pad(value, width) {
@@ -196,7 +231,7 @@ function zipfMerchant(rnd) {
   return Math.min(MERCHANTS - 1, index);
 }
 
-function buildTransaction(rnd) {
+function buildTransaction(rnd, sequence) {
   // Uniform over the derived population: eval-v1 has no hot-account skew, and
   // adding one is exactly what manufactured the velocity in the old profile.
   const accountIndex = 1 + Math.floor(rnd() * ACCOUNTS);
@@ -223,7 +258,7 @@ function buildTransaction(rnd) {
   const occurredAt = new Date(Date.now() - Math.floor(rnd() * 30000)).toISOString();
 
   return {
-    transaction_id: `tx_${RUN_NONCE}_${exec.scenario.iterationInTest}`,
+    transaction_id: `tx_${RUN_NONCE}_${sequence}`,
     account_id: `acct_${pad(accountIndex, 6)}`,
     // cards_per_account is 1 in the frozen config, so card and account are 1:1
     // in the dataset too. Kept faithful rather than "fixed".
@@ -256,11 +291,47 @@ export function setup() {
         'previous run and the replay cache would serve most of this one.'
     );
   }
+  // Validate the generator against the released contract BEFORE measuring
+  // anything. The first run of this profile spent ten minutes sending 253,199
+  // malformed requests and reporting their rejection latency as a p99; the
+  // integrity gate caught it afterwards, but afterwards is ten minutes late and
+  // the failure was a one-character omission. A thousand payloads take a
+  // moment, and a generator that cannot produce a valid request should fail
+  // here rather than produce a beautifully fast measurement of the 422 path.
+  const PATTERNS = {
+    account_id: /^acct_\d{6,}$/,
+    card_id: /^card_\d{6,}$/,
+    device_id: /^dev_\d{6,}$/,
+    merchant_id: /^mrch_\d{5,}$/,
+    ip_id: /^ip_\d{5,}$/,
+  };
+  for (let i = 0; i < 1000; i += 1) {
+    const sample = buildTransaction(mulberry32(SEED + i), i);
+    for (const [fieldName, pattern] of Object.entries(PATTERNS)) {
+      if (!pattern.test(sample[fieldName])) {
+        throw new Error(
+          `generator produced ${fieldName}=${JSON.stringify(sample[fieldName])}, which the ` +
+            `released TransactionRequest contract rejects (${pattern}). Every such request ` +
+            `would be a 422, and the run would report the validation layer's latency as the ` +
+            `scoring path's.`
+        );
+      }
+    }
+    if (!Number.isInteger(sample.amount_minor) || sample.amount_minor <= 0) {
+      throw new Error(
+        `generator produced amount_minor=${sample.amount_minor}; money is integer minor ` +
+          `units and must be positive (CLAUDE.md §6).`
+      );
+    }
+  }
+
   console.log(
     `representative profile: ${ACCOUNTS.toLocaleString()} accounts, ` +
       `${MERCHANTS.toLocaleString()} merchants, ${DEVICES.toLocaleString()} devices, ` +
-      `${IPS.toLocaleString()} ips — derived from ${TARGET_TPS} TPS at eval-v1's ` +
-      `${EVAL_V1_TX_PER_ACCOUNT_PER_DAY} tx/account/day`
+      `${IPS.toLocaleString()} ips — derived from ${TARGET_TPS} TPS so a ` +
+      `${CANONICAL_WINDOW_S}s window reproduces eval-v1's history depth of ` +
+      `${EVAL_V1_HISTORY_DEPTH.toFixed(3)} prior events per account. 1,000 sample payloads ` +
+      `validated against the released contract.`
   );
   return { startedAt: new Date().toISOString() };
 }
@@ -268,7 +339,7 @@ export function setup() {
 export default function () {
   const iteration = exec.scenario.iterationInTest;
   const rnd = mulberry32(SEED + exec.vu.idInTest * 1000003 + iteration);
-  const body = buildTransaction(rnd);
+  const body = buildTransaction(rnd, iteration);
 
   const response = http.post(`${BASE_URL}/v1/transactions`, JSON.stringify(body), {
     headers: {

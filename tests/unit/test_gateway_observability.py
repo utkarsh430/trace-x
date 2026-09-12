@@ -80,12 +80,23 @@ def test_metric_names_are_prometheus_shaped() -> None:
         )
 
 
+KIND_SUFFIXES = ("_total", "_seconds", "_bytes")
+"""`_total` for monotonic counts, `_seconds` for durations, `_bytes` for sizes.
+
+`_bytes` was added for `online_store_memory_bytes`, which is a gauge over a
+size and is neither of the first two. Widening the rule rather than forcing the
+name is the honest move: calling a byte gauge `_seconds` to satisfy a checker
+would leave the dashboard query lying about its own units, which is the exact
+confusion this convention exists to prevent. Any further widening should have to
+justify itself the same way -- the list is short on purpose."""
+
+
 def test_counters_and_histograms_are_named_by_their_kind() -> None:
-    """`_total` for counters, `_seconds` for durations. The convention is what
-    lets someone read a dashboard query without opening the code."""
+    """The convention is what lets someone read a dashboard query without
+    opening the code."""
     for name in HOT_PATH_METRICS:
-        assert name.endswith(("_total", "_seconds")), (
-            f"{name} says nothing about whether it is a count or a duration"
+        assert name.endswith(KIND_SUFFIXES), (
+            f"{name} says nothing about whether it is a count, a duration or a size"
         )
 
 

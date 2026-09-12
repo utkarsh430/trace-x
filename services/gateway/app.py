@@ -62,7 +62,7 @@ from trace_core.features.definitions import ONLINE_FEATURES
 from trace_core.features.reference import Event
 from trace_core.features.semantics import Stream
 from trace_core.observability.logging import configure_logging
-from trace_core.observability.metrics import HotPathMetrics
+from trace_core.observability.metrics import HotPathMetrics, register_online_store_gauges
 from trace_core.observability.telemetry import configure_telemetry, current_trace_id
 from trace_core.repositories.circuit_breaker import CircuitBreaker
 from trace_core.repositories.postgres_triage import PostgresTriageStore, new_case_id
@@ -240,6 +240,27 @@ def create_app(state: GatewayState | None = None) -> FastAPI:
 
         resolved = state or build_state()
         app.state.gateway = resolved
+
+        # Redis's own memory and eviction counters, published as gauges.
+        # Registered here rather than in `build_state` because it needs the
+        # meter provider that `configure_telemetry` above just installed.
+        def _store_info() -> dict[str, int]:
+            """Never raises. A failed callback fails the whole /metrics scrape,
+            which would hide every other metric to report one."""
+            client = resolved.redis
+            if client is None:
+                return {}
+            try:
+                info = client.info("memory") | client.info("stats")
+            except Exception:
+                return {}
+            return {
+                key: int(info[key])
+                for key in ("used_memory", "evicted_keys")
+                if isinstance(info.get(key), int | str)
+            }
+
+        register_online_store_gauges(SERVICE_NAME, _store_info)
         if resolved.pool is not None:
             try:
                 resolved.pool.open(wait=True, timeout=10)
