@@ -24,10 +24,16 @@ recorded evidence.** Phase 0 remains complete; nothing in it was weakened.
 
 **One ROADMAP target is NOT met and is recorded as missed, not waived** — see TARGETS below.
 
-**CI has NOT run on this work.** Fifteen commits are unpushed (`origin/main` is at the Phase 1
-step-0 commit), so `make ci-status` reports no runs for `HEAD`. Everything above was verified locally,
-including the integration suite against a real PostgreSQL container. Pushing is a deliberate act and
-has not been taken; a reviewer should treat "CI green" as unestablished until it is.
+**CI has run and is green.** Phase 1 was pushed as `phase/01-domain-generator` and merged into
+`dev` via PR #2. All four workflows passed on the Phase 1 head `e127996`: `static-analysis`, `fast`,
+`check-claims` and `integration` — the last being the release-blocking ground-truth isolation suite
+against a real PostgreSQL container.
+
+One detail a reader should not have to infer: the merge commit on `dev` shows **three** checks, not
+four. `test-integration` triggers on `pull_request` and on pushes to `main` only
+(`.github/workflows/test-integration.yml`), so it does not re-run on a merge into `dev`. It ran on the
+PR, so the control was verified — but on a feature → `dev` flow the integration suite runs only at PR
+time and again when `dev` reaches `main`.
 
 **Phase 2 has not begun and must not begin without explicit user approval.**
 
@@ -36,7 +42,7 @@ has not been taken; a reviewer should treat "CI green" as unestablished until it
 ```bash
 make setup      # venv + dev/db/obs/gen extras
 make verify     # expect: 10 passed, 0 failed  -> VERIFY OK
-make ci-status  # currently reports NO runs for HEAD: the work is unpushed
+make ci-status  # Phase 1 is merged to dev and green; see CURRENT STATUS
 ```
 
 Docker is needed for the integration suite (`pytest -m integration`) and for `make seed` to write
