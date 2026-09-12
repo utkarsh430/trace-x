@@ -30,6 +30,11 @@ SCOPE_REQUIREMENTS = {
     "alembic": "db",
     "sqlalchemy": "db",
     "opentelemetry.exporter.otlp": "obs",
+    # Phase 1 put `data/` (the generator and the source adapters) into mypy's
+    # scope. Both were added with the scope change, not after it, because the
+    # drift is only invisible on a machine that already has them installed.
+    "pyarrow": "gen",
+    "jsonschema": "gen",
 }
 
 EXTRAS_RE = re.compile(r'install[^\n]*-e\s+"\.\[([a-z,\s]+)\]"')
@@ -48,6 +53,39 @@ def test_mypy_scope_is_declared(pyproject: dict) -> None:
     files = pyproject["tool"]["mypy"]["files"]
     assert "packages" in files
     assert "migrations" in files, "migrations carry the security-critical grants; keep them typed"
+    assert "data" in files, (
+        "the generator and the source adapters live under data/ (CLAUDE.md S4); "
+        "outside mypy's scope they would be the largest untyped surface in the repo"
+    )
+
+
+# ------------------------------------------------- phase-gate probe (D-2) ----
+
+
+def _phase_gated_targets() -> set[str]:
+    """Make targets that still route through scripts/phase_guard.py."""
+    text = MAKEFILE.read_text()
+    return set(re.findall(r"^([a-z-]+):[^\n]*\n\t@\$\(PY\) scripts/phase_guard\.py", text, re.M))
+
+
+def test_ci_phase_gate_probes_a_command_that_is_still_gated() -> None:
+    """A gate that fires when a phase SUCCEEDS is worse than no gate.
+
+    `test-fast.yml` asserts that a phase-gated command exits non-zero. It named
+    `make seed` -- which Phase 1 implements, so the job would have gone red the
+    moment the generator started working. The probe must always name a command
+    whose phase has not landed.
+    """
+    wf = WORKFLOWS / "test-fast.yml"
+    probes = set(re.findall(r"^\s+make ([a-z-]+) >/dev/null", wf.read_text(), re.M))
+    assert probes, "test-fast.yml no longer probes a phase-gated command"
+    gated = _phase_gated_targets()
+    assert gated, "no phase-gated targets found in the Makefile"
+    for probe in probes:
+        assert probe in gated, (
+            f"test-fast.yml probes `make {probe}`, which is no longer phase-gated. "
+            f"Repoint it at a command whose phase has not landed: {sorted(gated)}"
+        )
 
 
 def test_required_extras_exist(pyproject: dict) -> None:

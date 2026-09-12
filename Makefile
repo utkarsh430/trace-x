@@ -41,7 +41,7 @@ setup: ## Create venv and install dev + core dependencies
 	@# Must cover every extra mypy's `files` scope imports (migrations -> db,
 	@# the lazily-imported OTLP exporter -> obs). Installing less means a fresh
 	@# clone fails `make verify` on mypy. Asserted by test_toolchain_consistency.
-	@$(VPIP) install --quiet -e ".[dev,db,obs]"
+	@$(VPIP) install --quiet -e ".[dev,db,obs,gen]"
 	@test -f .env || (cp .env.example .env && echo "  created .env from template")
 	@echo "setup complete — run 'make doctor' next"
 
@@ -87,7 +87,8 @@ migrate-status: ## Show the current migration revision
 
 lock: ## Regenerate the hashed dependency lockfile
 	@$(VPY) -m piptools compile --quiet --generate-hashes --strip-extras --allow-unsafe \
-	  --output-file=requirements.lock --extra=dev --extra=db --extra=obs --extra=api pyproject.toml
+	  --output-file=requirements.lock --extra=dev --extra=db --extra=obs --extra=api \
+	  --extra=gen pyproject.toml
 	@echo "requirements.lock updated ($$(shasum -a 256 requirements.lock | cut -c1-16)...)"
 
 ## ---------------------------------------------------------------------------

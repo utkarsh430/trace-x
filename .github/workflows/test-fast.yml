@@ -23,7 +23,7 @@ jobs:
       - name: Install dev dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev,db,obs]"
+          pip install -e ".[dev,db,obs,gen]"
 
       - name: Unit, property, contract, conformance
         run: |
@@ -34,13 +34,19 @@ jobs:
         run: python scripts/acceptance.py validate
 
       # The Definition of Done forbids commands that pretend to succeed.
+      #
+      # The probe must name a command whose phase has NOT landed. It was
+      # `make seed` until Phase 1 implemented it; leaving it there would have
+      # failed this job the moment the generator started working -- a gate that
+      # fires on success is worse than no gate. `make demo` is Phase 7.
+      # Whoever implements Phase 7 must move this probe again.
       - name: Phase-gated commands must fail explicitly
         run: |
           set +e
-          make seed >/dev/null 2>&1; rc=$?
+          make demo >/dev/null 2>&1; rc=$?
           set -e
           if [ "$rc" -eq 0 ]; then
-            echo "::error::'make seed' exited 0 but Phase 1 is not implemented"
+            echo "::error::'make demo' exited 0 but Phase 7 is not implemented"
             exit 1
           fi
           echo "Phase-gated commands correctly exit non-zero (rc=$rc)."
