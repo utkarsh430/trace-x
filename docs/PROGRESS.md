@@ -78,7 +78,11 @@ Ollama not installed — blocks **Phase 6**. No AWS credentials — blocks **Pha
 
 ## LAST VERIFIED COMMIT
 
-`7cf30ed` — *Close Phase 0: CI green, add ci-status, harden the Actions API client*
+`aaf6f28` — **Phase 0 handoff commit. Phase 0 is complete and verified at this tree.**
+
+The stamp below is written by the commit that immediately follows and changes only this
+file and `tests/acceptance/status.json` — no code path differs. Re-confirm in ~10 s with
+`make verify`.
 
 All results below were produced after the recovery fixes.
 
