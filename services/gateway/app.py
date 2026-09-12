@@ -515,6 +515,14 @@ def _register_routes(app: FastAPI) -> None:
         # Without those, one hung Redis would stall every in-flight request --
         # which is exactly the 21.8 s request the chaos suite found before the
         # breaker existed.
+        # The request clock starts HERE, not after the replay lookup and not
+        # before scoring: `gateway_request_latency_seconds` is meant to answer
+        # "how long did this server take", so it has to include the rate limit,
+        # the replay lookup, triage and the observe-write. The scoring-only
+        # number is a separate instrument (`tx_score_latency_seconds`), because
+        # a single histogram that quietly spans some of the work is worse than
+        # two that each say what they cover.
+        request_began = time.perf_counter()
         state = _gateway(request)
         request_id = _request_id(request)
         response.headers[HEADER_REQUEST_ID] = request_id
@@ -575,11 +583,11 @@ def _register_routes(app: FastAPI) -> None:
                 # stored form IS json (trace_core.contracts.base documents why
                 # the two validation modes differ).
                 replayed = RiskDecision.model_validate_json(lookup.response)
+                state.metrics.request_latency.record(time.perf_counter() - request_began)
                 response.headers[HEADER_DEGRADED] = str(replayed.degraded).lower()
                 response.headers[HEADER_FEATURE_SOURCE] = replayed.feature_source.value
                 return replayed
 
-        started = time.perf_counter()
         outcome = state.pipeline.score(body, extra_degraded=tuple(degraded_reasons))
         decision = outcome.decision
 
@@ -587,7 +595,7 @@ def _register_routes(app: FastAPI) -> None:
             decision = _triage(state, outcome, body)
 
         observe_reason = state.pipeline.observe(outcome.canonical)
-        _record(state, outcome, decision, started, observe_reason=observe_reason)
+        _record(state, outcome, decision, observe_reason=observe_reason)
 
         if state.idempotency is not None:
             try:
@@ -597,6 +605,7 @@ def _register_routes(app: FastAPI) -> None:
                 # committed under its own constraint.
                 state.metrics.degraded.add(1, {"reason": "idempotency_cache_unavailable"})
 
+        state.metrics.request_latency.record(time.perf_counter() - request_began)
         response.headers[HEADER_DEGRADED] = str(decision.degraded).lower()
         response.headers[HEADER_FEATURE_SOURCE] = decision.feature_source.value
         return decision
@@ -728,13 +737,18 @@ def _record(
     state: GatewayState,
     outcome: Any,
     decision: RiskDecision,
-    started: float,
     *,
     observe_reason: str | None,
 ) -> None:
     """Emit the §13 metric set for one scored transaction."""
     metrics = state.metrics
-    metrics.latency.record(time.perf_counter() - started)
+    # From the decision's own measurement, not from a clock in the route. The
+    # route's clock had been started before scoring and read after triage and
+    # the observe-write, so `tx_score_latency_seconds` was reporting a Postgres
+    # transaction as scoring time on the ~92% of load-profile traffic that
+    # triages. `latency_ms` is what the caller is told, and the metric now
+    # agrees with it by construction rather than by coincidence.
+    metrics.latency.record(decision.latency_ms / 1000.0)
     metrics.feature_read_latency.record(outcome.feature_read_seconds)
     metrics.scored.add(1, {"band": decision.risk_band.value})
     for reason in decision.degraded_reasons:

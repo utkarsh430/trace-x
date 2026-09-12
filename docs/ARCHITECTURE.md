@@ -470,7 +470,14 @@ forbids UPDATE/DELETE, and a verifier job detects tampering. A broken chain is a
 **Tracing.** One `trace_id` flows HTTP ingress → Kafka header → Spark → worker → each agent node →
 each tool call (including across MCP) → action execution. An investigation is one distributed trace.
 
-**Metrics.** Hot path: `tx_score_latency_seconds`, `tx_scored_total{band}`, `degraded_mode_total{reason}`.
+**Metrics.** Hot path: `tx_score_latency_seconds`, `gateway_request_latency_seconds`, `tx_scored_total{band}`, `degraded_mode_total{reason}`.
+The two latency histograms measure deliberately different things and neither is a substitute for
+the other: `tx_score_latency_seconds` covers **scoring only** — the feature read, the rules and the
+banding — and is the `latency_ms` the caller is told; `gateway_request_latency_seconds` covers the
+**whole server-side request**, including authentication, the rate limit, the replay lookup, triage
+and the observe-write, and is the one to compare against the p99 budget. They were briefly one
+metric that spanned scoring plus triage plus the observe-write, which on a workload where most
+requests open an investigation reported a Postgres transaction as scoring time.
 Streaming: consumer lag, batch duration, `late_events_total`, `dedup_dropped_total`,
 `feature_parity_drift{feature}`. Agents: `investigation_duration_seconds`,
 `agent_invocations_total{agent,outcome}`, `tool_calls_total{tool,transport,status}`,

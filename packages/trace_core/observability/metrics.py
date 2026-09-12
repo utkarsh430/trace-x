@@ -41,6 +41,23 @@ LATENCY_BUCKETS_S: Final = (
 )
 
 TX_SCORE_LATENCY: Final = "tx_score_latency_seconds"
+"""SCORING ONLY: canonical mapping, feature read, feature evaluation, rules,
+decision assembly. It is the `latency_ms` the caller is told.
+
+Explicitly not the request. It used to also span triage and the observe-write,
+which made it a number that described neither one thing nor the other -- and on
+a workload where most requests open an investigation, "scoring latency" that
+silently included a Postgres transaction is the kind of plausible-but-wrong
+telemetry that gets trusted."""
+
+REQUEST_LATENCY: Final = "gateway_request_latency_seconds"
+"""THE WHOLE server-side request: authentication, rate limiting, the replay
+lookup, scoring, triage, the observe-write, the replay store and serialisation.
+
+The one to compare against a p99 budget. Measured from the first thing the
+handler does to the last, so the only latency it excludes is what happens
+outside the process -- which is exactly the part a server cannot fix and must
+not take credit for hiding."""
 FEATURE_READ_LATENCY: Final = "feature_read_latency_seconds"
 TX_SCORED_TOTAL: Final = "tx_scored_total"
 DEGRADED_MODE_TOTAL: Final = "degraded_mode_total"
@@ -56,6 +73,7 @@ RULE_PACK_RELOAD_FAILED_TOTAL: Final = "rule_pack_reload_failed_total"
 HOT_PATH_METRICS: Final[frozenset[str]] = frozenset(
     {
         TX_SCORE_LATENCY,
+        REQUEST_LATENCY,
         FEATURE_READ_LATENCY,
         TX_SCORED_TOTAL,
         DEGRADED_MODE_TOTAL,
@@ -71,7 +89,7 @@ HOT_PATH_METRICS: Final[frozenset[str]] = frozenset(
 )
 
 ARCHITECTURE_DECLARED: Final[frozenset[str]] = frozenset(
-    {TX_SCORE_LATENCY, TX_SCORED_TOTAL, DEGRADED_MODE_TOTAL}
+    {TX_SCORE_LATENCY, REQUEST_LATENCY, TX_SCORED_TOTAL, DEGRADED_MODE_TOTAL}
 )
 """The subset `docs/ARCHITECTURE.md` §13 names verbatim for the hot path.
 
@@ -100,6 +118,7 @@ class HotPathMetrics:
         "rate_limited",
         "reload_failed",
         "replays",
+        "request_latency",
         "rules_fired",
         "scored",
         "triaged",
@@ -109,7 +128,14 @@ class HotPathMetrics:
     def __init__(self, meter_name: str = "trace_core.gateway") -> None:
         meter = get_meter(meter_name)
         self.latency: Histogram = meter.create_histogram(
-            TX_SCORE_LATENCY, unit="s", description="End-to-end synchronous scoring latency."
+            TX_SCORE_LATENCY,
+            unit="s",
+            description="Scoring only: features, rules and banding. Excludes triage and I/O after it.",
+        )
+        self.request_latency: Histogram = meter.create_histogram(
+            REQUEST_LATENCY,
+            unit="s",
+            description="Whole server-side request, including triage and the observe-write.",
         )
         self.feature_read_latency: Histogram = meter.create_histogram(
             FEATURE_READ_LATENCY,
