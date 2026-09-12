@@ -130,7 +130,7 @@ class HotPathMetrics:
         self.latency: Histogram = meter.create_histogram(
             TX_SCORE_LATENCY,
             unit="s",
-            description="Scoring only: features, rules and banding. Excludes triage and I/O after it.",
+            description="Scoring only: features, rules, banding. Excludes triage and later I/O.",
         )
         self.request_latency: Histogram = meter.create_histogram(
             REQUEST_LATENCY,
