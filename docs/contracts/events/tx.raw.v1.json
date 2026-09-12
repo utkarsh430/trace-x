@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://trace-x.local/contracts/events/tx.raw.v1.json",
+  "title": "TxRawV1",
+  "description": "A transaction as it arrived, before scoring. Topic tx.raw.v1, keyed by account_id because per-account velocity is order-sensitive (docs/EVENT_CONTRACTS.md §3).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["envelope", "payload"],
+  "properties": {
+    "envelope": { "$ref": "envelope.v1.json" },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "transaction_id",
+        "account_id",
+        "card_id",
+        "device_id",
+        "merchant_id",
+        "ip_id",
+        "amount_minor",
+        "currency",
+        "channel",
+        "entry_mode",
+        "merchant_mcc",
+        "merchant_country",
+        "latitude",
+        "longitude",
+        "authorization_outcome"
+      ],
+      "properties": {
+        "transaction_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "account_id": { "type": "string", "pattern": "^acct_\\d{6,}$" },
+        "card_id": { "type": "string", "pattern": "^card_\\d{6,}$" },
+        "device_id": { "type": "string", "pattern": "^dev_\\d{6,}$" },
+        "merchant_id": { "type": "string", "pattern": "^mrch_\\d{5,}$" },
+        "ip_id": { "type": "string", "pattern": "^ip_\\d{5,}$" },
+        "amount_minor": {
+          "type": "integer",
+          "description": "Integer minor units. NEVER a float (CLAUDE.md §6). Signed: a refund is negative.",
+          "minimum": -100000000000,
+          "maximum": 100000000000
+        },
+        "currency": {
+          "type": "string",
+          "description": "ISO 4217 alphabetic code.",
+          "pattern": "^[A-Z]{3}$"
+        },
+        "channel": {
+          "type": "string",
+          "description": "Consumers must tolerate an unseen value (docs/EVENT_CONTRACTS.md §4).",
+          "enum": ["CARD_PRESENT", "CARD_NOT_PRESENT", "ATM", "RECURRING", "UNKNOWN"]
+        },
+        "entry_mode": {
+          "type": "string",
+          "enum": ["CHIP", "CONTACTLESS", "MAGSTRIPE", "MANUAL", "ECOMMERCE", "TOKEN", "UNKNOWN"]
+        },
+        "merchant_mcc": { "type": "string", "pattern": "^\\d{4}$" },
+        "merchant_country": { "type": "string", "pattern": "^[A-Z]{2}$" },
+        "merchant_name": {
+          "type": "string",
+          "description": "ATTACKER-CONTROLLED: set at merchant registration. Primary prompt-injection surface (docs/SECURITY.md §T1). Stamped trust_tier=UNTRUSTED in Bronze and never loses it.",
+          "maxLength": 128,
+          "x-trust-tier": "UNTRUSTED"
+        },
+        "latitude": { "type": "number", "minimum": -90, "maximum": 90 },
+        "longitude": { "type": "number", "minimum": -180, "maximum": 180 },
+        "user_agent": {
+          "type": "string",
+          "description": "ATTACKER-CONTROLLED: a client-supplied header.",
+          "maxLength": 256,
+          "x-trust-tier": "UNTRUSTED"
+        },
+        "memo": {
+          "type": "string",
+          "description": "ATTACKER-CONTROLLED: free text accompanying the payment.",
+          "maxLength": 256,
+          "x-trust-tier": "UNTRUSTED"
+        },
+        "authorization_outcome": {
+          "type": "string",
+          "enum": ["APPROVED", "DECLINED", "REVERSED", "UNKNOWN"]
+        }
+      }
+    }
+  }
+}

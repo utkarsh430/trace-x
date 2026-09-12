@@ -174,3 +174,52 @@ without a `--result`.
 | `docker pull` hangs; `error getting credentials` | macOS keychain credential helper is blocked (common when the keychain is locked or the login session is non-interactive) | Unlock the login keychain, or bypass the helper for one command: `export DOCKER_CONFIG=$(mktemp -d); echo '{}' > $DOCKER_CONFIG/config.json; ln -s ~/.docker/cli-plugins $DOCKER_CONFIG/cli-plugins`. The symlink is required — without it the `docker compose` plugin is not discovered |
 | Integration tests skipped | Docker not running | Start Docker; the skip message names the reason |
 | `external` tests skipped | IEEE-CIS not downloaded | `make fetch-external` (needs Kaggle credentials) |
+
+---
+
+## Generating a dataset
+
+`make seed` generates a Track A dataset, writes its ground truth, and records the run.
+
+```bash
+# A small local dataset. Needs PostgreSQL up (`make up`) for the ground-truth step.
+make seed ARGS="--rows 50000 --dataset-version dev-v1"
+
+# No database: events only. Says so in the run record rather than leaving it implicit.
+make seed ARGS="--rows 10000 --no-groundtruth --out /tmp/tx"
+
+# Publish to Kafka instead of files (needs the `stream` extra and a broker).
+make seed ARGS="--sink kafka --bootstrap localhost:9092"
+```
+
+Useful options:
+
+| Option | Meaning |
+|---|---|
+| `--rows` | Number of transactions. Identity and device events are additional. |
+| `--seed` | Master seed. Same seed, same dataset, same digest (ADR-0029). |
+| `--dataset-version` | Dataset identity. Re-using one is refused by the database. |
+| `--fraud-rate` | Target fraudulent share. Has no effect below the coverage floor — see `docs/FRAUD_SCENARIOS.md` §2. |
+| `--validate` | `all` (default), `sample`, or `none`. Produce-time schema validation (`docs/EVENT_CONTRACTS.md` §6.1). Whichever is used is recorded in the run record. |
+| `--no-groundtruth` | Skip the PostgreSQL write. |
+| `--sink` | `jsonl`, `kafka`, or `none`. `none` measures generation without I/O. |
+
+**Every run writes a record** to `eval/manifest/`. That record is what
+`make check-claims` resolves when a number appears in the documentation — a measurement with no
+record cannot be cited (CLAUDE.md §13). A run from a dirty worktree is recorded as such and is **not
+publishable**, and the CLI says so when it happens.
+
+Ground truth is written as `trace_generator`, a role that may **insert** labels and cannot **read**
+them (ADR-0031). If that step fails, the command exits non-zero rather than leaving a dataset nobody
+can evaluate.
+
+## Regenerating event models
+
+Event models are generated from the committed JSON Schemas, never hand-edited (ADR-0028):
+
+```bash
+make codegen        # regenerate after changing docs/contracts/events/*.json
+```
+
+`make verify` fails if the committed models differ from a fresh render, so a hand edit is reverted
+rather than merged.

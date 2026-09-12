@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://trace-x.local/contracts/events/identity.events.v1.json",
+  "title": "IdentityEventV1",
+  "description": "A change to an account holder's identity or credentials. Topic identity.events.v1, keyed by account_id. The account-takeover signature depends on ordering these against transactions.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["envelope", "payload"],
+  "properties": {
+    "envelope": { "$ref": "envelope.v1.json" },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["account_id", "identity_event_type"],
+      "properties": {
+        "account_id": { "type": "string", "pattern": "^acct_\\d{6,}$" },
+        "identity_event_type": {
+          "type": "string",
+          "enum": [
+            "PASSWORD_CHANGE",
+            "EMAIL_CHANGE",
+            "PHONE_CHANGE",
+            "ADDRESS_CHANGE",
+            "MFA_RESET",
+            "MFA_ENROLLED",
+            "LOGIN_FAILED",
+            "LOGIN_SUCCEEDED",
+            "UNKNOWN"
+          ]
+        },
+        "device_id": { "type": "string", "pattern": "^dev_\\d{6,}$" },
+        "ip_id": { "type": "string", "pattern": "^ip_\\d{5,}$" },
+        "user_agent": {
+          "type": "string",
+          "description": "ATTACKER-CONTROLLED: a client-supplied header.",
+          "maxLength": 256,
+          "x-trust-tier": "UNTRUSTED"
+        }
+      }
+    }
+  }
+}

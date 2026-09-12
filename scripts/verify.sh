@@ -36,6 +36,10 @@ echo "======================================================================"
 run_gate "doctor"              "$VPY" scripts/doctor.py
 run_gate "acceptance-status"   "$VPY" scripts/acceptance.py validate
 run_gate "check-claims"        "$VPY" scripts/check_claims.py
+# Generated event models must match their schemas. In `make verify` rather than
+# CI alone, for the same reason the secret scan was moved here in Phase 0: a
+# gate that only runs in CI lets a local run pass while CI goes red.
+run_gate "codegen-drift"       "$VPY" scripts/generate_event_models.py --check
 
 if [[ -x .venv/bin/ruff ]]; then
   run_gate "ruff-format"       .venv/bin/ruff format --check .

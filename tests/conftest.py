@@ -14,7 +14,14 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "packages"))
+# `packages/` holds the installed distribution; the repo root makes `data.*`
+# (the generator and the source adapters, CLAUDE.md §4) and `tests.conformance`
+# importable. Both are needed explicitly: adding `tests/conformance/__init__.py`
+# changed pytest's rootdir insertion, so relying on it was fragile -- the
+# conformance suite passed when run alone and failed in the full run.
+for path in (ROOT / "packages", ROOT):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
 
 def _docker_available() -> bool:

@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://trace-x.local/contracts/events/device.events.v1.json",
+  "title": "DeviceEventV1",
+  "description": "A device fingerprint observation. Topic device.events.v1, keyed by device_id because device-sharing detection is order-sensitive on the device, not the account (docs/EVENT_CONTRACTS.md §3).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["envelope", "payload"],
+  "properties": {
+    "envelope": { "$ref": "envelope.v1.json" },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["device_id", "account_id", "device_event_type", "platform"],
+      "properties": {
+        "device_id": { "type": "string", "pattern": "^dev_\\d{6,}$" },
+        "account_id": { "type": "string", "pattern": "^acct_\\d{6,}$" },
+        "device_event_type": {
+          "type": "string",
+          "enum": ["FIRST_SEEN", "FINGERPRINT_CHANGED", "ATTRIBUTE_CHANGED", "UNKNOWN"]
+        },
+        "platform": { "type": "string", "maxLength": 32 },
+        "ip_id": { "type": "string", "pattern": "^ip_\\d{5,}$" },
+        "device_label": {
+          "type": "string",
+          "description": "ATTACKER-CONTROLLED: a client-supplied device name.",
+          "maxLength": 128,
+          "x-trust-tier": "UNTRUSTED"
+        }
+      }
+    }
+  }
+}

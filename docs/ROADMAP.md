@@ -122,9 +122,10 @@ parallelism is what keeps the mandatory data-engineering track from serialising 
 1. **Domain enums and errors** — `trace_core/domain/`: `FraudPattern`, `EvidenceKind`, `RiskBand`,
    `ActionType`, `TrustTier`, plus typed exceptions. Everything downstream references these, so they
    land first.
-2. **Both state machines** — case lifecycle (`docs/ARCHITECTURE.md` §13) and agent lifecycle (§12), as
-   pure functions with an explicit legal-transition table. Illegal transitions must raise, not warn.
-   Property-tested before anything imports them.
+2. **Both state machines** — case lifecycle and investigation/agent lifecycle
+   (`docs/ARCHITECTURE.md` §19, which specifies all three; the orchestration loop is also drawn in
+   §8), as pure functions with an explicit legal-transition table. Illegal transitions must raise,
+   not warn. Property-tested before anything imports them.
 3. **Event JSON Schemas** — `docs/contracts/events/*.json` with the mandatory envelope
    (`docs/EVENT_CONTRACTS.md` §2). **Schemas first, Pydantic generated from them** — never the reverse.
 4. **`CanonicalTransaction` + `SourceAdapter` port + `field_coverage`** (ADR-0022), with

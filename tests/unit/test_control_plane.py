@@ -27,6 +27,7 @@ CONTROL_PLANE = {
     "docs/API_CONTRACTS.md": "API contract policy",
     "docs/EVENT_CONTRACTS.md": "event contract policy",
     "docs/DATA_ENGINEERING.md": "data engineering specification",
+    "docs/FRAUD_SCENARIOS.md": "fraud scenario catalogue",
     "docs/LOCAL_DEVELOPMENT.md": "local development guide",
     "docs/OPERATIONS.md": "operations runbook",
 }

@@ -41,6 +41,18 @@ OPERATIONAL_PATTERNS = [
     re.compile(r"\bp(?:50|95|99)\b[^.\n]{0,30}?(\d+(?:\.\d+)?)\s*(ms|s)\b", re.I),
     re.compile(r"\b(?:throughput|sustained)\b[^.\n]{0,30}?(\d[\d,]*)\s*(?:tx|events|req)/s", re.I),
     re.compile(r"\bcost[^.\n]{0,30}?\$(\d+(?:\.\d+)?)\s*(?:per|/)\s*investigation", re.I),
+    # Any rate expressed per second, however it is worded. The two patterns
+    # above required the words "throughput" or "sustained" nearby, so a
+    # generation rate written as "54,000 tx/s" or "54.6k tx/s" passed
+    # unnoticed -- and a number nobody checks is worse than one that is
+    # blocked, because it reads as though it had been checked.
+    re.compile(r"(?<![\w.])(\d[\d,]*(?:\.\d+)?)\s*k?\s*(?:tx|rows|events|msg)/s\b", re.I),
+    # Dataset and artefact sizes.
+    re.compile(
+        r"\b(?:dataset|parquet|output|file|payload)\b[^.\n]{0,30}?"
+        r"(\d+(?:\.\d+)?)\s*(?:[KMGT]i?B)\b",
+        re.I,
+    ),
 ]
 CLAIM_PATTERNS = [(p, "quality") for p in QUALITY_PATTERNS] + [
     (p, "operational") for p in OPERATIONAL_PATTERNS
@@ -68,6 +80,37 @@ AGENT_METRIC = re.compile(
     r"investigation[ _-]accuracy|agent[ _-]disagreement|override[ _-]rate)\b",
     re.I,
 )
+
+
+# A generator run record must carry all of these to resolve a citation. Same
+# discipline as ADR-0017's full manifest, smaller surface: a number whose
+# provenance is incomplete is indistinguishable from one that was invented.
+GENERATOR_REQUIRED = (
+    "run_id",
+    "record_type",
+    "track",
+    "git_commit_sha",
+    "dirty_worktree",
+    "generator_version",
+    "seed",
+    "fraud_scenario_config_digest",
+    "dataset_version",
+    "dataset_digest",
+    "row_count",
+    "env_lock_digest",
+    "python_version",
+    "started_at",
+    "finished_at",
+    "validation_policy",
+    "measured",
+)
+
+
+def incomplete_fields(manifest: dict[str, object]) -> list[str]:
+    """Required fields a manifest is missing, for its record type."""
+    if str(manifest.get("record_type", "")).upper() != "GENERATOR":
+        return []
+    return [f for f in GENERATOR_REQUIRED if manifest.get(f) is None or manifest.get(f) == ""]
 
 
 def manifests() -> dict[str, dict[str, object]]:
@@ -113,6 +156,11 @@ def scan() -> list[str]:
                 if man is None:
                     violations.append(f"{rel}:{n}: run_id '{rid}' does not resolve to a manifest")
                     break
+                if missing := incomplete_fields(man):
+                    violations.append(
+                        f"{rel}:{n}: run_id '{rid}' is missing {missing}; an incomplete "
+                        f"record cannot substantiate a number (ADR-0017)"
+                    )
                 if man.get("dirty_worktree"):
                     violations.append(
                         f"{rel}:{n}: run_id '{rid}' was recorded with a dirty worktree (rule 4)"
@@ -124,6 +172,15 @@ def scan() -> list[str]:
                     violations.append(
                         f"{rel}:{n}: run_id '{rid}' is tier {man.get('llm_tier')}; "
                         f"only EVAL may publish quality numbers (rule 2)"
+                    )
+                # A GENERATOR record describes a data-generation run: no model,
+                # no inference, no LLM tier. It can substantiate throughput and
+                # size, never accuracy. Without this, the tier gate below would
+                # wave it through, because a generator run has no tier to fail.
+                if kind == "quality" and str(man.get("record_type", "")).upper() == "GENERATOR":
+                    violations.append(
+                        f"{rel}:{n}: run_id '{rid}' is a GENERATOR record and cannot "
+                        f"substantiate a quality claim -- it involved no model"
                     )
                 if str(man.get("track", "")).upper() == "EXTERNAL" and AGENT_METRIC.search(line):
                     violations.append(

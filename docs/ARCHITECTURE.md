@@ -607,3 +607,107 @@ declining all traffic is worse than missing fraud for a few minutes — and ever
 tagged and counted. Actions fail **closed** — never execute under uncertainty.
 
 Every row above has a chaos test (`docs/TESTING.md`). Operator response: `docs/OPERATIONS.md`.
+
+---
+
+## 19. State machines
+
+Three lifecycles, each an explicit transition table in
+`trace_core/domain/state_machines/` (ADR-0027). They answer different questions and are deliberately
+not merged: the case is what a human sees, the investigation is how the orchestrator runs, and the
+agent invocation is one unit of work with a recorded outcome.
+
+**Illegal transitions raise `IllegalTransitionError`.** They are never warnings and never silently
+ignored — a silently-dropped transition produces a plausible-looking case history, which is far harder
+to find than a stack trace, and the audit chain is the product (§8 of `docs/SECURITY.md`).
+
+**Tables validate themselves at import.** A terminal state with outgoing edges, a non-terminal state
+with none, an unreachable state, a machine with no terminal state, or **any state from which no
+terminal state is reachable** raises `MalformedMachineError` when the table is defined. The last of
+these is the one that earns its keep: a state with no path to a terminal state is a place a worker can
+enter and never leave.
+
+### 19.1 Case lifecycle
+
+The unit an analyst sees and the unit the audit chain is keyed on.
+
+```mermaid
+stateDiagram-v2
+  [*] --> OPEN
+  OPEN --> TRIAGED : TRIAGE
+  TRIAGED --> INVESTIGATING : LEASE
+  INVESTIGATING --> TRIAGED : WORKER_LOST
+  INVESTIGATING --> PENDING_DECISION : EVIDENCE_COMPLETE / BUDGET_EXHAUSTED
+  PENDING_DECISION --> DECIDED : RECORD_VERDICT
+  PENDING_DECISION --> HUMAN_REVIEW : INSUFFICIENT_EVIDENCE
+  HUMAN_REVIEW --> DECIDED : ANALYST_DECIDE
+  HUMAN_REVIEW --> CLOSED : DISMISS
+  DECIDED --> EXECUTING : AUTO_EXECUTE (LOW risk)
+  DECIDED --> PENDING_APPROVAL : PROPOSE_ACTION (MEDIUM / HIGH)
+  DECIDED --> REJECTED : POLICY_PROHIBITED
+  DECIDED --> CLOSED : NO_ACTION_REQUIRED
+  PENDING_APPROVAL --> EXECUTING : APPROVE
+  PENDING_APPROVAL --> REJECTED : REJECT
+  PENDING_APPROVAL --> ESCALATED : APPROVAL_EXPIRED
+  EXECUTING --> ACTIONED : VERIFY_OK
+  EXECUTING --> COMPENSATING : VERIFY_MISMATCH
+  EXECUTING --> ESCALATED : EXECUTION_FAILED
+  COMPENSATING --> COMPENSATED : COMPENSATE_OK
+  COMPENSATING --> ESCALATED : COMPENSATE_FAILED
+  ACTIONED --> CLOSED : CLOSE
+  COMPENSATED --> CLOSED : CLOSE
+  ESCALATED --> CLOSED : CLOSE
+  REJECTED --> CLOSED : CLOSE
+  CLOSED --> [*]
+```
+
+Three properties are asserted rather than asserted-by-comment:
+
+| Property | Why it matters | How it is proven |
+|---|---|---|
+| **`EXECUTING` has exactly two entry points** — `DECIDED` (LOW, auto) and `PENDING_APPROVAL` (MEDIUM/HIGH, approved) | A third entry point would be a path by which an unapproved HIGH-risk action executes. Phase 8 requires a hard zero there | The set of states with an edge into `EXECUTING` is compared against `APPROVAL_REQUIRED_PREDECESSORS` |
+| **No side effect without a recorded verdict** | An executed action whose rationale cites no evidence is unauditable | `DECIDED` is deleted from the graph and the side-effecting states are shown to become unreachable |
+| **Every state can reach `CLOSED`** | "Is this case still open?" must always be answerable | Reachability from every state |
+
+`WORKER_LOST` returns the case to `TRIAGED`, **not** to `OPEN`: the LangGraph checkpoint survives a
+worker crash, so re-triaging would discard completed work and re-spend its budget (ADR-0007).
+`EXECUTING` is kept distinct from `ACTIONED` because execution and verification can each fail, and
+collapsing them would make "approved" indistinguishable from "actually happened".
+
+### 19.2 Investigation lifecycle
+
+The orchestration loop of §8, implemented exactly, **plus two edges out of `ROUTE`**:
+
+```
+ROUTE --NO_ELIGIBLE_AGENT--> DECIDE
+ROUTE --BUDGET_EXHAUSTED--> DECIDE
+```
+
+`ROUTE`'s only exit in the §8 diagram is `AGENT_SELECTED`, but ADR-0019's `eligible(a)` predicate is
+routinely empty — every candidate may be at its invocation cap, or the budget may be spent. CLAUDE.md
+§10.4 requires that case to produce a recorded `INSUFFICIENT_EVIDENCE` rather than a hang, so the edges
+exist. They are declared in `ADDED_EDGES`, and a test parses the §8 mermaid block, diffs its edges
+against the table, and fails unless the difference is *exactly* that declared set — so neither the
+diagram nor the table can drift without the other.
+
+**Termination is not a property of this graph.** The routing loop is deliberately cyclic; that is what
+makes the investigation path vary with the evidence rather than follow a fixed pipeline. Termination
+comes from the four independent budget bounds of CLAUDE.md §10.4, which is precisely why
+`BUDGET_EXHAUSTED` must have an edge out of `ROUTE`.
+
+### 19.3 Agent invocation lifecycle
+
+```
+PENDING --INVOKE--> RUNNING
+PENDING --EXHAUST_BUDGET--> BUDGET_EXHAUSTED
+RUNNING --{COMPLETE | DEGRADE | ABSTAIN | FAIL | EXHAUST_BUDGET}--> terminal
+```
+
+The five terminal states — `SUCCEEDED`, `DEGRADED`, `ABSTAINED`, `FAILED`, `BUDGET_EXHAUSTED` — come
+from the `on_failure` column of the §8 agent roster plus CLAUDE.md §10.4. **Every terminal state is a
+recorded outcome**; there is deliberately no "gave up quietly" state, because
+`agent_invocations_total{agent,outcome}` must account for every invocation.
+
+`BUDGET_EXHAUSTED` is in `PRODUCED_EVIDENCE` alongside `SUCCEEDED` and `DEGRADED`: an agent halted
+mid-flight keeps the evidence it already produced (§18), and discarding it would throw away work that
+was already paid for.

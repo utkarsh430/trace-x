@@ -1,0 +1,47 @@
+{
+  "$comment": "The reproduction contract for the frozen Track A dataset. The dataset itself is gitignored -- datasets are never committed (CLAUDE.md S17) -- so what is committed is everything needed to reproduce it byte for byte. eval-v1 is referenced by digest and is NEVER regenerated in place: a change produces eval-v2 plus a manifest-diff note (docs/EVALUATION.md S2).",
+  "config": {
+    "account_count": 40000,
+    "cards_per_account": 1,
+    "currency": "GBP",
+    "device_count": 48000,
+    "end_at": "2026-03-01T00:00:00Z",
+    "fraud_rate": 0.005,
+    "geo_jitter_km": 12.0,
+    "habitual_merchant_ratio": 0.75,
+    "ip_count": 20000,
+    "merchant_count": 3000,
+    "merchant_zipf_exponent": 1.1,
+    "row_count": 1000000,
+    "seed": 42,
+    "start_at": "2026-01-01T00:00:00Z"
+  },
+  "dataset_digest": "sha256:0679d08a29ee3fd2e065c431cf59cfa2da922c960f382b690e9da3ab52eaef0b",
+  "dataset_version": "eval-v1",
+  "env_lock_digest": "sha256:413053f729e03d644eafa45e7b0c34606dbc333c89f21fbad09969f50b68dc97",
+  "files": {
+    "device.events.v1.parquet": {
+      "bytes": 14246,
+      "sha256": "287298799d8b20fcd896d8fa858500725fe071596456fee1bdb71ece27e2a7d0"
+    },
+    "identity.events.v1.parquet": {
+      "bytes": 71573,
+      "sha256": "ca8b80cbfd93dcfed30ec41687790092a30a95edb82a3d1cb1b85095a01a6965"
+    },
+    "tx.raw.v1.parquet": {
+      "bytes": 125210224,
+      "sha256": "425ec24bde8109e7952ffd7005cc298175c7317bd3b54a2b02200fcf85c4127c"
+    }
+  },
+  "fraud_scenario_config_digest": "sha256:127011d0fc050249670a89482290bfe4b97d26c9b869cc31c01edc1dfd7b11d9",
+  "fraudulent_transactions": 5003,
+  "frozen_at": "2026-09-12T11:14:48.708363Z",
+  "generator_version": "1.0.0",
+  "git_commit_sha": "b79800d2e836723da25f9ff22018501d9f8c93be",
+  "python_version": "3.12.9",
+  "realised_fraud_rate": 0.005003,
+  "regenerate": "make seed ARGS=\"--rows 1000000 --accounts 40000 --merchants 3000 --dataset-version eval-v1 --sink parquet --fraud-rate 0.005 --out data/generated\"",
+  "row_count": 1000000,
+  "run_id": "gen-20260912-eval-v1-ccfd38d9",
+  "validation_policy": "all"
+}

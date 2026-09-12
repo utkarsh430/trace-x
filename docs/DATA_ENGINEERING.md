@@ -119,6 +119,41 @@ that `git diff` of the stream package across the phase is **empty**.
 
 ---
 
+## 5b. The Track A generator (Phase 1)
+
+`data/generator/` produces the synthetic dataset the `GeneratorAdapter` consumes. Three properties
+matter downstream.
+
+**Determinism (ADR-0029).** Stdlib `random.Random`, not NumPy: NumPy reserves the right to change its
+stream between versions, and a dataset digest that moves on a dependency bump is indistinguishable
+from a fabricated one. Randomness is drawn from **named substreams** seeded by BLAKE2b of
+`(seed, namespace, key)`, so generation order is not part of the contract — which is what lets fraud
+scenarios be injected without reshuffling the legitimate rows around them.
+
+**The digest is over canonical row JSON in emission order**, never over output bytes. A file digest
+would change with a compression setting or a pyarrow upgrade and present an encoding change as a data
+change, training everyone to ignore digest mismatches.
+
+**A realistic baseline, because fraud is only detectable as a departure.** Diurnal and weekly volume
+curves with a genuine overnight trough, Zipf merchant popularity, geography clustered on population
+centres, lognormal amounts with a long right tail, and per-account habitual merchants and devices. A
+flat baseline would make every injected scenario trivially separable and every reported metric
+meaningless.
+
+Output topics are the three released ingress contracts: `tx.raw.v1`, plus `identity.events.v1` and
+`device.events.v1`, which exist because two fraud scenarios are *defined* by non-transaction events
+(see `docs/FRAUD_SCENARIOS.md`). Sinks are JSONL, Parquet, Kafka or none; a row is encoded exactly
+once and those same bytes are validated, digested and written.
+
+`eval-v1` is frozen by `eval/track_a/eval-v1.manifest.json`. The dataset itself is gitignored —
+datasets are never committed — so the manifest carries the seed, the full config, the generator
+version and the digest the combination must produce. `pytest -m slow` regenerates it in full and
+asserts the digest.
+
+Measured results, with resolvable run ids: `benchmarks/generator/REPORT.md`.
+
+---
+
 ## 6. Delta table layout (ADR-0015)
 
 **No layout is prescribed.** Layout is table DDL, chosen per environment by measurement, and local and

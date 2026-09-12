@@ -14,7 +14,7 @@ VPIP  := $(VENV)/bin/pip
 COMPOSE := docker compose -f deploy/compose.yml --env-file .env
 
 .PHONY: help doctor setup up up-streaming up-full down ps logs test-fast test e2e lint typecheck \
-        secrets audit audit-full migrate migrate-down migrate-status lock ci-status \
+        secrets audit audit-full migrate migrate-down migrate-status lock ci-status codegen \
         verify eval eval-external demo seed fetch-external pull-model bench-layout \
         check-claims acceptance clean not-implemented
 
@@ -94,6 +94,9 @@ lock: ## Regenerate the hashed dependency lockfile
 ## ---------------------------------------------------------------------------
 ## Quality gates
 ## ---------------------------------------------------------------------------
+codegen: ## Regenerate Pydantic event models FROM the committed JSON Schemas
+	@$(VPY) scripts/generate_event_models.py
+
 lint: ## ruff format check + lint
 	@$(VPY) -m ruff format --check . && $(VPY) -m ruff check .
 
@@ -130,8 +133,8 @@ verify: ## CANONICAL health check: doctor + lint + typecheck + test-fast + claim
 ## ---------------------------------------------------------------------------
 ## Phase-gated commands (fail explicitly until their phase lands)
 ## ---------------------------------------------------------------------------
-seed:           ## [Phase 1] Generate and load a development dataset
-	@$(PY) scripts/phase_guard.py seed 1 "transaction generator + ground truth"
+seed: ## Generate a Track A dataset, write ground truth, record the run
+	@set -a; [ -f .env ] && . ./.env; set +a; $(VPY) -m data.generator.cli $(ARGS)
 e2e:            ## [Phase 11] Full-stack end-to-end run, no mocks
 	@$(PY) scripts/phase_guard.py e2e 11 "full compose stack with all services"
 demo:           ## [Phase 7] Scripted end-to-end investigation (no API key required)

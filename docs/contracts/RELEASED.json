@@ -1,0 +1,77 @@
+{
+  "$comment": "The release ledger for event contracts. A schema file is RELEASED only in the phase that gains a real producer for it, because a released file is immutable (ADR-0026) and freezing a contract nobody has exercised guarantees a .v2 later. It lives beside events/ rather than inside it because codegen globs that directory. Digests are checked by tests/contract/test_event_schemas.py, so editing a released schema fails the build unless the digest is deliberately updated here -- which makes the change visible in review.",
+  "components": [
+    {
+      "schema": "envelope.v1.json",
+      "sha256": "adbcb47a693efaa4dfe1d6db957dc89c003996083138ea335a1b0a5fc7d060e6",
+      "note": "Shared $ref, not a topic. Every released event embeds it."
+    }
+  ],
+  "released": [
+    {
+      "topic": "tx.raw.v1",
+      "schema": "tx.raw.v1.json",
+      "sha256": "4b17173e41f6eb76100ea16b971acc6e74b46b791aae27eafb0511c8467dea9f",
+      "key": "account_id",
+      "key_reason": "per-account velocity is order-sensitive",
+      "released_in_phase": 1,
+      "producer": "data.generator"
+    },
+    {
+      "topic": "identity.events.v1",
+      "schema": "identity.events.v1.json",
+      "sha256": "bcd4fed658e319dbf7635e0229335fb87c612362d245a31ec3508f488f3ab8f8",
+      "key": "account_id",
+      "key_reason": "identity changes must order against that account's transactions",
+      "released_in_phase": 1,
+      "producer": "data.generator"
+    },
+    {
+      "topic": "device.events.v1",
+      "schema": "device.events.v1.json",
+      "sha256": "4b7e14e03ee9672e2182ac8ad4539f85c04b65b0ad3967809a179865ee16f5eb",
+      "key": "device_id",
+      "key_reason": "device-sharing detection is order-sensitive on the device, not the account",
+      "released_in_phase": 1,
+      "producer": "data.generator"
+    }
+  ],
+  "planned": [
+    {
+      "topic": "tx.scored.v1",
+      "key": "account_id",
+      "expected_phase": 2,
+      "expected_producer": "trace-gateway"
+    },
+    {
+      "topic": "investigation.requested.v1",
+      "key": "investigation_id",
+      "expected_phase": 2,
+      "expected_producer": "trace-gateway triage"
+    },
+    {
+      "topic": "investigation.events.v1",
+      "key": "investigation_id",
+      "expected_phase": 7,
+      "expected_producer": "trace-worker"
+    },
+    {
+      "topic": "action.proposed.v1",
+      "key": "investigation_id",
+      "expected_phase": 8,
+      "expected_producer": "trace-worker"
+    },
+    {
+      "topic": "action.executed.v1",
+      "key": "action_id",
+      "expected_phase": 8,
+      "expected_producer": "executor"
+    },
+    {
+      "topic": "audit.v1",
+      "key": "entity_id",
+      "expected_phase": 5,
+      "expected_producer": "audit sink"
+    }
+  ]
+}
