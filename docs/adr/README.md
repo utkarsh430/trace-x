@@ -40,6 +40,7 @@ been thought through.
 | [0026](0026-event-envelope-and-schema-evolution.md) | Event envelope, keying, backward-only schema evolution | 0 | Accepted |
 | [0027](0027-case-and-investigation-state-machines.md) | Case, investigation and agent state machines as validated transition tables | 1 | Accepted |
 | [0028](0028-event-model-codegen.md) | Event models generated from JSON Schema, with a drift gate and a release ledger | 1 | Accepted |
+| [0029](0029-deterministic-generation.md) | Deterministic generation — stdlib RNG, named substreams, row-JSON digests | 1 | Accepted |
 
 ## Notes on status
 
