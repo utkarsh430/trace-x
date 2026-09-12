@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import datetime as dt
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Final
 
 from trace_core.contracts.api.decision import RiskDecision
@@ -102,7 +102,6 @@ class ScoringPipeline:
     """Opened after repeated store failures so an outage costs one probe per
     cooldown rather than one timeout per call per request. Measured: without it,
     a paused Redis made a single scored request take 21.8 s (ADR-0035)."""
-    _observed: list[Event] = field(default_factory=list, repr=False)
 
     # -- canonical mapping ---------------------------------------------------
 

@@ -27,9 +27,29 @@ latency incident instead of a visible degradation.
 """
 
 POSTGRES_TIMEOUT_S: Final = 2.0
-"""Triage is a small write on a small fraction of traffic, so it can afford far
-more than a feature read -- but not unbounded: a hung write would hold a hot-path
-request open until the client gave up."""
+"""Triage is a small write, so it can afford far more than a feature read -- but
+not unbounded: a hung write would hold a hot-path request open until the client
+gave up.
+
+It is NOT a small fraction of traffic, which this comment used to claim. The
+500 TPS load run opened **175,442 cases against ~183,000 requests** -- 96% --
+because the load profile concentrates 80% of traffic on 5% of accounts and the
+velocity rules fire on exactly that. Triage is the common path under load, and
+the pool below is sized for that measurement rather than for the assumption."""
+
+REQUEST_THREADS: Final = 64
+"""How many requests may be in flight inside the process at once.
+
+The routes are synchronous and Starlette runs them in its worker threadpool, so
+this is the real concurrency limit of one replica (see `score_transaction`).
+
+Sized from the decomposition, not guessed. At the 500 TPS target and a measured
+4.654 ms mean handler body, Little's Law puts the steady-state requirement at
+500 x 0.004654 = 2.3 concurrent, and 4.3 at the 8.653 ms p99. 64 leaves an order
+of magnitude of headroom for a dependency that has slowed but not failed, while
+still being a BOUND: an unbounded pool answers a stalled Redis by growing threads
+until the process dies, which is a worse failure than the queueing it avoids.
+Backpressure at a known limit beats collapse at an unknown one."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,12 +83,18 @@ class GatewaySettings:
             ),
             rate_limit=int(env.get("TRACE_RATE_LIMIT_PER_MINUTE", "1000")),
             rate_limit_window_s=int(env.get("TRACE_RATE_LIMIT_WINDOW_S", "60")),
-            # Sized for the ROADMAP's 500 TPS target: triage touches Postgres on
-            # a small share of traffic, so a large pool would idle. min_size > 0
-            # so the first triaged transaction does not pay connection setup
-            # inside its own latency budget.
-            pool_min_size=int(env.get("TRACE_PG_POOL_MIN", "2")),
-            pool_max_size=int(env.get("TRACE_PG_POOL_MAX", "10")),
+            # Sized for the ROADMAP's 500 TPS target from the measured triage
+            # rate (96%) and the measured transaction cost (1.434 ms mean,
+            # 2.596 ms p99): 500 x 0.96 x 0.002596 = 1.25 connections busy at
+            # p99. max_size is not that number -- it is the ceiling that keeps a
+            # SLOW Postgres from parking all 64 request threads on the pool,
+            # while staying far below the server's own max_connections. Beyond
+            # it, `open_case` raises PoolTimeout, which surfaces as the 503
+            # ADR-0035 specifies: refusing is correct when a case cannot be
+            # durably recorded. min_size > 0 so the first triaged transaction
+            # does not pay connection setup inside its own latency budget.
+            pool_min_size=int(env.get("TRACE_PG_POOL_MIN", "4")),
+            pool_max_size=int(env.get("TRACE_PG_POOL_MAX", "32")),
             log_json=env.get("TRACE_LOG_FORMAT", "json").lower() == "json",
         )
 

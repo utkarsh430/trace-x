@@ -153,6 +153,7 @@ def _open(store: PostgresTriageStore, transaction_id: str, **over: Any) -> Any:
     )
     topic, key, idem, payload = outbox_row(event)
     return store.open_case(
+        case_id=case_id,
         decision=decision,
         account_id="acct_000001",
         occurred_at=OCCURRED,
@@ -201,14 +202,29 @@ def test_the_outbox_row_carries_a_publishable_event(pool: Any) -> None:
     import json
 
     store = PostgresTriageStore(pool)
-    _open(store, "tx_outbox_1")
+    result = _open(store, "tx_outbox_1")
     with pool.connection() as conn:
         topic, key, payload = conn.execute(
             "SELECT topic, partition_key, payload FROM app.outbox"
         ).fetchone()
     assert topic == "investigation.requested.v1"
-    assert key.startswith("case_"), "keyed by case_id, the entity that exists at produce time"
     event = payload if isinstance(payload, dict) else json.loads(payload)
+
+    # The key must name THE case that was written, not merely look like a case
+    # id. Asserting the shape is what let a real defect through: the store used
+    # to mint its own case id while the event carried the caller's, so every
+    # published event named a case that did not exist -- and `startswith("case_")`
+    # was true of both. A partition key is a routing and ordering key, and one
+    # that routes to a case nobody can look up orders nothing.
+    assert key == result.case_id, (
+        f"outbox partition key {key!r} does not name the case that was opened "
+        f"({result.case_id!r}). Phase 3's consumer resolves the case by this id."
+    )
+    assert event["payload"]["case_id"] == result.case_id, (
+        f"the event body names case {event['payload']['case_id']!r} but the case row is "
+        f"{result.case_id!r}. The event, the outbox row and the system of record must "
+        f"agree on which investigation they describe."
+    )
     assert event["payload"]["risk_band"] == "HIGH"
     assert event["payload"]["fired_rule_ids"] == ["R005_velocity_spike_5m"]
     assert event["envelope"]["idempotency_key"].startswith("sha256:")
@@ -249,6 +265,7 @@ def test_a_low_band_is_refused_by_the_contract_and_by_the_store(pool: Any) -> No
     # 2. the store, called directly with an already-built row
     with pytest.raises(ValueError, match="does not open an investigation"):
         store.open_case(
+            case_id="case_" + "0" * 32,
             decision=_decision("tx_low", band=RiskBand.LOW),
             account_id="acct_000001",
             occurred_at=OCCURRED,

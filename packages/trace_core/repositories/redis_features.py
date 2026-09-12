@@ -38,6 +38,7 @@ fail-safe direction, and it is why this module never returns a default.
 from __future__ import annotations
 
 import statistics
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
 from trace_core.domain.enums import AuthorizationOutcome, FeatureSource
@@ -270,16 +271,25 @@ class RedisOnlineFeatureStore:
             if entity_id is None:
                 continue
             for stream in Stream:
-                vkey = self._velocity_key(entity, entity_id, stream)
-                for window in WINDOWS:
-                    lower = as_of_ms - window.seconds * 1000
-                    pipe.zcount(vkey, f"({lower}", as_of_ms)
-                    plan.append(("count", (entity, entity_id, stream, window)))
-                pipe.hgetall(self._previous_key(entity, entity_id, stream))
-                plan.append(("previous", (entity, entity_id, stream)))
+                # Only the windows a declared feature actually reads. The cross
+                # product over every stream and every window was 60 ZCOUNTs and
+                # 15 HGETALLs per request against the 10 and 2 that are read;
+                # see `_ReadPlan` for the measurement and for why this prunes on
+                # any WindowedAggregate rather than on COUNT alone.
+                windows = _PLAN.count_windows.get((entity, stream), ())
+                if windows:
+                    vkey = self._velocity_key(entity, entity_id, stream)
+                    for window in windows:
+                        lower = as_of_ms - window.seconds * 1000
+                        pipe.zcount(vkey, f"({lower}", as_of_ms)
+                        plan.append(("count", (entity, entity_id, stream, window)))
+                if (entity, stream) in _PLAN.previous:
+                    pipe.hgetall(self._previous_key(entity, entity_id, stream))
+                    plan.append(("previous", (entity, entity_id, stream)))
 
-            pipe.hgetall(self._bucket_key(entity, entity_id, Stream.TRANSACTION, currency))
-            plan.append(("buckets", (entity, entity_id, currency)))
+            if entity in _PLAN.bucket_entities:
+                pipe.hgetall(self._bucket_key(entity, entity_id, Stream.TRANSACTION, currency))
+                plan.append(("buckets", (entity, entity_id, currency)))
 
             for dimension in Dimension:
                 storage = _STORAGE.get((entity, dimension))
@@ -302,7 +312,9 @@ class RedisOnlineFeatureStore:
         pipe.zrange(self._amounts_key(Entity.ACCOUNT, account_id, currency), 0, -1)
         plan.append(("amounts", (account_id, currency)))
 
-        return self._assemble(plan, pipe.execute(), as_of=as_of, as_of_ms=as_of_ms)
+        return self._assemble(
+            plan, pipe.execute(), as_of=as_of, as_of_ms=as_of_ms, account_id=account_id
+        )
 
     def _hll_bucket_keys(
         self, entity: Entity, entity_id: str, dimension: Dimension, as_of_ms: int, window: Window
@@ -326,6 +338,7 @@ class RedisOnlineFeatureStore:
         *,
         as_of: EventTime,
         as_of_ms: int,
+        account_id: str,
     ) -> FeatureContext:
         windows: dict[tuple[Entity, str, Stream, str], WindowState] = {}
         distinct: dict[tuple[Entity, str, str], dict[Dimension, int]] = {}
@@ -368,10 +381,11 @@ class RedisOnlineFeatureStore:
 
         self._merge_bucket_aggregates(windows, buckets, as_of_ms)
         self._merge_distinct(windows, distinct)
-        account_id = next(
-            (eid for (entity, eid, _s, _w) in windows if entity is Entity.ACCOUNT), None
-        )
-        if raw_profile and account_id is not None:
+        # The account is passed in, not recovered from whichever window happened
+        # to come back non-zero. Inferring it meant that an account whose every
+        # window count was 0 -- a new account, the case where a profile matters
+        # most -- silently lost the profile that had just been fetched for it.
+        if raw_profile:
             profiles[(Entity.ACCOUNT, account_id)] = _profile(raw_profile, amounts)
 
         return FeatureContext(
@@ -395,7 +409,7 @@ class RedisOnlineFeatureStore:
         boundary is what makes the parity comparison an equality.
         """
         for (entity, entity_id), fields in buckets.items():
-            for window in WINDOWS:
+            for window in _PLAN.count_windows.get((entity, Stream.TRANSACTION), ()):
                 lower = (as_of_ms - window.seconds * 1000) // MINUTE_MS
                 upper = as_of_ms // MINUTE_MS
                 totals = {"c": 0, "s": 0, "q": 0, "d": 0, "k": 0}
@@ -440,21 +454,96 @@ class RedisOnlineFeatureStore:
 # Which (entity, dimension) pairs are counted, how, and over which windows.
 # Derived from the registered feature set rather than restated, so a feature
 # added without a storage class fails at import rather than reading as zero.
-def _plan_from_registry() -> tuple[
-    dict[tuple[Entity, Dimension], CardinalityStorage],
-    dict[tuple[Entity, Dimension], tuple[Window, ...]],
-]:
+@dataclass(frozen=True, slots=True)
+class _ReadPlan:
+    """Exactly which Redis reads the declared feature set requires.
+
+    **The point is what is NOT in here.** `snapshot` used to issue the full cross
+    product -- every entity x every stream x every window -- and then discard
+    most of it during assembly. Measured on the 500 TPS load profile that was
+    **60 velocity `ZCOUNT`s of which 10 are read, 15 previous-observation
+    `HGETALL`s of which 2 are read, and 5 amount-bucket `HGETALL`s of which 2
+    are read**: 66 of 163 commands per request fetched, transmitted, parsed and
+    decoded for nothing. The parsing is what made it expensive -- a profile of
+    the hot path put ~2.7 ms of the ~3.0 ms CPU per request inside redis-py's
+    RESP reader, and a map reply costs far more to parse than an integer one.
+
+    This is not new machinery. `_plan_from_registry` already derived the
+    distinct-count storage plan from the declarations, which is why the distinct
+    counts were the one read kind that was *not* wasteful; this extends the same
+    derivation to the other three. ADR-0032 made each feature declare its
+    entity, stream, window and aggregation precisely so that the store can be
+    driven from the declaration rather than guess -- reading less is that
+    declaration being used for its stated purpose.
+
+    Derived once at import, never per request, and never from runtime
+    observation: a plan that changed with traffic would make two replicas read
+    different things and a recorded parity measurement unattributable.
+    """
+
+    storage: dict[tuple[Entity, Dimension], CardinalityStorage]
+    distinct_windows: dict[tuple[Entity, Dimension], tuple[Window, ...]]
+    count_windows: dict[tuple[Entity, Stream], tuple[Window, ...]]
+    """Windows whose `WindowState` any feature reads, per entity and stream.
+
+    Keyed on ANY `WindowedAggregate`, not only `COUNT`. A window read solely for
+    `AMOUNT_SUM` still needs its `ZCOUNT` issued, because `_merge_bucket_aggregates`
+    keeps an existing exact count and otherwise falls back to the minute-bucket
+    sum -- which is rounded to the minute and therefore a different number.
+    Pruning on `COUNT` alone would silently swap an exact count for an
+    approximate one, which is the kind of optimisation that does not show up as
+    a failure until a parity run months later.
+    """
+    previous: frozenset[tuple[Entity, Stream]]
+    bucket_entities: frozenset[Entity]
+    profile_entities: frozenset[Entity]
+
+
+def _plan_from_registry() -> _ReadPlan:
     from trace_core.features.definitions import ONLINE_FEATURES
-    from trace_core.features.semantics import Aggregation, WindowedAggregate
+    from trace_core.features.semantics import (
+        Aggregation,
+        PairwiseWithPrevious,
+        ProfileAttribute,
+        WindowedAggregate,
+    )
+
+    bucket_derived = frozenset(
+        {Aggregation.AMOUNT_SUM, Aggregation.DECLINED_RATIO, Aggregation.AMOUNT_CV}
+    )
+    """Aggregations answered from the minute-bucket hash rather than a counter.
+
+    Named positively rather than as "not COUNT and not DISTINCT_COUNT": a new
+    aggregation should have to say which side it is on, and a definition by
+    exclusion would silently adopt it into the bucket path.
+    """
 
     storage: dict[tuple[Entity, Dimension], CardinalityStorage] = {}
-    windows: dict[tuple[Entity, Dimension], list[Window]] = {}
+    distinct_windows: dict[tuple[Entity, Dimension], list[Window]] = {}
+    count_windows: dict[tuple[Entity, Stream], list[Window]] = {}
+    previous: set[tuple[Entity, Stream]] = set()
+    bucket_entities: set[Entity] = set()
+    profile_entities: set[Entity] = set()
+
     for spec in ONLINE_FEATURES:
         semantics = spec.semantics
+        if isinstance(semantics, PairwiseWithPrevious):
+            previous.add((semantics.entity, semantics.stream))
+            continue
+        if isinstance(semantics, ProfileAttribute):
+            profile_entities.add(semantics.entity)
+            continue
         if not isinstance(semantics, WindowedAggregate):
             continue
+
+        windows = count_windows.setdefault((semantics.entity, semantics.stream), [])
+        if semantics.window not in windows:
+            windows.append(semantics.window)
+        if semantics.aggregation in bucket_derived:
+            bucket_entities.add(semantics.entity)
         if semantics.aggregation is not Aggregation.DISTINCT_COUNT:
             continue
+
         assert semantics.dimension is not None and semantics.storage is not None
         key = (semantics.entity, semantics.dimension)
         if key in storage and storage[key] is not semantics.storage:
@@ -463,11 +552,21 @@ def _plan_from_registry() -> tuple[
                 f"one physical representation cannot serve both"
             )
         storage[key] = semantics.storage
-        windows.setdefault(key, []).append(semantics.window)
-    return storage, {k: tuple(v) for k, v in windows.items()}
+        distinct_windows.setdefault(key, []).append(semantics.window)
+
+    return _ReadPlan(
+        storage=storage,
+        distinct_windows={k: tuple(v) for k, v in distinct_windows.items()},
+        count_windows={k: tuple(v) for k, v in count_windows.items()},
+        previous=frozenset(previous),
+        bucket_entities=frozenset(bucket_entities),
+        profile_entities=frozenset(profile_entities),
+    )
 
 
-_STORAGE, _WINDOWS_FOR = _plan_from_registry()
+_PLAN: Final = _plan_from_registry()
+_STORAGE: Final = _PLAN.storage
+_WINDOWS_FOR: Final = _PLAN.distinct_windows
 
 
 def _text(value: Any) -> str:

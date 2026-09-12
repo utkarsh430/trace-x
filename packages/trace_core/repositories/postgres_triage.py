@@ -85,6 +85,7 @@ class PostgresTriageStore:
     def open_case(
         self,
         *,
+        case_id: str,
         decision: RiskDecision,
         account_id: str,
         occurred_at: dt.datetime,
@@ -98,13 +99,21 @@ class PostgresTriageStore:
         Returns the existing case when one is already open for this transaction,
         without writing anything. That is the idempotent path, and it is decided
         by a UNIQUE constraint rather than by a prior read.
+
+        **`case_id` is supplied by the caller, not minted here.** The caller has
+        already built and validated the `investigation.requested.v1` event --
+        deliberately, so that a contract failure cannot roll back a case for a
+        reason unrelated to the database -- and that event names a case. Minting
+        a second id here meant the event, the outbox row and the `cases` row
+        disagreed about which case they described: every published event named a
+        case that did not exist. Nothing failed, because nothing joined them;
+        `tests/integration/test_gateway_concurrency.py` is the test that does.
         """
         if not _opens_investigation(decision.risk_band):
             raise ValueError(
                 f"{decision.risk_band} does not open an investigation; triage must not be "
                 f"called for it. Opening a case for every transaction is not triage."
             )
-        case_id = new_case_id()
         with self._pool.connection() as conn, conn.transaction():
             row = conn.execute(
                 """
