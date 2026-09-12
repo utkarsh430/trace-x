@@ -56,9 +56,29 @@ services:
     # Online feature store only — derived state, authoritative for nothing (ADR-0003).
     # allkeys-lru is correct here precisely because eviction is recoverable:
     # Spark Gold reconciles the store, and a cold Redis degrades to rules-only.
+    # AOF OFF, and this is a latency decision with a measurement behind it.
+    # ADR-0003 makes Redis authoritative for NOTHING: it holds derived state,
+    # rebuildable from Delta, and Phase 3's Gold reconciliation overwrites it.
+    # So persistence buys a faster restart with state that is stale on arrival,
+    # and `appendfsync everysec` costs periodic fsync stalls on a path with a
+    # 100 ms budget and a 20 ms socket timeout. Measured on the representative
+    # 500 TPS profile, identical in every other respect:
+    #
+    #   appendonly yes -> 5,151 Redis timeouts, 51 dropped iterations, p99 32.66 ms
+    #   appendonly no  ->     0 timeouts,        0 dropped iterations, p99 12.43 ms
+    #
+    # The dropped iterations are what matter: they fail the harness's
+    # `no_dropped_iterations` integrity condition, so the run cannot be recorded
+    # at all. Losing the keyspace on restart is the accepted cost, and it is the
+    # same cold start the hot path is already designed to survive
+    # (ARCHITECTURE §18: Redis loss degrades to rules-only).
+    #
+    # It also removes a failure mode found the hard way: an AOF larger than the
+    # container's memory limit makes Redis crash-loop on start, unable to load
+    # what it persisted.
     command: >
       redis-server
-      --appendonly yes
+      --appendonly no
       --maxmemory 512mb
       --maxmemory-policy allkeys-lru
       --save ""
