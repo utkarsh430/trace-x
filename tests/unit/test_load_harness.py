@@ -567,3 +567,104 @@ def test_the_k6_script_declares_the_thresholds_that_force_the_metrics_to_exist(
     source = K6_SCRIPTS[profile].read_text()
     assert "dropped_iterations: ['count==0']" in source
     assert "gateway_http_5xx: ['count==0']" in source
+
+
+# --- the rate assertion is binding on the gate and not on the saturation profile ---
+
+
+def _baseline_measured() -> Any:
+    """A clean run: every integrity condition satisfied, both targets met.
+
+    Written once so each test below changes exactly one thing and the reader can
+    see which field is under test rather than diffing two literals.
+    """
+    return harness.Measured(
+        client_p50_ms=1.7,
+        client_p90_ms=3.1,
+        client_p95_ms=3.3,
+        client_p99_ms=14.2,
+        client_avg_ms=2.2,
+        client_min_ms=1.3,
+        client_max_ms=90.7,
+        server_p50_ms=0.31,
+        server_p99_ms=0.43,
+        server_samples=300_001,
+        requests=300_001,
+        iterations=300_001,
+        dropped_iterations=0,
+        test_run_duration_s=600.0,
+        achieved_tps=500.0,
+        unparseable_responses=0,
+        degraded_responses=0,
+        band_low=299_994,
+        band_medium=2,
+        band_high=2,
+        band_critical=3,
+        http_2xx=300_001,
+        http_4xx=0,
+        http_5xx=0,
+        http_429=0,
+    )
+
+
+def _measured_missing_the_rate() -> Any:
+    """A run that achieved half its offered rate and dropped a third of it."""
+    return harness.Measured(
+        **{
+            **asdict(_baseline_measured()),
+            "achieved_tps": 250.0,
+            "dropped_iterations": 100_000,
+        }
+    )
+
+
+def test_the_acceptance_gate_still_refuses_a_run_that_missed_its_rate() -> None:
+    """The whole point of the integrity condition, and it must not have moved.
+
+    The saturation profile is allowed to record a rate it did not sustain,
+    because finding that rate is its job. If that leniency ever reaches the
+    `representative` profile, a run at half the offered load would publish its
+    latency under a 500 TPS heading -- which is the exact false claim the
+    condition exists to prevent.
+    """
+    verdicts = harness.evaluate(
+        _measured_missing_the_rate(), target_tps=500, profile="representative"
+    )
+    by_name = {v.name: v for v in verdicts}
+    assert by_name["target_rate_sustained"].passed is False, (
+        "the acceptance gate accepted a run that achieved 250 of 500 TPS"
+    )
+    assert by_name["no_dropped_iterations"].passed is False, (
+        "the acceptance gate accepted a run that dropped 100,000 iterations"
+    )
+
+
+def test_the_saturation_profile_records_the_rate_it_reached_instead_of_refusing() -> None:
+    """A benchmark built to find the limit cannot assert it never reached one."""
+    verdicts = harness.evaluate(
+        _measured_missing_the_rate(), target_tps=500, profile="triage-saturation"
+    )
+    by_name = {v.name: v for v in verdicts}
+    assert by_name["target_rate_sustained"].passed is True
+    assert "SATURATION RESULT" in by_name["target_rate_sustained"].detail, (
+        "the verdict must say the number is a result and not a gate, or it reads as a pass"
+    )
+    assert "250.0" in by_name["target_rate_sustained"].detail, (
+        "the achieved rate must appear in the verdict; it is the finding"
+    )
+
+
+def test_every_other_integrity_condition_applies_to_both_profiles() -> None:
+    """Only the rate and the backlog are profile-dependent.
+
+    4xx responses measure the validation layer and 429s measure the limiter on
+    either profile, so those refusals stay in force. Relaxing them for the
+    saturation run would let it characterise something other than the hot path.
+    """
+    broken = harness.Measured(
+        **{**asdict(_baseline_measured()), "http_4xx": 5_000, "http_429": 5_000}
+    )
+    for profile in ("representative", "triage-saturation"):
+        by_name = {v.name: v for v in harness.evaluate(broken, target_tps=500, profile=profile)}
+        assert by_name["no_client_errors"].passed is False, profile
+        assert by_name["not_rate_limited"].passed is False, profile

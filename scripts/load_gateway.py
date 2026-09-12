@@ -679,7 +679,9 @@ class Verdict:
     detail: str
 
 
-def evaluate(measured: Measured, *, target_tps: int) -> list[Verdict]:
+def evaluate(
+    measured: Measured, *, target_tps: int, profile: str = DEFAULT_PROFILE
+) -> list[Verdict]:
     """The binding assertions. k6's thresholds are an early warning; this decides.
 
     Split into INTEGRITY and TARGET because they demand different responses. An
@@ -691,6 +693,17 @@ def evaluate(measured: Measured, *, target_tps: int) -> list[Verdict]:
     forbids concealing it.
     """
     required_tps = target_tps * MIN_RATE_FRACTION
+    # On the acceptance gate, not reaching the offered rate is an INTEGRITY
+    # failure: the latency then describes a smaller test than the one claimed.
+    #
+    # On the saturation profile it is the RESULT. That profile exists to find
+    # where the system stops keeping up, so asserting that it kept up is
+    # incoherent -- it would refuse to record every run that did its job, and
+    # there would be no characterisation of saturation at all. The figure is
+    # still reported, still compared against the offered rate, and the report
+    # still says in its first lines that it is not the gate. Nothing is relaxed
+    # for the profile the ROADMAP target is stated against.
+    rate_is_binding = profile == "representative"
     return [
         Verdict(
             "requests_were_made",
@@ -701,17 +714,32 @@ def evaluate(measured: Measured, *, target_tps: int) -> list[Verdict]:
         Verdict(
             "target_rate_sustained",
             INTEGRITY,
-            measured.achieved_tps >= required_tps,
-            f"achieved {measured.achieved_tps:.1f} TPS against a {target_tps} TPS target "
-            f"(floor {required_tps:.1f}); below it, the latency describes a smaller test "
-            f"than the one claimed",
+            measured.achieved_tps >= required_tps if rate_is_binding else True,
+            (
+                f"achieved {measured.achieved_tps:.1f} TPS against a {target_tps} TPS target "
+                f"(floor {required_tps:.1f}); below it, the latency describes a smaller test "
+                f"than the one claimed"
+            )
+            if rate_is_binding
+            else (
+                f"SATURATION RESULT, not a gate: sustained {measured.achieved_tps:.1f} TPS of "
+                f"{target_tps} TPS offered. The latency below describes the rate ACHIEVED, and "
+                f"must never be quoted as latency at {target_tps} TPS"
+            ),
         ),
         Verdict(
             "no_dropped_iterations",
             INTEGRITY,
-            measured.dropped_iterations == 0,
-            f"{measured.dropped_iterations} iterations were never started: offered load "
-            f"that never left the generator",
+            measured.dropped_iterations == 0 if rate_is_binding else True,
+            (
+                f"{measured.dropped_iterations} iterations were never started: offered load "
+                f"that never left the generator"
+            )
+            if rate_is_binding
+            else (
+                f"SATURATION RESULT, not a gate: {measured.dropped_iterations} iterations were "
+                f"never started. This is the backlog the offered rate could not clear"
+            ),
         ),
         Verdict(
             "not_rate_limited",
@@ -1065,7 +1093,7 @@ def main(argv: list[str] | None = None) -> int:
         finished = dt.datetime.now(dt.UTC)
 
         measured = extract(load_summary(out_dir))
-        verdicts = evaluate(measured, target_tps=args.target_tps)
+        verdicts = evaluate(measured, target_tps=args.target_tps, profile=args.profile)
         _print_verdicts(verdicts)
 
         integrity_failures = failures(verdicts, INTEGRITY)
