@@ -132,6 +132,9 @@ ignore = ["S101"]  # assert is expected in tests and in invariant guards
 # caught.
 "tests/chaos/**" = ["ARG", "S105", "S106", "S311", "S607", "S608", "T201"]
 "scripts/**" = ["T20"]   # CLI tooling prints by design
+# The evaluation harness is a CLI whose OUTPUT is the deliverable: a manual
+# validation nobody can read is not a validation (ROADMAP Phase 2).
+"eval/**" = ["T20"]
 # A benchmark exists to report a measurement, and a measurement nobody prints is
 # one nobody reads (T201). S311: the load generator is deliberately seeded so a
 # run reproduces -- that is the requirement, not a weakness, and it performs no
@@ -151,8 +154,10 @@ warn_redundant_casts = true
 warn_unused_ignores = true
 no_implicit_optional = true
 strict_equality = true
-# `eval` is added once the harness has Python modules (Phase 9).
-files = ["packages", "scripts", "tests", "migrations", "data", "services", "benchmarks"]
+# `eval` joined the scope in Phase 2, when it gained its first Python module:
+# the replay harness is the only code that reads ground truth, which makes it
+# the last place an untyped mistake should be allowed to hide.
+files = ["packages", "scripts", "tests", "migrations", "data", "services", "benchmarks", "eval"]
 # `tests/conformance/` is a real package (it holds shared suites that concrete
 # test modules subclass), while `tests/` itself is not. Without an explicit base
 # mypy cannot decide whether that file is `source_adapter_suite` or
