@@ -15,7 +15,9 @@
       "key": "account_id",
       "key_reason": "per-account velocity is order-sensitive",
       "released_in_phase": 1,
-      "producer": "data.generator"
+      "producer": "data.generator",
+      "cleanup": "delete",
+      "retention": "7d"
     },
     {
       "topic": "identity.events.v1",
@@ -24,7 +26,9 @@
       "key": "account_id",
       "key_reason": "identity changes must order against that account's transactions",
       "released_in_phase": 1,
-      "producer": "data.generator"
+      "producer": "data.generator",
+      "cleanup": "delete",
+      "retention": "30d"
     },
     {
       "topic": "device.events.v1",
@@ -33,7 +37,9 @@
       "key": "device_id",
       "key_reason": "device-sharing detection is order-sensitive on the device, not the account",
       "released_in_phase": 1,
-      "producer": "data.generator"
+      "producer": "data.generator",
+      "cleanup": "delete",
+      "retention": "30d"
     },
     {
       "topic": "investigation.requested.v1",
@@ -42,7 +48,10 @@
       "key": "case_id",
       "key_reason": "one message exists per case, and the case is the entity that exists at produce time; an investigation_id is minted later by the worker that leases it (ADR-0027)",
       "released_in_phase": 2,
-      "producer": "trace-gateway triage (transactional outbox)"
+      "producer": "trace-gateway triage (transactional outbox)",
+      "cleanup": "delete",
+      "retention": "30d",
+      "cleanup_reason": "MUST NOT be compacted. Compaction retains only the newest record per KEY, and the key is case_id -- so a reopened case (Phase 5 /v1/investigations/{id}/reopen) would silently erase the original request and every historical request but the last. The key is for routing and ordering, not identity: identity is event_id, which is unique per event."
     }
   ],
   "planned": [
