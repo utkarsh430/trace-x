@@ -50,6 +50,7 @@ been thought through.
 | [0036](0036-pinned-container-tooling.md) | Non-Python tooling pinned as container images, by tag and digest | 2 | Accepted |
 | [0037](0037-openapi-breaking-change-gate.md) | The API breaking-change gate is `oasdiff`, not a bespoke rule engine | 2 | Accepted |
 | [0038](0038-hot-path-cpu-budget.md) | The hot path is CPU-bound; the online snapshot reads only what the features declare | 2 | Accepted |
+| [0039](0039-event-loop-over-threadpool.md) | The hot path stays on the event loop; the workload, not the scheduler, is the bottleneck | 2 | Accepted |
 
 ## Notes on status
 

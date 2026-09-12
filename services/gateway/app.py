@@ -28,7 +28,6 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Annotated, Any, Final
 
-import anyio.to_thread
 import structlog
 from fastapi import Depends, FastAPI, Header, Request, Response
 from fastapi.exceptions import RequestValidationError
@@ -36,8 +35,8 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import ValidationError
 
 from services.gateway.config import (
+    REDIS_MAX_CONNECTIONS,
     REDIS_TIMEOUT_S,
-    REQUEST_THREADS,
     SERVICE_NAME,
     SERVICE_VERSION,
     GatewaySettings,
@@ -182,7 +181,7 @@ def build_state(settings: GatewaySettings | None = None) -> GatewayState:
             # effectively unbounded, which under a stalled Redis answers a
             # backlog by opening sockets until the file-descriptor limit decides
             # the outcome -- the bound belongs where the concurrency bound is.
-            max_connections=REQUEST_THREADS + 8,
+            max_connections=REDIS_MAX_CONNECTIONS,
         )
         feature_store = RedisOnlineFeatureStore(redis_client)
         limiter = RedisRateLimiter(
@@ -238,14 +237,6 @@ def create_app(state: GatewayState | None = None) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         configure_logging()
         configure_telemetry(SERVICE_NAME, prometheus=True)
-
-        # The routes are synchronous, so Starlette runs them in AnyIO's default
-        # threadpool and ITS size is this replica's concurrency limit. Set
-        # explicitly rather than inherited: the default is a library's choice,
-        # and a number that decides whether the service meets its throughput
-        # target should be stated where it can be read, reasoned about and
-        # changed. `config.REQUEST_THREADS` carries the arithmetic.
-        anyio.to_thread.current_default_thread_limiter().total_tokens = REQUEST_THREADS
 
         resolved = state or build_state()
         app.state.gateway = resolved
@@ -465,7 +456,7 @@ def _register_routes(app: FastAPI) -> None:
         return {"status": "ok", "service": SERVICE_NAME, "version": SERVICE_VERSION}
 
     @app.get("/readyz", include_in_schema=False)
-    def readyz(request: Request, response: Response) -> dict[str, Any]:
+    async def readyz(request: Request, response: Response) -> dict[str, Any]:
         # Sync for the same reason as the scoring route: `ready()` runs a
         # Postgres `SELECT 1` and a Redis `PING`, both blocking. On the event
         # loop a readiness probe against a hung dependency would stall every
@@ -499,33 +490,31 @@ def _register_routes(app: FastAPI) -> None:
         responses=_PROBLEM_RESPONSES,
         summary="Score a transaction synchronously",
     )
-    def score_transaction(
+    async def score_transaction(
         request: Request,
         response: Response,
         body: TransactionRequest,
         token: Annotated[ServiceToken, Depends(_authenticate)],
         idempotency_key: Annotated[str | None, Header(alias=HEADER_IDEMPOTENCY)] = None,
     ) -> Any:
-        # `def`, NOT `async def`, and this is the single most consequential line
-        # in the file. Every call below -- rate limit, replay lookup, feature
-        # snapshot, triage, observe, replay store -- is a SYNCHRONOUS socket
-        # round trip. In an `async def` handler those run directly on the event
-        # loop, so the gateway serves exactly one request at a time however much
-        # of each request is spent waiting on a socket. Starlette runs a `def`
-        # handler in its worker threadpool instead, so the waiting overlaps.
+        # `async def`, and the reason is a measurement that contradicted the
+        # obvious reading of the code. Every repository call below is a
+        # SYNCHRONOUS socket round trip, which is the textbook case for moving a
+        # handler off the event loop -- and doing exactly that made throughput
+        # WORSE. A controlled A/B on identical store state measured 342.1 TPS on
+        # the event loop against 279.9 TPS in a 64-thread pool, with the scoring
+        # core going from 0.81 ms to 39.26 ms p50 and CPU rising 60% while
+        # throughput fell 18%. The work here is GIL-bound rather than I/O-bound,
+        # so threads add contention and buy no overlap; serialising is closer to
+        # optimal. ADR-0039 records the experiment and supersedes ADR-0038's
+        # decision on this point.
         #
-        # Measured, not assumed. A full-path decomposition (auth 0.0004 ms, rate
-        # limit 0.169, idempotency lookup 0.136, score 1.910, triage 1.434,
-        # observe 0.770, serialise 0.009, replay store 0.225) puts the handler
-        # body at 4.654 ms mean / 8.653 ms p99, of which ~4.45 ms is socket wait
-        # and ~0.2 ms is Python holding the GIL. Blocking the loop therefore
-        # capped one replica at ~1/4.654 ms; the 500 TPS run measured 305 TPS,
-        # p50 2,519 ms, p99 5,252 ms and 116,040 dropped iterations -- a queue,
-        # not a slow path, since min latency in the same run was 0.86 ms.
-        #
-        # This keeps the architecture exactly as ADR-0002 and §3.2 describe it:
-        # one process, one uvicorn worker, the same synchronous repositories,
-        # the same fail-open/fail-closed semantics. Only the scheduling changes.
+        # What makes it safe to block this loop is not that the calls are fast
+        # but that they are BOUNDED: 20 ms socket timeouts with retries off, and
+        # a circuit breaker that stops asking a dead dependency (ADR-0035).
+        # Without those, one hung Redis would stall every in-flight request --
+        # which is exactly the 21.8 s request the chaos suite found before the
+        # breaker existed.
         state = _gateway(request)
         request_id = _request_id(request)
         response.headers[HEADER_REQUEST_ID] = request_id
@@ -622,7 +611,7 @@ def _register_routes(app: FastAPI) -> None:
         dependencies=[Depends(_authenticate)],
         responses={status: _PROBLEM_RESPONSES[status] for status in (400, 401, 422)},
     )
-    def ingest_identity(
+    async def ingest_identity(
         request: Request,
         body: IdentityEventRequest,
     ) -> AcceptedResponse:
@@ -647,7 +636,7 @@ def _register_routes(app: FastAPI) -> None:
         dependencies=[Depends(_authenticate)],
         responses={status: _PROBLEM_RESPONSES[status] for status in (400, 401, 422)},
     )
-    def ingest_device(
+    async def ingest_device(
         request: Request,
         body: DeviceEventRequest,
     ) -> AcceptedResponse:

@@ -37,19 +37,20 @@ because the load profile concentrates 80% of traffic on 5% of accounts and the
 velocity rules fire on exactly that. Triage is the common path under load, and
 the pool below is sized for that measurement rather than for the assumption."""
 
-REQUEST_THREADS: Final = 64
-"""How many requests may be in flight inside the process at once.
+REDIS_MAX_CONNECTIONS: Final = 24
+"""Ceiling on sockets the gateway will open to Redis.
 
-The routes are synchronous and Starlette runs them in its worker threadpool, so
-this is the real concurrency limit of one replica (see `score_transaction`).
+Not a concurrency target. The routes run on the event loop, so the gateway
+issues one Redis call at a time and a handful of connections is all it can use;
+this is a BOUND, to stop a stalled Redis being answered by opening sockets until
+the file-descriptor limit decides the outcome. redis-py's default is effectively
+unbounded, which turns a slow dependency into a resource exhaustion.
 
-Sized from the decomposition, not guessed. At the 500 TPS target and a measured
-4.654 ms mean handler body, Little's Law puts the steady-state requirement at
-500 x 0.004654 = 2.3 concurrent, and 4.3 at the 8.653 ms p99. 64 leaves an order
-of magnitude of headroom for a dependency that has slowed but not failed, while
-still being a BOUND: an unbounded pool answers a stalled Redis by growing threads
-until the process dies, which is a worse failure than the queueing it avoids.
-Backpressure at a known limit beats collapse at an unknown one."""
+It was briefly 64+8, sized for a worker threadpool that measurement then removed
+(ADR-0039). The number is smaller now because the concurrency it was sized for
+does not exist -- keeping the larger value would have left a bound that bounded
+nothing and implied a threading model the code no longer has.
+"""
 
 
 @dataclass(frozen=True, slots=True)
