@@ -4,7 +4,7 @@
   "current_phase": "1",
   "current_phase_name": "Domain Model, Generator, Ground Truth, Source Adapters",
   "updated_at": "2026-09-12",
-  "last_verified_commit": "aaf6f28",
+  "last_verified_commit": "bd4a19a",
   "legend": {
     "NOT_STARTED": "No implementation exists.",
     "IN_PROGRESS": "Implementation started; acceptance evidence incomplete.",
