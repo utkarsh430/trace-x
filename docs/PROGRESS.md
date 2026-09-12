@@ -10,44 +10,111 @@
 
 ## CURRENT PHASE
 
-**Phase 0 — Foundation & Constitution** (mandatory)
+**Phase 1 — Domain Model, Generator, Ground Truth, Source Adapters** (mandatory)
 
-Gate: `docs/ROADMAP.md` § Phase 0.
+Gate: `docs/ROADMAP.md` § Phase 1. Approved implementation plan: 11 ordered steps, each leaving
+`make verify` green.
 
 ## CURRENT STATUS
 
-**Phase 0 is COMPLETE. All 10 capabilities PASS. All five exit criteria are met and verified.**
+**Phase 1 is IN PROGRESS. Steps 0-3 of 11 are complete and committed. Steps 4-11 remain.**
 
-`make verify` is 9/9 green locally, **and all four GitHub Actions workflows pass on the current
-commit**. 257 tests pass (234 fast + 23 integration against real PostgreSQL).
+Phase 0 remains complete: all 10 Phase 0 capabilities still PASS and none was weakened.
 
-Phase 1 has not begun and must not begin without explicit user approval.
+`make verify` is **10/10 green** (a `codegen-drift` gate was added in step 3, up from 9).
+**478 fast tests pass** (was 234 at Phase 0 exit). Integration tests are unchanged and still require
+Docker.
 
-### Recovery after an unexpected machine shutdown (2026-09-12)
+**No Phase 1 acceptance capability is PASS yet**, and none may be until its declared command is
+actually executed. `tests/acceptance/status.json` still shows all four Phase 1 capabilities as
+NOT_STARTED, which is accurate — the generator does not exist yet.
 
-The shutdown caused **no repository damage**. Verified, not assumed:
+### Phase 1 step ledger
 
-| Check | Result |
-|---|---|
-| `git fsck` | clean |
-| Working tree vs `HEAD` | byte-identical; nothing partially written |
-| Tracked files modified after the last commit | none |
-| Zero-byte tracked files | only `eval/manifest/.gitkeep` (intentionally empty) |
-| `.env` | complete, all four role passwords present |
-| venv | intact; all 9 key modules import |
-| Stray containers / volumes | none |
+| Step | Scope | State | Commit |
+|---|---|---|---|
+| 0 | Toolchain prerequisites | **DONE** | `f1c1289` |
+| 1 | Domain enums, errors, money, time, identifiers, geo, entities | **DONE** | `680846c` |
+| 2 | Three state machines, ARCHITECTURE §19, ADR-0027 | **DONE** | `1194b7d` |
+| 3 | Event JSON Schemas, generated Pydantic, release ledger, ADR-0028 | **DONE** | `d7ace65` |
+| 4 | `CanonicalTransaction` + `SourceAdapter` + `GeneratorAdapter` + conformance suite | pending | — |
+| 5 | Feature `required_fields` / `UNAVAILABLE` mechanism | pending | — |
+| 6 | Generator core — deterministic, digest-reproducible (+ ADR) | pending | — |
+| 7 | The 10 fraud scenarios + `docs/FRAUD_SCENARIOS.md` (+ ADR) | pending | — |
+| 8 | Migration 0002, `groundtruth` tables, `trace_generator` role (+ ADR) | pending | — |
+| 9 | CLI + `make seed` + `GeneratorRunRecord` + claim-linter extension | pending | — |
+| 10 | Freeze `eval-v1` and commit its digest | pending | — |
+| 11 | Performance measurement, manual validation, docs, status.json | pending | — |
 
-**The recovery pass found two real defects that predated the shutdown**, both now fixed with
-regression tests — see COMPLETED WORK.
+### What steps 0-3 actually delivered
 
-### Environment changes since the last session
-- **Disk: 3.5 GB → ~28 GB free.** The `doctor` disk check that was failing now passes. The threshold
-  was never lowered to force it green.
-- **Git remote added and pushed** (`origin/main` = local `HEAD`). CI has therefore actually executed.
-- Docker daemon was down after the shutdown; restarted for verification.
+**Step 0 — toolchain prerequisites, deliberately first.** Three defects would each have turned CI red
+the moment Phase 1 code landed:
 
-**No TRACE-X product functionality exists yet.** No transaction processing, ML, streaming, agents or
-frontend code has been written, by instruction.
+1. `.github/workflows/test-fast.yml` asserted that **`make seed` exits non-zero**. `make seed` is a
+   Phase 1 deliverable, so implementing it would have failed CI *on success*. The probe now points at
+   `make demo` (Phase 7), and a new test parses the phase-gated targets out of the Makefile and the
+   probed target out of the workflow, failing if the probe ever names a command whose phase has
+   landed. Verified it bites.
+2. mypy's `files` scope excluded `data/`, where CLAUDE.md §4 puts the generator and the adapters —
+   Phase 1's largest new surface would have been untyped by default. `data` is now in scope.
+3. New `gen` extra (pyarrow, jsonschema) plus `datamodel-code-generator` and `types-jsonschema` in
+   `dev`, added to `make setup`, all three mypy-running workflows and `make lock` **in the same
+   commit**, and registered in `test_toolchain_consistency`'s `SCOPE_REQUIREMENTS`.
+
+**Step 1 — domain layer.** Two real defects were found by the tests while writing them:
+
+- `Money.scaled` rounded negative ties the wrong way (Python's `divmod` floors; the tie-break assumed
+  truncation), so -2.5 rounded to -4. Fixed and cross-checked exhaustively against
+  `round(Fraction(...))` — zero mismatches across every sign and parity combination.
+- `to_millis` used `int(value.timestamp() * 1000)` and **lost a millisecond**. Found by a hypothesis
+  property test at 2038-02-01T00:00:00.022Z. Measured afterwards: the old expression was wrong on
+  **240 of 1000** millisecond offsets at that timestamp. Those milliseconds are the UUIDv7 prefix and
+  feed watermark arithmetic. Now exact integer arithmetic.
+
+**Step 2 — state machines.** Two findings:
+
+- **The case lifecycle did not exist.** ROADMAP cited `ARCHITECTURE.md` §13 for it and §12 for the
+  agent lifecycle; §12 is Action execution and §13 is Observability. It is now authored in
+  **ARCHITECTURE.md §19** with every edge derived from an existing authority, and the ROADMAP
+  cross-reference is corrected.
+- **The §8 investigation diagram has a modelling gap at `ROUTE`**: its only exit is `AGENT_SELECTED`,
+  but ADR-0019's `eligible(a)` predicate is routinely empty. Two edges added, declared in
+  `ADDED_EDGES`, with a test that diffs the table against the mermaid block in the doc. Stated
+  precisely: the literal §8 table is *structurally* valid, so this was not a dead end automated
+  validation would have caught — it was found by reading ADR-0019 against the diagram.
+
+**Step 3 — event contracts.** Three ingress topics released (`tx.raw.v1`, `identity.events.v1`,
+`device.events.v1`) plus the shared `envelope.v1`; the other six stay PLANNED because a released
+schema file is immutable. `docs/contracts/RELEASED.json` is the release ledger (schema, sha256,
+partition key, and the stated reason for that key). `make codegen --check` is hermetic and is called
+identically by `make verify`, CI and a contract test.
+
+### Known defect repaired during this session
+
+The step-3 commit was made with an **unquoted heredoc**, so backticks inside the message executed as
+shell commands and injected `make codegen`, `git status` and `make verify` output into the commit
+message. The commit *content* was correct; only the message was mangled. Repaired by `git commit
+--amend` while still unpushed (`9f64554` → `d7ace65`). Commit messages are now written via a file,
+never an interpolating heredoc.
+
+### Environment changes since Phase 0 exit
+
+- `make verify` grew a tenth gate (`codegen-drift`).
+- New dependencies: `pyarrow`, `jsonschema` (`gen` extra), `datamodel-code-generator`,
+  `types-jsonschema` (`dev`). `requirements.lock` regenerated — its digest is `env_lock_digest` in
+  every run manifest (ADR-0017), so this is a recorded environment change.
+- **Three commits are unpushed** (`origin/main` is at `f1c1289`). CI has therefore not run on
+  steps 1-3.
+
+**Known environment gaps — still not blocking Phase 1:**
+`JAVA_HOME` unset and system Java is 25 (Spark 4.0 needs Temurin 17) — blocks **Phase 3**.
+Ollama not installed — blocks **Phase 6**. No AWS credentials — blocks **Phase 12**.
+**Docker is required to *exit* Phase 1** (the `P1.causal-evidence` acceptance command is an
+integration test against real PostgreSQL), even though it is not needed to *develop* it — the ROADMAP
+Phase 1 entry note is slightly incomplete on this point.
+
+---
 
 ## COLD-START CHECKLIST (read this first in a new session)
 
