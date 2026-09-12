@@ -1,0 +1,62 @@
+name: contracts
+
+# docs/TESTING.md §7 names this workflow and its gate: "OpenAPI + event-schema
+# breaking-change diff vs main". It runs on pull requests because that is where
+# the comparison HAS a base -- a push to main has nothing to diff against, and a
+# gate that cannot answer would pass vacuously, which is worse than not running.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  openapi:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The base branch is needed to diff against, and a shallow clone would
+          # not have it. This is the whole point of the job.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,db,obs,gen,api]"
+
+      - name: The committed spec must match the models it is generated from
+        # docs/API_CONTRACTS.md §1: Pydantic models are the source of truth, and
+        # the spec is never hand-edited. Checked before the diff, because
+        # comparing a stale spec would compare the wrong thing.
+        run: make codegen-openapi && git diff --exit-code docs/contracts/openapi.yaml
+
+      - name: The breaking-change gate must still reject
+        # A compatibility checker that has stopped rejecting anything looks
+        # exactly like a codebase that has stopped making breaking changes.
+        # Asserted before it is trusted, not after it fails to catch something.
+        run: make contracts-self-test
+
+      - name: No breaking API change without a major-version bump
+        # §2: a major version is a parallel surface (/v2/...), never a mutation
+        # of /v1. If the base has no spec yet the change is additive by
+        # definition and there is nothing to compare.
+        run: |
+          set -euo pipefail
+          BASE_SPEC="$(mktemp -d)/base.yaml"
+          if git show "origin/${{ github.base_ref }}:docs/contracts/openapi.yaml" > "$BASE_SPEC" 2>/dev/null; then
+            make contracts-check BASE="$BASE_SPEC"
+          else
+            echo "no spec on origin/${{ github.base_ref }}; this PR introduces it, which is additive"
+          fi
+
+      - name: Event schemas must not change incompatibly
+        # The same rule on the other side of the contract surface: a released
+        # schema file is IMMUTABLE (docs/EVENT_CONTRACTS.md §4), so any edit to
+        # one is a breaking change regardless of its content. Checked by digest,
+        # because the ledger records what each released schema hashes to.
+        run: python -m pytest -m contract tests/contract/test_event_schemas.py -q

@@ -52,7 +52,7 @@ def test_assert_pin_rejects_unknown_component() -> None:
         assert_pin("cobol", "85")
 
 
-# --- non-Python tooling (ADR-0038) -----------------------------------------
+# --- non-Python tooling (ADR-0036) -----------------------------------------
 
 
 def _tool_images() -> dict[str, str]:

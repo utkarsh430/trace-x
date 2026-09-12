@@ -90,7 +90,7 @@ hadoop = "3.4"        # Delta 4.0.1 + Spark 4.0.1 require Hadoop 3.4.x
 scala = "2.13"
 
 # ----------------------------------------------------------------------------
-# Non-Python tooling, pinned as container images (ADR-0038).
+# Non-Python tooling, pinned as container images (ADR-0036).
 #
 # These are gates and measurement instruments, so an unpinned version would
 # silently change either what CI rejects or what a benchmark reports. Pinned by

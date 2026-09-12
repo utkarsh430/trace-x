@@ -43,28 +43,39 @@ ENV PATH="/opt/venv/bin:${PATH}"
 WORKDIR /src
 COPY pyproject.toml requirements.lock ./
 
-# The lockfile, whole and hash-verified. --require-hashes makes the install
-# tamper-evident rather than merely reproducible (tests/unit/test_dependency_lock.py),
-# and it is the same `env_lock_digest` every run manifest records (ADR-0017):
-# an image built from a different dependency set than CI tested is an image
-# whose measurements describe nothing.
+# requirements.lock supplies the VERSIONS. It cannot supply the hashes here, and
+# that is a property of the committed lockfile rather than a shortcut taken in
+# this file -- it was attempted first and it fails:
 #
-# It installs MORE than the gateway runs. `make lock` compiles dev+db+obs+api+gen
-# together, so pytest, mypy, schemathesis and pyarrow come along -- roughly 300 MB
-# of layer for code the gateway never imports (measured: `du -sh` of the venv with
-# and without the dev extras on this machine). Three alternatives were tried and
-# are worse:
-#   * `pip install -e ".[db,api,obs]"` resolves against PyPI at build time, so the
-#     image's versions are whatever the day's index offers -- not the locked set.
-#   * the lock as a hashed CONSTRAINTS file with a derived `[db,api,obs]`
-#     requirement list: pip's hash-checking mode (which any hash switches on)
-#     then demands `==` on every requirement, and pyproject states ranges.
-#   * stripping the hashes to use it as a version-only constraints file: keeps the
-#     image small, but trades away exactly the tamper-evidence the lockfile exists
-#     for.
-# The real fix is a second, runtime-only lock (`make lock` learning a `--runtime`
-# output). That is a Makefile change, and this file does not own it.
-RUN pip install --require-hashes -r requirements.lock
+#   pip install --require-hashes -r requirements.lock
+#   ERROR: In --require-hashes mode, all requirements must have their versions
+#          pinned with ==. These do not:
+#              greenlet>=1 (from sqlalchemy==2.0.52)
+#
+# `make lock` runs on the maintainer's macOS/arm64 machine, where SQLAlchemy's
+# marker for greenlet (`platform_machine == "aarch64" or ... "x86_64" ...`) is
+# false, so greenlet is absent from the lock. On linux/arm64 and linux/amd64 --
+# every container and every CI runner -- the marker is true, pip must resolve a
+# package the lock never named, and ANY hash in the file puts pip in
+# hash-checking mode, where an unpinned transitive dependency is fatal. Stripping
+# the hashes to constraints is therefore not a preference but the only form in
+# which this lockfile installs on Linux at all. The fix belongs to `make lock`
+# (compile for linux, or with universal markers); this file does not own it, and
+# writing a second dependency set here would be worse -- a set nothing verifies.
+#
+# The requirement list is DERIVED from pyproject rather than restated below. A
+# dependency added to `[db,api,obs]` and forgotten here would not fail the build;
+# it would fail as an ImportError inside a container, on the hot path, at request
+# time. Deriving it also keeps this layer cached against changes to packages/,
+# which is the file that actually changes during development.
+RUN python -c "import pathlib, re, tomllib; \
+lock = pathlib.Path('requirements.lock').read_text().splitlines(); \
+pathlib.Path('constraints.txt').write_text('\n'.join(l.split()[0] for l in lock if re.match(r'^[A-Za-z0-9][^ ]*==', l)) + '\n'); \
+project = tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']; \
+extras = project['optional-dependencies']; \
+reqs = list(project['dependencies']) + [r for e in ('db', 'api', 'obs') for r in extras[e]]; \
+pathlib.Path('runtime-requirements.txt').write_text('\n'.join(reqs) + '\n')" \
+ && pip install -c constraints.txt -r runtime-requirements.txt
 
 # `trace_core` is installed, not mounted: the wheel carries the rule packs and
 # threshold config as package data (pyproject [tool.setuptools.package-data]),

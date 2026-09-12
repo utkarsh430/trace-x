@@ -1,0 +1,44 @@
+# Fixture: the "previous" specification the self-test compares against.
+#
+# Deliberately tiny and hand-written rather than a copy of the real spec. A
+# fixture that tracked the real document would change whenever the API changed,
+# and the self-test would then be asserting something different every time --
+# which is the opposite of what a gate's own test is for.
+openapi: 3.1.0
+info:
+  title: Fixture API
+  version: "1"
+paths:
+  /v1/things:
+    post:
+      summary: Create a thing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ThingRequest'
+      responses:
+        '200':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThingResponse'
+components:
+  schemas:
+    ThingRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        note:
+          type: string
+    ThingResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ACCEPTED, REJECTED, PENDING]

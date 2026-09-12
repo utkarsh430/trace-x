@@ -16,6 +16,7 @@ COMPOSE := docker compose -f deploy/compose.yml --env-file .env
 .PHONY: help doctor setup up up-streaming up-full down ps logs test-fast test e2e lint typecheck \
         secrets audit audit-full migrate migrate-down migrate-status lock ci-status codegen \
         verify eval eval-external demo seed fetch-external pull-model bench-layout \
+        codegen-openapi contracts-check contracts-self-test load-gateway \
         bench-features \
         check-claims acceptance clean not-implemented
 
@@ -50,7 +51,7 @@ setup: ## Create venv and install dev + core dependencies
 ## ---------------------------------------------------------------------------
 ## Local stack
 ## ---------------------------------------------------------------------------
-up: ## Start the core profile (postgres, redis) and apply migrations
+up: ## Start the core profile (postgres, redis, gateway) and apply migrations
 	@test -f .env || (cp .env.example .env && echo "created .env from template")
 	@$(COMPOSE) --profile core up -d --wait
 	@$(MAKE) --no-print-directory migrate
@@ -99,6 +100,15 @@ lock: ## Regenerate the hashed dependency lockfile
 codegen: ## Regenerate Pydantic event models FROM the committed JSON Schemas
 	@$(VPY) scripts/generate_event_models.py
 
+codegen-openapi: ## Regenerate the committed OpenAPI spec FROM the Pydantic models
+	@$(VPY) scripts/generate_openapi.py
+
+contracts-check: ## Breaking-change gate: diff the spec against a base (pinned oasdiff)
+	@$(VPY) scripts/openapi_diff.py --base $${BASE:?set BASE=<path to the previous spec>}
+
+contracts-self-test: ## Prove the breaking-change gate still rejects
+	@$(VPY) scripts/openapi_diff.py --self-test
+
 lint: ## ruff format check + lint
 	@$(VPY) -m ruff format --check . && $(VPY) -m ruff check .
 
@@ -125,6 +135,9 @@ ci-status: ## Show GitHub Actions conclusions for the current commit
 
 acceptance: ## Render the machine-readable acceptance status
 	@$(VPY) scripts/acceptance.py report
+
+load-gateway: ## Measure the gateway against the Phase 2 targets (needs a running gateway)
+	@set -a; [ -f .env ] && . ./.env; set +a; $(VPY) scripts/load_gateway.py $(ARGS)
 
 bench-features: ## Measure the hybrid distinct-cardinality strategy (ADR-0034)
 	@$(VPY) benchmarks/features/bench_cardinality.py \

@@ -40,6 +40,10 @@ run_gate "check-claims"        "$VPY" scripts/check_claims.py
 # CI alone, for the same reason the secret scan was moved here in Phase 0: a
 # gate that only runs in CI lets a local run pass while CI goes red.
 run_gate "codegen-drift"       "$VPY" scripts/generate_event_models.py --check
+# The committed OpenAPI must match the Pydantic models it is generated from
+# (docs/API_CONTRACTS.md §1). Same reasoning as the event-model gate above: a
+# spec that only CI regenerates lets a local run pass while CI goes red.
+run_gate "openapi-drift"       "$VPY" scripts/generate_openapi.py --check
 
 if [[ -x .venv/bin/ruff ]]; then
   run_gate "ruff-format"       .venv/bin/ruff format --check .

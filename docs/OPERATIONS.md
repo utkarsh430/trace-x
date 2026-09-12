@@ -26,6 +26,7 @@
 |---|---|---|
 | `/healthz` | gateway, api | Process alive |
 | `/readyz` | gateway, api | Dependencies reachable; **returns 503 while degraded past threshold** |
+| container healthcheck | gateway | Probes `/healthz` only. **Liveness and readiness are wired to different consumers on purpose**: the orchestrator restarts on liveness, the load balancer drains on readiness. A restart triggered by a database blip takes out a process that was degrading correctly |
 | `/metrics` | all services | Prometheus scrape |
 | `make verify` | CLI | Canonical repository health |
 | Grafana → Real-Time Ops | `obs` profile | Latency, throughput, bands, degraded rate |
@@ -52,6 +53,41 @@
 ---
 
 ## 4. Failure playbooks
+
+### Gateway refuses to start
+**Detect:** the container never reports healthy; logs end in `TokenConfigurationError`, a rule-pack
+load error, or `Application startup failed`. Under compose a missing `TRACE_SERVICE_TOKEN_<ID>` stops
+the `up` itself, before any container is created.
+**Behaviour:** **by design.** Service tokens and the rule pack are fatal when absent, for the same
+reason a corrupt model artifact is (`docs/ARCHITECTURE.md` §18): a gateway serving traffic it cannot
+authenticate, or scoring with rules it could not load, is worse than a gateway that is down, because it
+looks like it is working.
+**Action:** read the last log line — it names the missing configuration and what it must contain.
+Restore it from the secret store; **never** start the gateway with a hand-typed placeholder token to
+"get traffic flowing", because every request it then authenticates is unattributable. Restarting will
+not fix it: the process is refusing, not crashing.
+
+### Gateway is live but never becomes ready
+**Detect:** `/healthz` 200, `/readyz` 503 with `checks.postgres` naming the error. The load balancer
+drains the instance; the container healthcheck still reports healthy, and that is correct — the process
+is alive.
+**Behaviour:** triage cannot durably record a case, so a CRITICAL transaction is refused with 503
+rather than approved and lost (ADR-0035).
+**Action:** distinguish the two causes. *Postgres down* → the Postgres playbook below. *Postgres up but
+the role or grants are missing* (the usual cause on a fresh environment) → run the migrations; the
+schema, roles and grants are created there and nowhere else (ADR-0004). Do not grant the gateway a
+broader role to clear the error: `trace_app` has no access to `groundtruth` and that is the isolation
+control (CLAUDE.md §11).
+
+### Gateway killed on its memory limit
+**Detect:** exit code 137, no stack trace, restart loop under `restart: unless-stopped`.
+**Behaviour:** the container is bounded so it dies alone rather than starving Postgres and Redis
+beside it — on a laptop an unbounded container takes the whole VM with it.
+**Action:** capture the limit and the working set before changing anything, then look for the cause
+rather than raising the ceiling: a connection pool sized past the database's own limit, or an
+unbounded in-process cache, both present exactly this way. If the limit genuinely needs to rise,
+`docs/ARCHITECTURE.md` §14 budgets the whole `core` profile, so raising one service means lowering
+another — `tests/unit/test_compose_profiles.py` fails when the sum stops fitting.
 
 ### Redis unavailable
 **Detect:** health probe, 20 ms timeouts, `degraded_mode_total{reason="redis"}` climbing.

@@ -46,6 +46,9 @@ been thought through.
 | [0032](0032-declarative-feature-semantics.md) | Features declare their semantics, not just their implementation | 2 | Accepted |
 | [0033](0033-declarative-rule-packs.md) | Rule packs are data in a closed grammar, digest-pinned and fail-safe on reload | 2 | Accepted |
 | [0034](0034-hybrid-distinct-cardinality-storage.md) | Hybrid distinct-cardinality storage — exact where bounded, estimated where not | 2 | Accepted (amends 0003) |
+| [0035](0035-gateway-degradation-and-fail-safe-direction.md) | Where "scoring fails open" ends — gateway degradation, per dependency | 2 | Accepted |
+| [0036](0036-pinned-container-tooling.md) | Non-Python tooling pinned as container images, by tag and digest | 2 | Accepted |
+| [0037](0037-openapi-breaking-change-gate.md) | The API breaking-change gate is `oasdiff`, not a bespoke rule engine | 2 | Accepted |
 
 ## Notes on status
 

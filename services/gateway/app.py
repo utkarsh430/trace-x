@@ -405,6 +405,31 @@ class _UnauthenticatedError(Exception):
     """Raised by the auth dependency; converted to a 401 problem document."""
 
 
+PROBLEM_MEDIA_TYPE: Final = "application/problem+json"
+PROBLEM_REF: Final = "#/components/schemas/Problem"
+
+_PROBLEM_STATUSES: Final[dict[int, str]] = {
+    400: "Malformed request: the body does not match the schema (§6.1).",
+    401: "Unauthenticated: no valid service token was presented.",
+    409: "Idempotency conflict: the key was reused with a different payload (§5).",
+    422: "Semantically invalid: the shape is right and a value cannot be (§6.6).",
+    429: "Rate limited. Carries Retry-After.",
+    503: "The decision could not be durably recorded, so it was not returned (ADR-0035).",
+}
+
+_PROBLEM_RESPONSES: Final[dict[int | str, dict[str, Any]]] = {
+    status: {
+        "description": description,
+        # `content` only, with no `model`: passing a model ALSO registers an
+        # `application/json` variant, and the spec would then advertise a media
+        # type this service never serves. The `$ref` keeps one definition of the
+        # schema in `components`, registered by `PROBLEM_SCHEMA_ROUTE` below.
+        "content": {PROBLEM_MEDIA_TYPE: {"schema": {"$ref": PROBLEM_REF}}},
+    }
+    for status, description in _PROBLEM_STATUSES.items()
+}
+
+
 def _register_routes(app: FastAPI) -> None:
     @app.exception_handler(_UnauthenticatedError)
     async def _unauthenticated(request: Request, exc: _UnauthenticatedError) -> JSONResponse:
@@ -443,14 +468,13 @@ def _register_routes(app: FastAPI) -> None:
     @app.post(
         "/v1/transactions",
         response_model=RiskDecision,
-        responses={
-            400: {"description": "Malformed request"},
-            401: {"description": "Unauthenticated"},
-            409: {"description": "Idempotency key reused with a different payload"},
-            422: {"description": "Semantically invalid request"},
-            429: {"description": "Rate limited"},
-            503: {"description": "The decision could not be durably recorded"},
-        },
+        # Every error response is documented with the `Problem` schema and the
+        # `application/problem+json` media type it is actually served as.
+        # API_CONTRACTS §4 requires RFC 9457 "always" and says the error `type`
+        # URIs are enumerated in the spec -- a document that described FastAPI's
+        # default HTTPValidationError instead would be describing a shape this
+        # service never returns, and a generated client would be built to parse it.
+        responses=_PROBLEM_RESPONSES,
         summary="Score a transaction synchronously",
     )
     async def score_transaction(
@@ -554,6 +578,7 @@ def _register_routes(app: FastAPI) -> None:
         status_code=202,
         summary="Ingest an identity event",
         dependencies=[Depends(_authenticate)],
+        responses={status: _PROBLEM_RESPONSES[status] for status in (400, 401, 422)},
     )
     async def ingest_identity(
         request: Request,
@@ -577,6 +602,7 @@ def _register_routes(app: FastAPI) -> None:
         status_code=202,
         summary="Ingest a device event",
         dependencies=[Depends(_authenticate)],
+        responses={status: _PROBLEM_RESPONSES[status] for status in (400, 401, 422)},
     )
     async def ingest_device(
         request: Request,

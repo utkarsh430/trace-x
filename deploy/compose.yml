@@ -76,6 +76,109 @@ services:
         limits:
           memory: 640M
 
+  gateway:
+    # Built from THIS repository, not pulled: the image is the hot path, and a
+    # gateway image that could drift from the source tree beside it would make
+    # every latency number unattributable (ADR-0017's image_digests field).
+    # Context is the repo root because the build needs pyproject.toml, the
+    # lockfile, packages/ and services/; `.dockerignore` admits those four and
+    # nothing else, so a stray .env or dataset cannot reach a layer.
+    build:
+      context: ..
+      dockerfile: deploy/gateway.Dockerfile
+    image: tracex-gateway:dev
+    profiles: ["core"]
+    <<: *restart
+    depends_on:
+      # Postgres is a hard start-up dependency: triage has no fallback, and a
+      # decision that cannot be durably recorded is refused rather than
+      # approved (ADR-0035). Redis is service_started, NOT service_healthy --
+      # Redis loss is a designed, visible degradation (ARCHITECTURE §18), and
+      # gating start-up on its health would turn the one dependency the hot
+      # path is built to survive into the one that keeps it down.
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      # Service identity (docs/SECURITY.md §3, Plane B). `:?` rather than a
+      # default: the gateway refuses to start without a token, so the choice is
+      # between one readable message from `docker compose up` and a container
+      # crash-looping on a stack trace. There is no secret in this file -- the
+      # value comes from .env, which is gitignored (CLAUDE.md §9).
+      TRACE_SERVICE_TOKEN_LOCAL: "${TRACE_SERVICE_TOKEN_LOCAL:?set it in .env (>= 32 characters); the gateway refuses to start without at least one service token}"
+      # In-network addresses and IN-CONTAINER ports. The ports in .env
+      # (5442, 6389 -- ADR-0024) are what is published to the HOST to avoid
+      # collisions; inside this network the containers listen on 5432 and 6379.
+      # GatewaySettings builds both DSNs straight from these variables, so
+      # inheriting the host values here is a connection refused on every request.
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-tracex}
+      # The app role, which has NO grant on the groundtruth schema (ADR-0004).
+      # Naming it explicitly is the point: the gateway must never be handed the
+      # superuser or the eval credentials that sit beside it in .env.
+      TRACE_APP_DB_USER: ${TRACE_APP_DB_USER:-trace_app}
+      TRACE_APP_DB_PASSWORD: ${TRACE_APP_DB_PASSWORD:?set it in .env}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_DB: ${REDIS_DB:-0}
+      TRACE_ENV: ${TRACE_ENV:-local}
+      TRACE_LOG_LEVEL: ${TRACE_LOG_LEVEL:-INFO}
+      TRACE_LOG_FORMAT: ${TRACE_LOG_FORMAT:-json}
+      TRACE_RATE_LIMIT_PER_MINUTE: ${TRACE_RATE_LIMIT_PER_MINUTE:-1000}
+    # Enumerated rather than `env_file: ../.env` on purpose. .env also holds the
+    # superuser password, the eval role that CAN read ground truth, and any
+    # Kaggle/OpenAI key the developer has added; least privilege (CLAUDE.md §9)
+    # says the hot path receives none of them.
+    ports:
+      - "${TRACE_GATEWAY_PORT:-8010}:8010"
+    healthcheck:
+      # LIVENESS, deliberately -- /healthz touches no dependency. Two distinct
+      # reasons not to point this at /readyz:
+      #   1. `make up` runs `up -d --wait` and THEN `make migrate`. /readyz
+      #      connects as trace_app, a role that only the migration creates, so a
+      #      readiness healthcheck would never pass on a fresh clone and `make up`
+      #      would hang before the migration that would have fixed it.
+      #   2. A probe that fails on a Postgres blip would mark a healthy,
+      #      correctly-degrading process unhealthy and restart it.
+      # /readyz is the load balancer's question and the operator's
+      # (ADR-0035, docs/OPERATIONS.md §2); it is not this one.
+      #
+      # Probed with the interpreter already in the image rather than curl or
+      # wget, neither of which is in python:3.12-slim: a serving image should not
+      # grow a network client, and its CVEs, to answer a question about itself.
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8010/healthz', timeout=2).status == 200 else 1)
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      # Measured: start-up takes ~11 s when Postgres is not yet accepting this
+      # role, because the pool's open() waits its full 10 s timeout before the
+      # app logs postgres_pool_not_ready and serves anyway (services/gateway/app.py).
+      # A shorter start_period would report a gateway that is starting exactly as
+      # designed as a failed one.
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          # ARCHITECTURE §14 budgets the whole `core` profile at 2.7 GB
+          # (~2765 MiB) across postgres, redis, gateway, api, worker and ui --
+          # the 3 MCP servers are stdio and cost no container. Postgres (768M)
+          # and redis (640M) already claim 1408M, leaving ~1357M for the four
+          # service containers, of which this is the first.
+          #
+          # 384M is that remainder split with the gateway taking a share above
+          # an even quarter, because it is the only one of the four with a
+          # connection pool sized for 500 TPS. Measured idle RSS of this image
+          # is 58 MiB, so the limit is ~6x headroom for the pool, request
+          # concurrency and the metrics registry -- and it still leaves 973M for
+          # api, worker and ui, which must fit alongside it.
+          memory: 384M
+
   # ---------------------------------------------------------- streaming ----
   # Phase 3. Not yet wired — declared so the profile shape is reviewable.
   kafka:

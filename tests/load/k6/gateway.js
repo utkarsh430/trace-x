@@ -14,7 +14,7 @@
  * measurement instrument. A k6 on someone's PATH is whatever Homebrew installed
  * last week, and two runs of "the same" benchmark on different versions are not
  * comparable — but they look comparable, which is worse. The image is pinned by
- * tag AND digest in `pyproject.toml` `[tool.trace_x.tools]` (ADR-0038), for the
+ * tag AND digest in `pyproject.toml` `[tool.trace_x.tools]` (ADR-0036), for the
  * same reason the Python dependencies live in a hashed lockfile. The runner
  * refuses to use anything else.
  *
@@ -356,7 +356,7 @@ export default function () {
  * The default text summary is replaced rather than supplemented from
  * `https://jslib.k6.io/…`: fetching a helper over the network at run time would
  * make a pinned instrument depend on an unpinned remote, which is the exact
- * failure ADR-0038 pins the image to avoid. The short line printed here is for
+ * failure ADR-0036 pins the image to avoid. The short line printed here is for
  * the human watching; `scripts/load_gateway.py` renders the report.
  */
 export function handleSummary(data) {

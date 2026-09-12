@@ -65,7 +65,7 @@ def pins() -> dict[str, str]:
 
 
 def tool_images() -> dict[str, str]:
-    """Pinned container images for the non-Python tooling (ADR-0038)."""
+    """Pinned container images for the non-Python tooling (ADR-0036)."""
     data = tomllib.loads((ROOT / "pyproject.toml").read_text())
     return dict(data["tool"]["trace_x"].get("tools", {}))
 
@@ -290,7 +290,7 @@ def check_llm_tier(rep: Report) -> None:
 
 
 def check_tool_images(rep: Report) -> None:
-    """The pinned non-Python tools (ADR-0038).
+    """The pinned non-Python tools (ADR-0036).
 
     Reported as WARN rather than FAIL: both are pulled on demand by the target
     that needs them, and a developer running `make test-fast` should not be told
