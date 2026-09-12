@@ -76,6 +76,10 @@ Redis (hot) and Spark (warm) compute the same features by two different mechanis
 ADR-0002. The risk is silent divergence, so it is measured rather than trusted:
 
 - A **single feature definition module** declares each feature's semantics and `required_fields`.
+  From Phase 2 that declaration is machine-readable (ADR-0032): every feature carries a `semantics`
+  object naming its entity, stream, window and aggregation, so Phase 3 compiles the offline version
+  from the declaration rather than re-deriving the intent from prose. A shared module that shared only
+  Python closures would not have helped — a closure over a Redis client cannot be run by Spark.
 - The Gold → Redis **reconciliation job** writes authoritative values back to the online store.
 - **`feature_parity_drift{feature}`** is a first-class monitored metric.
 - An automated **parity test** (`pytest -m parity`) replays a 100 k-event stream through both paths and
@@ -83,6 +87,11 @@ ADR-0002. The risk is silent divergence, so it is measured rather than trusted:
   cardinality features and is documented per feature.
 - **Widening a tolerance to make the test pass is prohibited** — it converts a detected bug into a
   hidden one. Investigate the divergence instead.
+- **Most features are compared by equality, not tolerance.** ADR-0034 stores distinct counts exactly
+  wherever cardinality is bounded by one entity's own behaviour, so five of the seven distinct counts
+  have a parity tolerance of *zero*; only the two whose cardinality is bounded by a sharing
+  population, plus the robust z-score, are estimates. A tolerance is a declared property of a named
+  feature, never a global allowance.
 
 When the `streaming` profile is off, responses carry `X-Feature-Source: ONLINE_ONLY` so degradation is
 visible rather than silent.
