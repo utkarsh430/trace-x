@@ -24,6 +24,11 @@ recorded evidence.** Phase 0 remains complete; nothing in it was weakened.
 
 **One ROADMAP target is NOT met and is recorded as missed, not waived** — see TARGETS below.
 
+**CI has NOT run on this work.** Fifteen commits are unpushed (`origin/main` is at the Phase 1
+step-0 commit), so `make ci-status` reports no runs for `HEAD`. Everything above was verified locally,
+including the integration suite against a real PostgreSQL container. Pushing is a deliberate act and
+has not been taken; a reviewer should treat "CI green" as unestablished until it is.
+
 **Phase 2 has not begun and must not begin without explicit user approval.**
 
 ## COLD-START CHECKLIST (read this first in a new session)
@@ -31,7 +36,7 @@ recorded evidence.** Phase 0 remains complete; nothing in it was weakened.
 ```bash
 make setup      # venv + dev/db/obs/gen extras
 make verify     # expect: 10 passed, 0 failed  -> VERIFY OK
-make ci-status  # expect: all 4 workflows pass
+make ci-status  # currently reports NO runs for HEAD: the work is unpushed
 ```
 
 Docker is needed for the integration suite (`pytest -m integration`) and for `make seed` to write
