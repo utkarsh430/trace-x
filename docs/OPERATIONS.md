@@ -96,6 +96,40 @@ another — `tests/unit/test_compose_profiles.py` fails when the sum stops fitti
 hand — let the Spark reconciliation job rebuild them, then confirm `feature_parity_drift` settles.
 **Do not** treat the degraded window's decisions as normal-quality; they are flagged for review.
 
+### Redis full — eviction is quietly lowering scores
+
+**This presents as an availability problem and is a capacity problem.** Under memory pressure Redis
+slows, the 20 ms socket timeout fires, and the breaker reports the store unavailable — so the first
+symptom looks identical to a Redis outage and the wrong playbook gets opened.
+
+**Detect:** `online_store_memory_bytes` approaching `maxmemory`; `online_store_evicted_keys_total`
+rising at all. It should be **flat at zero** in normal operation — any sustained rise means feature
+state is being discarded. `degraded_mode_total{reason="redis_unavailable"}` climbing alongside it is
+the confirmation, not the cause.
+
+**Why it matters more than it looks.** An evicted feature key reads back empty, and an empty read is
+what an account with no history looks like. The feature resolves to `INSUFFICIENT_HISTORY`, the rules
+over it abstain, the score falls, and a transaction that should have been CRITICAL is approved with
+`degraded=false`. **Nothing in that decision says anything was lost.** The gauge is the only signal
+that separates "this account is new" from "we lost what we knew about it".
+
+**The three state classes share one eviction pool, and LRU cannot tell them apart** (ADR-0041):
+
+| class | keys | loss costs | authoritative elsewhere |
+|---|---|---|---|
+| feature state | `f:*` | **a wrong decision** | Delta, from Phase 3 |
+| replay cache | `idem` | a retry is re-scored, never duplicated | **Postgres** |
+| rate-limit windows | `rl` | a token briefly over budget; fails open | no |
+
+Measured: the replay cache was **37% of the keyspace** (1,596 bytes/key) while feature state is
+**970 bytes per request**. The cheapest class to lose was the largest consumer.
+
+**Action:** do not restart Redis — that discards the whole keyspace, which is the outcome being
+avoided. Reduce offered rate if it is a spike, or provision memory; feature state is rebuildable by
+the Phase 3 reconciliation job but does not rebuild itself. Treat decisions made during any eviction
+window as reduced-confidence even though they are not flagged degraded, because that is exactly the
+case the flag misses.
+
 ### Postgres unavailable
 **Detect:** connection errors; gateway 503; workers stop consuming.
 **Behaviour:** no work is lost — the queue lives in Postgres.
