@@ -64,12 +64,25 @@ def pins() -> dict[str, str]:
     return dict(data["tool"]["trace_x"]["pins"])
 
 
-def _run(cmd: list[str]) -> str:
+def _run(cmd: list[str]) -> tuple[int, str, str]:
+    """Run a command, returning (returncode, stdout, stderr).
+
+    The return code and the two streams are kept SEPARATE deliberately. An
+    earlier version merged them and discarded the code, which made a failed
+    command indistinguishable from a successful one that happened to print to
+    stderr -- and that masked a down Docker daemon (see check_docker).
+    """
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)  # noqa: S603
-        return (r.stdout + r.stderr).strip()
-    except (OSError, subprocess.SubprocessError):
-        return ""
+        return r.returncode, r.stdout.strip(), r.stderr.strip()
+    except (OSError, subprocess.SubprocessError) as exc:
+        return 127, "", str(exc)
+
+
+def _run_out(cmd: list[str]) -> str:
+    """Convenience for probes where only best-effort text matters."""
+    _, out, err = _run(cmd)
+    return out or err
 
 
 def check_python(rep: Report, want: str) -> None:
@@ -96,13 +109,13 @@ def check_java(rep: Report, want: str) -> None:
             required=False,
         )
         return
-    out = _run([exe, "-version"])
+    out = _run_out([exe, "-version"])
     m = re.search(r'version "?(\d+)', out)
     major = m.group(1) if m else "?"
     if major == want:
         rep.add("java", OK, f"Java {major} via {'JAVA_HOME' if java_home else 'PATH'}")
         return
-    hint = _run(["/usr/libexec/java_home", "-v", want]) if platform.system() == "Darwin" else ""
+    hint = _run_out(["/usr/libexec/java_home", "-v", want]) if platform.system() == "Darwin" else ""
     remedy = (
         f"Spark {pins()['spark']} supports Java 17/21 only — Java {major} WILL FAIL.\n"
         f"      Fix: export JAVA_HOME={hint or f'<path to Temurin {want}>'}"
@@ -163,26 +176,68 @@ def check_disk(rep: Report) -> None:
 
 
 def check_docker(rep: Report) -> None:
+    """Docker must be installed AND its daemon reachable.
+
+    Subtlety worth keeping: with the daemon down, `docker info --format` still
+    renders the template against a zero-valued struct and prints "0|0|" on
+    stdout while the real error goes to stderr. Testing the output shape alone
+    therefore reports a healthy daemon. The authoritative signals are the
+    RETURN CODE and a non-empty ServerVersion.
+
+    A down daemon is a FAIL, not a warning: `make up`, `make migrate` and the
+    release-blocking isolation suite all depend on it, and the point of doctor
+    is to surface that here with a fix rather than let a later command die
+    confusingly.
+    """
     if not shutil.which("docker"):
-        rep.add("docker", FAIL, "not installed", "Docker is required for `make up`.")
-        return
-    out = _run(["docker", "info", "--format", "{{.MemTotal}}|{{.NCPU}}|{{.ServerVersion}}"])
-    if "|" not in out:
         rep.add(
-            "docker", FAIL, "daemon unreachable", "Start Docker Desktop, then re-run `make doctor`."
+            "docker",
+            FAIL,
+            "not installed",
+            "Docker is required for `make up` and the integration suite.",
         )
         return
-    mem_s, cpus, ver = out.split("|")[:3]
-    mem_gb = int(mem_s) / 1024**3
+
+    code, out, err = _run(
+        ["docker", "info", "--format", "{{.MemTotal}}|{{.NCPU}}|{{.ServerVersion}}"]
+    )
+    parts = out.split("|")
+    version = parts[2].strip() if len(parts) >= 3 else ""
+
+    if code != 0 or not version:
+        detail = "daemon unreachable"
+        if "permission denied" in err.lower():
+            detail = "daemon unreachable (permission denied on the socket)"
+        rep.add(
+            "docker",
+            FAIL,
+            detail,
+            "Start Docker Desktop (or `colima start`), then re-run `make doctor`.\n"
+            "      `make up`, `make migrate` and `pytest -m integration` all require it.",
+        )
+        return
+
+    try:
+        mem_gb = int(parts[0]) / 1024**3
+        cpus = parts[1]
+    except (ValueError, IndexError):
+        rep.add(
+            "docker",
+            FAIL,
+            f"could not parse `docker info` output: {out[:60]!r}",
+            "Check the Docker installation, then re-run `make doctor`.",
+        )
+        return
+
     status = OK if mem_gb >= MIN_DOCKER_RAM_GB else WARN
     rep.add(
         "docker",
         status,
-        f"v{ver}, {mem_gb:.1f} GB RAM, {cpus} CPU",
+        f"v{version}, {mem_gb:.1f} GB RAM, {cpus} CPU",
         f"Raise Docker RAM to >= {MIN_DOCKER_RAM_GB} GB for the full profile."
         if status == WARN
         else "",
-        required=False,
+        required=status != WARN,
     )
 
 

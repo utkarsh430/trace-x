@@ -16,31 +16,73 @@ Gate: `docs/ROADMAP.md` § Phase 0.
 
 ## CURRENT STATUS
 
-**Phase 0 is 9/10 capabilities PASS.** The one outstanding item (CI execution) is blocked on a git
-remote, not on code.
+**Phase 0 implementation is complete. `make verify` is 8/8 green. 249 tests pass**
+(226 fast + 23 integration against real PostgreSQL).
 
-The engineering control plane — constitution, specifications, ADRs, acceptance tracking, developer
-command interface, bootstrap environment — is in place and **proven by executed commands**.
-230 tests pass (207 fast + 23 integration against real PostgreSQL).
+### Recovery after an unexpected machine shutdown (2026-09-12)
 
-**`make verify` currently reports 7 PASS / 1 FAIL.** The failure is the `doctor` disk check: the machine
-has **3.5 GB free on a 228 GB disk that is 99% full**, below the 6 GB floor the core profile needs. This
-is an environment condition, not a code defect — every other gate is green, and the threshold has
-deliberately **not** been lowered to make the check pass (CLAUDE.md §17 forbids silently reducing a
-requirement). This project's own footprint is 291 MB.
+The shutdown caused **no repository damage**. Verified, not assumed:
+
+| Check | Result |
+|---|---|
+| `git fsck` | clean |
+| Working tree vs `HEAD` | byte-identical; nothing partially written |
+| Tracked files modified after the last commit | none |
+| Zero-byte tracked files | only `eval/manifest/.gitkeep` (intentionally empty) |
+| `.env` | complete, all four role passwords present |
+| venv | intact; all 9 key modules import |
+| Stray containers / volumes | none |
+
+**The recovery pass found two real defects that predated the shutdown**, both now fixed with
+regression tests — see COMPLETED WORK.
+
+### Environment changes since the last session
+- **Disk: 3.5 GB → ~28 GB free.** The `doctor` disk check that was failing now passes. The threshold
+  was never lowered to force it green.
+- **Git remote added and pushed** (`origin/main` = local `HEAD`). CI has therefore actually executed.
+- Docker daemon was down after the shutdown; restarted for verification.
 
 **No TRACE-X product functionality exists yet.** No transaction processing, ML, streaming, agents or
 frontend code has been written, by instruction.
 
 ## LAST VERIFIED COMMIT
 
-`51c2af8` — *Complete Phase 0 implementation: migrations, observability, dependency lock*
+`fa048a6` — recovery baseline. Fixes made during recovery are committed on top; see git log.
 
-All results below were produced against this commit.
+All results below were produced after the recovery fixes.
 
 ---
 
 ## COMPLETED WORK
+
+### Defects found and fixed during shutdown recovery (2026-09-12)
+
+**1. `make doctor` passed while the Docker daemon was down.** With the daemon unreachable,
+`docker info --format` still renders the template against a zero-valued struct and prints `0|0|` on
+stdout, sending the real error to stderr. `check_docker` tested only the output shape, so it reported a
+healthy daemon and exited 0 — while `make up` would then fail confusingly, which is precisely what
+doctor exists to prevent. Two compounding causes: `_run()` merged stdout with stderr and discarded the
+return code, making a failed command indistinguishable from a successful one.
+
+*Fixed:* `_run()` now returns `(returncode, stdout, stderr)` separately; `check_docker` treats a
+non-zero code or an empty `ServerVersion` as a **required failure** with an actionable remedy, and
+reports a socket permission error specifically. 13 new tests in `tests/unit/test_doctor.py` — the
+doctor previously had none, which is why this survived.
+
+**2. CI `lint` was failing on `mypy` while `make verify` passed locally.** mypy's scope was extended to
+cover `migrations/` (which imports `alembic` and `sqlalchemy`), but neither `make setup` nor
+`lint.yml` was updated to install the `db` extra; the lazily-imported OTLP exporter needed `obs`
+likewise. Locally everything was already installed, so the drift was invisible.
+
+**This was worse than a CI-only problem: `make setup` installed only `.[dev]`, so a fresh clone running
+`make setup && make verify` would have failed mypy too — a direct violation of the Phase 0 exit
+criteria.** Reproduced in a throwaway venv built exactly as CI builds one (6 errors, 3 files) rather
+than diagnosed by inspection.
+
+*Fixed:* `make setup` and `lint.yml` both install `.[dev,db,obs]`, matching the other workflows.
+`tests/unit/test_toolchain_consistency.py` asserts that every extra mypy's declared scope needs is
+installed by **both** `make setup` and every workflow that runs mypy, so this drift cannot recur
+silently.
 
 ### Control-plane documents (12)
 `CLAUDE.md` (constitution) · `docs/ARCHITECTURE.md` · `docs/ROADMAP.md` · `docs/PROGRESS.md` ·
@@ -107,10 +149,12 @@ Spark job parameters. A missing collector never breaks the application.
 actually works. Its SHA-256 is the `env_lock_digest` field required by every evaluation run manifest
 (ADR-0017).
 
-### Test suite (203 tests, all passing)
+### Test suite (249 tests, all passing)
 | File | Tests | Covers |
 |---|---|---|
 | `tests/unit/test_version_pins.py` | 7 | Pin matrix; Java 17/21-only assertion; drift rejection |
+| `tests/unit/test_doctor.py` | 13 | **NEW** — daemon-down must FAIL not WARN; `_run` keeps code/streams separate; disk floors; Java 25 flagged |
+| `tests/unit/test_toolchain_consistency.py` | 6 | **NEW** — `make setup` and every mypy workflow install the extras mypy's scope needs |
 | `tests/unit/test_pii_redaction.py` | 13 | Email, PAN, IPv4/6, IBAN, account; nested structures; Luhn false-positive guard |
 | `tests/unit/test_claim_linter.py` | 12 | All five publication rules, each proven by a fabricated violation |
 | `tests/unit/test_control_plane.py` | 146 | Doc existence and substance; ADR format, alternatives, negative consequences; dangling-reference check |
@@ -143,7 +187,7 @@ Nothing in flight. This is a clean stopping point.
 | # | Item | Impact | When |
 |---|---|---|---|
 | ~~D1~~ | ~~No Alembic migration layer~~ | **RESOLVED** — Alembic owns schemas, roles and grants; round-trip verified against real PostgreSQL | done |
-| D2 | CI workflows written (`lint`, `test-fast`, `claims`, `test-integration`) but never executed on a real push | YAML validates; behaviour on a runner is unverified. **Cannot be resolved locally — needs a git remote** | Blocked on a remote |
+| D2 | CI execution | **Remote added and pushed; all four workflows have run.** `lint` failed on mypy (see recovery findings) and is fixed; awaiting a green run on the fix before `P0.ci` may be marked PASS | In progress |
 | ~~D3~~ | ~~No OpenTelemetry wiring~~ | **RESOLVED** — tracer/meter providers, W3C context propagation for non-HTTP hops, `trace_id` in every log line | done |
 | D4 | `compose.yml` declares `streaming`/`graph`/`llm` services that nothing consumes yet | Profile shape is reviewable but unexercised | Phases 3, 5, 6 |
 | D5 | `postgres:16` used instead of `postgres:16-alpine` | ~250 MB more disk; chosen because `postgres:16` was already local and disk is the binding constraint | Revisit if disk is freed |
@@ -159,10 +203,11 @@ Nothing in flight. This is a clean stopping point.
 
 | # | Risk | Status |
 |---|---|---|
-| R1 | **Disk: 3.5 GB free on a 228 GB disk at 99% capacity.** Below the 6 GB core-profile floor; Phase 3 needs ≥ 15 GB | **Open — `make doctor` now FAILS, not warns.** This project's footprint is 291 MB, so the space must come from elsewhere. ~1.9 GB of unused Docker images and ~1 GB of dangling Docker volumes belong to other projects and were deliberately left untouched |
-| R2 | **Java 25 is the system default**; Spark 4.0 requires Temurin 17 | Mitigated — `make doctor` detects it and prints the exact `JAVA_HOME` fix. Not yet blocking |
+| ~~R1~~ | ~~Disk below the core-profile floor~~ | **RESOLVED** — ~28 GB free. `make doctor` passes; enough for Phase 3's ~15 GB. The threshold was never lowered to force it green |
+| R2 | **Java 25 is the system default**; Spark 4.0 requires Temurin 17. `JAVA_HOME` is unset | Mitigated — `make doctor` detects it and prints the exact `JAVA_HOME` fix. **Blocks Phase 3 entry**, not current work |
 | R3 | Docker RAM ceiling 7.7 GB; the full profile budget is tight | Open — mitigated by profiles and per-service memory limits |
-| R4 | No AWS credentials on this machine | Open — blocks Phase 12 only. `P12.cloud-validation` is tracked as blocked |
+| R4 | No AWS credentials on this machine | Open — blocks Phase 12 only |
+| R8 | **Docker daemon does not survive a reboot unless Docker Desktop is set to start at login** | Open — `make doctor` now fails loudly with the fix, instead of passing and letting `make up` break confusingly |
 | R5 | IEEE-CIS (Track B) requires Kaggle credentials and a ~1.5 GB download | Open — blocks Phase 4B entry; `make fetch-external` fails with instructions |
 | R6 | Ollama not installed; `SMOKE` tier unavailable | Open — blocks Phase 6 keyless demo. `make doctor` warns |
 | R7 | Two transports (MCP + in-process) mean two places authorization could be wrong | Mitigated by design (single middleware chain, no unwrapped entrypoint); unproven until Phase 5 |
@@ -210,44 +255,52 @@ met and the user approves.
 
 ## LAST VERIFICATION RESULTS
 
-Recorded from an actual `make verify` run on 2026-09-10, after the migration, observability and
-lockfile work.
+Recorded from actual runs on 2026-09-12, after the shutdown-recovery fixes.
 
 ```
 TRACE-X verify
-  FAIL  doctor              disk 3.5 GB free, need >= 6.0 GB for the core profile
-                            (other doctor checks pass; 4 expected warnings:
-                             Java 25 vs Temurin 17, pyspark/delta not installed, ollama absent)
+  PASS  doctor              disk ~28 GB free; docker v29.2.1 reachable, 7.7 GB RAM, 10 CPU
+                            (2 expected warnings: Java 25 vs Temurin 17, pyspark/delta not installed)
   PASS  acceptance-status   58 capabilities, internally consistent
   PASS  check-claims        41 documents scanned, 0 manifests, no unbacked numeric claim
   PASS  ruff-format         clean
   PASS  ruff-lint           clean
-  PASS  mypy                clean, strict on trace_core (22 files, now incl. migrations/)
-  PASS  test-fast           207 passed
-  PASS  bandit              clean at MEDIUM+ (packages, scripts, eval, migrations)
+  PASS  mypy                clean, strict on trace_core (24 files, incl. migrations/)
+  PASS  test-fast           226 passed
+  PASS  bandit              clean at MEDIUM+
 ======================================================================
-  phase 0   7 passed   1 failed   0 skipped
-```
-
-**The single failure is a host resource condition.** It is reported rather than suppressed: lowering
-the disk floor to turn the gate green would be exactly the shortcut CLAUDE.md §17 prohibits.
-Freeing ~3 GB restores a fully green `make verify`; Phase 3 will need ~15 GB.
-
-Integration suite (real PostgreSQL 16 container, migrations applied by real Alembic):
-```
-  pytest -m integration    23 passed
+  phase 0   8 passed   0 failed   0 skipped     VERIFY OK
 ```
 
 Full suite:
 ```
-  pytest -m "not cloud"    230 passed
+  pytest -m "not cloud"    249 passed   (226 fast + 23 integration)
 ```
 
-Phase-gated commands correctly refuse to run:
+CI-equivalent environment (throwaway venv built exactly as the runner builds one):
 ```
-  make seed | demo | eval | eval-external | bench-layout   ->  exit non-zero
-  "PHASE NOT IMPLEMENTED ... requires Phase N ... repo is at Phase 0"
+  before the fix:  mypy -> 6 errors in 3 files (missing alembic, sqlalchemy, OTLP exporter)
+  after the fix:   mypy -> Success: no issues found in 23 source files
+```
+
+Live stack (`make up`, then torn down):
+```
+  startup                  6.4 s            (target < 90 s)
+  postgres + redis         both healthy     ports 5442 / 6389
+  migrations               auto-applied, alembic at 0001 (head)
+  core profile RSS         ~42 MiB          (target < 2.7 GB)
+  trace_app -> groundtruth ERROR: permission denied for schema groundtruth
+  trace_eval -> groundtruth permitted
+```
+
+GitHub Actions on `fa048a6` (the pre-fix commit):
+```
+  lint               FAILURE   <- mypy; root-caused and fixed during recovery
+  test-fast          success
+  claims             success
+  test-integration   success
 ```
 
 **Acceptance status: 9 PASS · 1 IN_PROGRESS · 48 NOT_STARTED · 0 FAIL · 0 BLOCKED** across 58 tracked
-capabilities. `tests/acceptance/status.json` is the authoritative machine-readable record.
+capabilities. `P0.ci` stays IN_PROGRESS until a green `lint` run lands on the fix — CI having *run* is
+not the same as CI *passing*. `tests/acceptance/status.json` is the authoritative record.
