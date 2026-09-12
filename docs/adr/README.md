@@ -38,6 +38,7 @@ been thought through.
 | [0024](0024-local-first-design.md) | Local-first design with profiled compose | 0 | Accepted |
 | [0025](0025-cloud-validation-strategy.md) | Cloud validation — complete IaC, one funded window, then destroy | 12 | Accepted |
 | [0026](0026-event-envelope-and-schema-evolution.md) | Event envelope, keying, backward-only schema evolution | 0 | Accepted |
+| [0027](0027-case-and-investigation-state-machines.md) | Case, investigation and agent state machines as validated transition tables | 1 | Accepted |
 
 ## Notes on status
 
