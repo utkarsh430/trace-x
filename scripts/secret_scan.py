@@ -39,6 +39,12 @@ EXCLUDE_FILES = (
     r"egg-info/",
     # 1800+ sha256 wheel hashes: high entropy by design, and public.
     r"^requirements\.lock$",
+    # Evaluation run records and dataset freeze manifests: machine-assembled
+    # files of sha256 digests and git SHAs, high entropy by design. Their field
+    # sets are fixed (no free-form content), and their own integrity is checked
+    # by scripts/check_claims.py and tests/unit/test_eval_v1_freeze.py.
+    r"^eval/manifest/",
+    r"^eval/track_a/.*\.manifest\.json$",
     # The event-contract release ledger: sha256 digests of committed schema
     # files, high entropy by design and public. It holds schema filenames,
     # partition keys and digests -- there is nowhere in its shape for a

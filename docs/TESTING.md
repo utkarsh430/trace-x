@@ -54,7 +54,7 @@ unimplemented regardless of how much code exists.
 | **Property** | `property` | hypothesis | State-machine legality, idempotency, feature monotonicity, **agent termination** | every commit |
 | **Contract (API)** | `contract` | schemathesis vs committed OpenAPI | Request/response conformance, breaking-change diff | every commit |
 | **Contract (events)** | `contract` | JSON-Schema round-trip + compat check | Producer/consumer compatibility, backward-compat gate | every commit |
-| **Conformance** | `conformance` | shared suites | `GraphStore` ×3, `LLMProvider` ×4, `ActionExecutor` ×2, `SourceAdapter` ×2 | every commit |
+| **Conformance** | `conformance` | shared suites | `GraphStore` ×3, `LLMProvider` ×4, `ActionExecutor` ×2, `SourceAdapter` ×2 *(one adapter from Phase 1, the second at Phase 4B — both run the same suite file, unmodified)* | every commit |
 | **Integration** | `integration` | testcontainers (PG, Redis, Kafka, Neo4j) | Repositories, streaming, tools — **real services, no mocks** | PR |
 | **Streaming recovery** | `integration`, `chaos` | testcontainers + kill | Checkpoint resume, no loss, no double-count | PR |
 | **Feature parity** | `parity` | pytest + Spark | Online (Redis) vs offline (Spark) on the same stream, tolerance-bounded | PR |
@@ -68,6 +68,15 @@ unimplemented regardless of how much code exists.
 | **Chaos** | `chaos` | toxiproxy + container kill | Every row of the failure model | pre-release |
 | **External data** | `external` | pytest + Spark | IEEE-CIS through unmodified medallion; no silent zero-imputation | PR (sampled) / nightly (full) |
 | **Cloud smoke** | `cloud` | live AWS/Databricks | One transaction → audit, in the cloud | Phase 12 window only |
+
+Two contract gates were added in Phase 1 and run inside `make verify`:
+
+- **codegen drift** — `scripts/generate_event_models.py --check` re-renders the event models into a
+  temporary directory and compares. Hermetic, so it gives the same answer on a dirty tree, in CI and
+  in a test; one definition with three callers.
+- **topic release gate** — no code may reference a topic whose schema has not been released, in either
+  direction. A released schema file is immutable, so freezing a contract before a producer exists
+  guarantees a `.v2` later.
 
 ```bash
 make test-fast   # unit + property + contract + conformance + transport_parity  (< 5 min, no services)

@@ -10,9 +10,11 @@ It is built to demonstrate **two** competencies that must both be genuine: produ
 (Kafka, Spark Structured Streaming, Delta Lake, Databricks) and production agentic AI (LangGraph, MCP
 tool boundaries, bounded autonomy, action safety). Neither is decoration for the other.
 
-> **Status: Phase 0 — Foundation.** The engineering control plane is in place and verified.
-> Product functionality has not been implemented yet. See [`docs/PROGRESS.md`](docs/PROGRESS.md) for
-> exact current state and [`docs/ROADMAP.md`](docs/ROADMAP.md) for the phase gates.
+> **Status: Phase 1 — Domain model, generator, ground truth, source adapters.** The domain layer,
+> the event contracts, the `SourceAdapter` port and the seeded fraud generator exist and are verified;
+> the frozen `eval-v1` dataset is reproducible from its committed manifest. The hot path, streaming,
+> ML and agents have not been implemented yet. See [`docs/PROGRESS.md`](docs/PROGRESS.md) for exact
+> current state and [`docs/ROADMAP.md`](docs/ROADMAP.md) for the phase gates.
 
 ---
 

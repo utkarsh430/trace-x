@@ -1,8 +1,8 @@
 {
   "$schema": "./status.schema.json",
   "project": "TRACE-X",
-  "current_phase": "0",
-  "current_phase_name": "Foundation & Constitution",
+  "current_phase": "1",
+  "current_phase_name": "Domain Model, Generator, Ground Truth, Source Adapters",
   "updated_at": "2026-09-12",
   "last_verified_commit": "aaf6f28",
   "legend": {
@@ -133,44 +133,44 @@
       "id": "P1.domain-model",
       "phase": "1",
       "name": "Domain entities and both state machines",
-      "status": "NOT_STARTED",
+      "status": "PASS",
       "evidence": {
         "command": "pytest -m property tests/unit/test_state_machines.py",
-        "verified_at": null,
-        "result": null
+        "verified_at": "2026-09-12",
+        "result": "pytest -m property tests/unit/test_state_machines.py: 40 passed. Three machines (case/investigation/agent_invocation) as validated transition tables; every illegal transition raises across the full state x event product; tables self-validate at import (dead-end state refused); EXECUTING provably has exactly two entry points; no side effect reachable without passing DECIDED; investigation table diffed edge-for-edge against the ARCHITECTURE.md \u00a78 mermaid block. ADR-0027."
       }
     },
     {
       "id": "P1.generator",
       "phase": "1",
       "name": "Deterministic transaction generator, 10 fraud scenarios",
-      "status": "NOT_STARTED",
+      "status": "PASS",
       "evidence": {
         "command": "make seed",
-        "verified_at": null,
-        "result": null
+        "verified_at": "2026-09-12",
+        "result": "make seed (run_id gen-20260912-eval-v1-ccfd38d9, clean worktree): 1,000,000 transactions, 5,003 fraudulent (realised 0.5003% vs 0.5% target), all 10 fraud patterns present, 125.3 MB Parquet (target <500MB), every row validated against its released JSON Schema. Digest sha256:0679d08a... reproduced exactly by a second independent run and by pytest -m slow test_eval_v1_freeze (full 1M-row regeneration). Generation rate 34,413 tx/s measured (run_id gen-20260912-bench-generation-e4c63451) -- BELOW the >=50k ROADMAP budget; recorded as xfail, not waived. See benchmarks/generator/REPORT.md."
       }
     },
     {
       "id": "P1.source-adapter",
       "phase": "1",
       "name": "SourceAdapter port with field_coverage, no silent imputation",
-      "status": "NOT_STARTED",
+      "status": "PASS",
       "evidence": {
         "command": "pytest -m conformance tests/conformance/test_source_adapter.py",
-        "verified_at": null,
-        "result": null
+        "verified_at": "2026-09-12",
+        "result": "pytest -m conformance tests/conformance/test_source_adapter.py: 31 passed. GeneratorAdapter against the shared SourceAdapterConformanceSuite that Phase 4B's IeeeCisAdapter must pass unmodified. Declared coverage checked against rows actually populated; a deliberately lying adapter proves the check can fail; uncovered fields asserted absent and never imputed to 0; label column named but never attached. ADR-0022."
       }
     },
     {
       "id": "P1.causal-evidence",
       "phase": "1",
       "name": "causal_evidence_keys written to groundtruth only",
-      "status": "NOT_STARTED",
+      "status": "PASS",
       "evidence": {
         "command": "pytest tests/integration/test_ground_truth_write_path.py",
-        "verified_at": null,
-        "result": null
+        "verified_at": "2026-09-12",
+        "result": "pytest tests/integration/test_ground_truth_write_path.py: 23 passed against real PostgreSQL 16. causal_evidence written only to the groundtruth schema by trace_generator, which CANNOT read back the labels it wrote (denied on all 3 label tables); trace_app/trace_stream/trace_auditor still denied with tables present (9 role x table combinations, 'permission denied for schema groundtruth'); trace_eval permitted; re-seed refused by UNIQUE; a failed write leaves no partial dataset. ADR-0031."
       }
     },
     {

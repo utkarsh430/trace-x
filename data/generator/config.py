@@ -12,6 +12,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+from collections.abc import Mapping
 from typing import Annotated, Final, Self
 
 from pydantic import Field, model_validator
@@ -86,6 +87,18 @@ class GeneratorConfig(StrictModel):
                 "account would share a device, which would swamp the device-farm signal"
             )
         return self
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, object]) -> GeneratorConfig:
+        """Build from a plain mapping, e.g. one parsed out of JSON.
+
+        Goes through JSON-mode validation deliberately. The models are strict,
+        and strictness differs between modes: in Python mode an ISO 8601 string
+        is not a datetime, so `GeneratorConfig(**parsed_json)` fails on
+        `start_at` and `end_at`. This exists so that trap is encountered once,
+        here, rather than at every call site that reads a committed config.
+        """
+        return cls.model_validate_json(json.dumps(dict(data), default=str))
 
     def canonical_json(self) -> str:
         """Stable serialisation: sorted keys, no incidental whitespace."""

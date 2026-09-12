@@ -12,283 +12,184 @@
 
 **Phase 1 — Domain Model, Generator, Ground Truth, Source Adapters** (mandatory)
 
-Gate: `docs/ROADMAP.md` § Phase 1. Approved implementation plan: 11 ordered steps, each leaving
-`make verify` green.
+Gate: `docs/ROADMAP.md` § Phase 1.
 
 ## CURRENT STATUS
 
-**Phase 1 is IN PROGRESS. Steps 0-3 of 11 are complete and committed. Steps 4-11 remain.**
+**Phase 1 is COMPLETE. All four Phase 1 capabilities PASS. All four exit conditions are met with
+recorded evidence.** Phase 0 remains complete; nothing in it was weakened.
 
-Phase 0 remains complete: all 10 Phase 0 capabilities still PASS and none was weakened.
+`make verify` is **10/10 green** (a `codegen-drift` gate was added, up from 9).
+**716 fast tests + 46 integration tests** pass, the integration suite against real PostgreSQL 16.
 
-`make verify` is **10/10 green** (a `codegen-drift` gate was added in step 3, up from 9).
-**478 fast tests pass** (was 234 at Phase 0 exit). Integration tests are unchanged and still require
-Docker.
+**One ROADMAP target is NOT met and is recorded as missed, not waived** — see TARGETS below.
 
-**No Phase 1 acceptance capability is PASS yet**, and none may be until its declared command is
-actually executed. `tests/acceptance/status.json` still shows all four Phase 1 capabilities as
-NOT_STARTED, which is accurate — the generator does not exist yet.
-
-### Phase 1 step ledger
-
-| Step | Scope | State | Commit |
-|---|---|---|---|
-| 0 | Toolchain prerequisites | **DONE** | `f1c1289` |
-| 1 | Domain enums, errors, money, time, identifiers, geo, entities | **DONE** | `680846c` |
-| 2 | Three state machines, ARCHITECTURE §19, ADR-0027 | **DONE** | `1194b7d` |
-| 3 | Event JSON Schemas, generated Pydantic, release ledger, ADR-0028 | **DONE** | `d7ace65` |
-| 4 | `CanonicalTransaction` + `SourceAdapter` + `GeneratorAdapter` + conformance suite | pending | — |
-| 5 | Feature `required_fields` / `UNAVAILABLE` mechanism | pending | — |
-| 6 | Generator core — deterministic, digest-reproducible (+ ADR) | pending | — |
-| 7 | The 10 fraud scenarios + `docs/FRAUD_SCENARIOS.md` (+ ADR) | pending | — |
-| 8 | Migration 0002, `groundtruth` tables, `trace_generator` role (+ ADR) | pending | — |
-| 9 | CLI + `make seed` + `GeneratorRunRecord` + claim-linter extension | pending | — |
-| 10 | Freeze `eval-v1` and commit its digest | pending | — |
-| 11 | Performance measurement, manual validation, docs, status.json | pending | — |
-
-### What steps 0-3 actually delivered
-
-**Step 0 — toolchain prerequisites, deliberately first.** Three defects would each have turned CI red
-the moment Phase 1 code landed:
-
-1. `.github/workflows/test-fast.yml` asserted that **`make seed` exits non-zero**. `make seed` is a
-   Phase 1 deliverable, so implementing it would have failed CI *on success*. The probe now points at
-   `make demo` (Phase 7), and a new test parses the phase-gated targets out of the Makefile and the
-   probed target out of the workflow, failing if the probe ever names a command whose phase has
-   landed. Verified it bites.
-2. mypy's `files` scope excluded `data/`, where CLAUDE.md §4 puts the generator and the adapters —
-   Phase 1's largest new surface would have been untyped by default. `data` is now in scope.
-3. New `gen` extra (pyarrow, jsonschema) plus `datamodel-code-generator` and `types-jsonschema` in
-   `dev`, added to `make setup`, all three mypy-running workflows and `make lock` **in the same
-   commit**, and registered in `test_toolchain_consistency`'s `SCOPE_REQUIREMENTS`.
-
-**Step 1 — domain layer.** Two real defects were found by the tests while writing them:
-
-- `Money.scaled` rounded negative ties the wrong way (Python's `divmod` floors; the tie-break assumed
-  truncation), so -2.5 rounded to -4. Fixed and cross-checked exhaustively against
-  `round(Fraction(...))` — zero mismatches across every sign and parity combination.
-- `to_millis` used `int(value.timestamp() * 1000)` and **lost a millisecond**. Found by a hypothesis
-  property test at 2038-02-01T00:00:00.022Z. Measured afterwards: the old expression was wrong on
-  **240 of 1000** millisecond offsets at that timestamp. Those milliseconds are the UUIDv7 prefix and
-  feed watermark arithmetic. Now exact integer arithmetic.
-
-**Step 2 — state machines.** Two findings:
-
-- **The case lifecycle did not exist.** ROADMAP cited `ARCHITECTURE.md` §13 for it and §12 for the
-  agent lifecycle; §12 is Action execution and §13 is Observability. It is now authored in
-  **ARCHITECTURE.md §19** with every edge derived from an existing authority, and the ROADMAP
-  cross-reference is corrected.
-- **The §8 investigation diagram has a modelling gap at `ROUTE`**: its only exit is `AGENT_SELECTED`,
-  but ADR-0019's `eligible(a)` predicate is routinely empty. Two edges added, declared in
-  `ADDED_EDGES`, with a test that diffs the table against the mermaid block in the doc. Stated
-  precisely: the literal §8 table is *structurally* valid, so this was not a dead end automated
-  validation would have caught — it was found by reading ADR-0019 against the diagram.
-
-**Step 3 — event contracts.** Three ingress topics released (`tx.raw.v1`, `identity.events.v1`,
-`device.events.v1`) plus the shared `envelope.v1`; the other six stay PLANNED because a released
-schema file is immutable. `docs/contracts/RELEASED.json` is the release ledger (schema, sha256,
-partition key, and the stated reason for that key). `make codegen --check` is hermetic and is called
-identically by `make verify`, CI and a contract test.
-
-### Known defect repaired during this session
-
-The step-3 commit was made with an **unquoted heredoc**, so backticks inside the message executed as
-shell commands and injected `make codegen`, `git status` and `make verify` output into the commit
-message. The commit *content* was correct; only the message was mangled. Repaired by `git commit
---amend` while still unpushed (`9f64554` → `d7ace65`). Commit messages are now written via a file,
-never an interpolating heredoc.
-
-### Environment changes since Phase 0 exit
-
-- `make verify` grew a tenth gate (`codegen-drift`).
-- New dependencies: `pyarrow`, `jsonschema` (`gen` extra), `datamodel-code-generator`,
-  `types-jsonschema` (`dev`). `requirements.lock` regenerated — its digest is `env_lock_digest` in
-  every run manifest (ADR-0017), so this is a recorded environment change.
-- **Three commits are unpushed** (`origin/main` is at `f1c1289`). CI has therefore not run on
-  steps 1-3.
-
-**Known environment gaps — still not blocking Phase 1:**
-`JAVA_HOME` unset and system Java is 25 (Spark 4.0 needs Temurin 17) — blocks **Phase 3**.
-Ollama not installed — blocks **Phase 6**. No AWS credentials — blocks **Phase 12**.
-**Docker is required to *exit* Phase 1** (the `P1.causal-evidence` acceptance command is an
-integration test against real PostgreSQL), even though it is not needed to *develop* it — the ROADMAP
-Phase 1 entry note is slightly incomplete on this point.
-
----
+**Phase 2 has not begun and must not begin without explicit user approval.**
 
 ## COLD-START CHECKLIST (read this first in a new session)
 
 ```bash
-make setup      # venv + dev/db/obs extras
-make verify     # expect: 9 passed, 0 failed  -> VERIFY OK
+make setup      # venv + dev/db/obs/gen extras
+make verify     # expect: 10 passed, 0 failed  -> VERIFY OK
 make ci-status  # expect: all 4 workflows pass
 ```
 
-If both pass, Phase 0 is intact and **Phase 1 may begin**. If either fails, fix that before any new
-work — the failure is the current task.
+Docker is needed for the integration suite (`pytest -m integration`) and for `make seed` to write
+ground truth. Everything else is pure Python.
 
 | Question a cold session will ask | Answer |
 |---|---|
-| What phase are we in? | Phase 0 **complete**. Phase 1 not started. |
-| What do I do next? | `docs/ROADMAP.md` § Phase 1 → **FIRST TASKS**, an ordered list of 8. |
-| What is already built? | Control plane only: docs, ADRs, tooling, migrations, observability scaffold. **No product code.** |
+| What phase are we in? | Phase 1 **complete**. Phase 2 not started. |
+| What do I do next? | Await approval for Phase 2 (`docs/ROADMAP.md` § Phase 2: hot path, gateway, rules, online features). |
+| What exists now? | Domain layer + 3 state machines, 4 released event schemas with generated Pydantic, `CanonicalTransaction` + `SourceAdapter` + `GeneratorAdapter`, the UNAVAILABLE mechanism, the seeded generator with 10 fraud scenarios, `groundtruth` tables + `trace_generator` role, `make seed`, frozen `eval-v1`. |
 | What must I never do? | `CLAUDE.md` §17, and §11 (ground-truth isolation) above all. |
-| Do I need Docker / Java / an API key? | Not for Phase 1. Docker only to re-run the Phase 0 integration suite. |
 | Where do I record results? | This file and `tests/acceptance/status.json` (which refuses `PASS` without evidence). |
 
-**Known environment gaps — not blocking Phase 1:**
+**Known environment gaps — not blocking Phase 2:**
 `JAVA_HOME` unset and system Java is 25 (Spark 4.0 needs Temurin 17) — blocks **Phase 3**.
 Ollama not installed — blocks **Phase 6**. No AWS credentials — blocks **Phase 12**.
-`gh` unauthenticated, so CI logs cannot be downloaded; failures are diagnosed by local reproduction.
 
 ---
 
 ## LAST VERIFIED COMMIT
 
-`aaf6f28` — **Phase 0 handoff commit. Phase 0 is complete and verified at this tree.**
+Phase 1 closes at the commit that immediately follows this file, which changes only documentation and
+`tests/acceptance/status.json`. Re-confirm in ~30 s with `make verify`.
 
-The stamp below is written by the commit that immediately follows and changes only this
-file and `tests/acceptance/status.json` — no code path differs. Re-confirm in ~10 s with
-`make verify`.
+---
 
-All results below were produced after the recovery fixes.
+## PHASE 1 EXIT CRITERIA — all met
+
+| # | Criterion | Status | Evidence |
+|---|---|---|---|
+| 1 | 10 scenarios implemented and documented | ✅ | `pytest tests/unit/test_scenarios.py` — 63 passed. Each signature asserted against the events actually produced. `docs/FRAUD_SCENARIOS.md` + ADR-0030; a test fails if the catalogue and the code disagree on causal keys |
+| 2 | Ground truth written only to `groundtruth` | ✅ | `pytest tests/integration/test_ground_truth_write_path.py` — 23 passed against real PostgreSQL. `trace_generator` can write and **cannot read back**; `trace_app`/`trace_stream`/`trace_auditor` denied across 9 role×table combinations *with tables present* |
+| 3 | Frozen `eval-v1` committed by digest | ✅ | `eval/track_a/eval-v1.manifest.json`. `pytest -m slow tests/unit/test_eval_v1_freeze.py` regenerates all 1,000,000 rows and the digest matches |
+| 4 | `SourceAdapter` port merged with ADR-0021 and ADR-0022 | ✅ | `pytest -m conformance tests/conformance/test_source_adapter.py` — 31 passed. Shared suite Phase 4B's second adapter must pass unmodified |
+
+## TARGETS — one met, one met, one **NOT met**
+
+| Target | Budget | Result |
+|---|---|---|
+| 1 M-row dataset in Parquet | under 500 MB | ✅ **met** (run_id: gen-20260912-eval-v1-ccfd38d9) |
+| Digest-reproducible | same seed ⇒ same digest | ✅ **met** — verified by an independent re-run and by full-size regeneration |
+| Single-process generation | at least 50 k tx/s | ❌ **NOT met** (run_id: gen-20260912-bench-generation-e4c63451) |
+
+### The throughput miss
+
+**The budget was not lowered to fit** (CLAUDE.md §17). The measured rate is recorded in the run
+record cited above and in `benchmarks/generator/REPORT.md`.
+
+Profiling attributes the cost to two deliberate decisions, both in ADR-0029: **per-row RNG
+substreams** (which is what makes generation order not part of the contract, so fraud injection does
+not reshuffle legitimate rows) and **canonical-JSON encoding for the dataset digest** (a digest over
+output bytes would change with a compression setting). ADR-0029 explicitly forbids recovering
+throughput by changing the RNG, because that would silently move every recorded dataset digest.
+
+A `load`-marked test asserts the budget and is marked `xfail`, so the gap stays visible in the test
+report and flips to a pass if it is ever closed. The recorded next step is the batched-substream
+scheme already named in ADR-0029's alternatives.
+
+**One genuine defect was found while measuring**, which is why measuring before publishing mattered:
+the pipeline encoded every row twice — once to validate and write, once again inside the digest —
+despite the sink module's docstring claiming a single serialisation. Fixed in `d5b5e20`.
 
 ---
 
 ## COMPLETED WORK
 
-### Defects found and fixed during shutdown recovery (2026-09-12)
+Eleven commits, each leaving `make verify` green.
 
-**1. `make doctor` passed while the Docker daemon was down.** With the daemon unreachable,
-`docker info --format` still renders the template against a zero-valued struct and prints `0|0|` on
-stdout, sending the real error to stderr. `check_docker` tested only the output shape, so it reported a
-healthy daemon and exited 0 — while `make up` would then fail confusingly, which is precisely what
-doctor exists to prevent. Two compounding causes: `_run()` merged stdout with stderr and discarded the
-return code, making a failed command indistinguishable from a successful one.
+### Step 0 — toolchain prerequisites, deliberately first
+Three defects would each have turned CI red the moment Phase 1 code landed:
+1. `test-fast.yml` asserted **`make seed` exits non-zero**. `make seed` is a Phase 1 deliverable, so
+   implementing it would have failed CI *on success*. Repointed at `make demo` (Phase 7), and guarded
+   by a new test that parses the phase-gated targets out of the Makefile and fails if the probe ever
+   names a command whose phase has landed.
+2. mypy's scope excluded `data/`, where CLAUDE.md §4 puts the generator — Phase 1's largest surface
+   would have been untyped by default.
+3. New `gen` extra plus codegen tooling, added to `make setup`, all mypy workflows and `make lock` in
+   one commit, and registered in `test_toolchain_consistency`.
 
-*Fixed:* `_run()` now returns `(returncode, stdout, stderr)` separately; `check_docker` treats a
-non-zero code or an empty `ServerVersion` as a **required failure** with an actionable remedy, and
-reports a socket permission error specifically. 13 new tests in `tests/unit/test_doctor.py` — the
-doctor previously had none, which is why this survived.
+### Step 1 — domain layer
+Enums split into **wire** (carry `UNKNOWN`) and **closed** (must not — an `UNKNOWN` on `ActionType`
+would give raw model output somewhere to land). `EventTime`/`ProcessingTime` are distinct NewTypes.
+Money is integer minor units. Two real defects found by the tests:
+- `Money.scaled` rounded negative ties the wrong way (`divmod` floors; the tie-break assumed
+  truncation), so −2.5 rounded to −4. Cross-checked exhaustively against `round(Fraction(...))`.
+- `to_millis` lost a millisecond to float imprecision, found by a hypothesis property test. Those
+  milliseconds are the UUIDv7 prefix and feed watermark arithmetic.
 
-**2. CI `lint` was failing on `mypy` while `make verify` passed locally.** mypy's scope was extended to
-cover `migrations/` (which imports `alembic` and `sqlalchemy`), but neither `make setup` nor
-`lint.yml` was updated to install the `db` extra; the lazily-imported OTLP exporter needed `obs`
-likewise. Locally everything was already installed, so the drift was invisible.
+### Step 2 — three state machines (ADR-0027)
+**The case lifecycle did not exist**: ROADMAP cited `ARCHITECTURE.md` §13, which is Observability. Now
+authored in **ARCHITECTURE.md §19** with every edge derived from an existing authority. **The §8
+investigation diagram had a modelling gap at `ROUTE`** — its only exit was `AGENT_SELECTED`, but
+ADR-0019's `eligible(a)` predicate is routinely empty. Two edges added and *declared*; a test diffs
+the table against the mermaid block and fails on undeclared divergence.
 
-**This was worse than a CI-only problem: `make setup` installed only `.[dev]`, so a fresh clone running
-`make setup && make verify` would have failed mypy too — a direct violation of the Phase 0 exit
-criteria.** Reproduced in a throwaway venv built exactly as CI builds one (6 errors, 3 files) rather
-than diagnosed by inspection.
+### Step 3 — event contracts (ADR-0028)
+Three ingress topics released plus the shared envelope; six stay PLANNED because a released schema is
+immutable. `docs/contracts/RELEASED.json` is the ledger (schema, sha256, partition key, and the stated
+*reason* for that key). `make codegen --check` is hermetic and called identically by verify, CI and a
+test.
 
-*Fixed:* `make setup` and `lint.yml` both install `.[dev,db,obs]`, matching the other workflows.
-`tests/unit/test_toolchain_consistency.py` asserts that every extra mypy's declared scope needs is
-installed by **both** `make setup` and every workflow that runs mypy, so this drift cannot recur
-silently.
+### Step 4 — `CanonicalTransaction`, `SourceAdapter`, `GeneratorAdapter` (ADR-0022)
+Coverage is enforced per row in one direction only: an undeclared field must be absent, while a
+declared field *may* be null on a given row — the distinction between "this source never provides it"
+and "this row happens to lack it". A deliberately lying adapter proves the conformance check can fail.
+Also corrected a **wrong claim in the base model's docstring**: pydantic strictness applies to both
+validation modes, so a dict parsed from JSON must be validated *as* JSON.
 
-**3. CI `lint` failed again after fix 2 — on a step the first failure had masked.** With mypy fixed,
-the job reached the *Secret scan* step, which had been skipped. Two defects there:
+### Step 5 — the UNAVAILABLE mechanism
+`FeatureValue.value` **raises** rather than returning a default, and the type exposes no `__float__`
+or arithmetic, so it cannot silently become 0.0. The registry refuses a feature declaring no
+`required_fields`.
 
-- `make secrets` and the CI step implemented the same control **two different ways**, and CI installed
-  the tool with a bare `pip install detect-secrets` — **unpinned**, while `requirements.lock` pins
-  1.5.0. A security gate whose behaviour depends on which machine runs it is not a gate.
-- **Secret scanning was in CI but not in `make verify`**, so a local run could pass while CI went red.
-  That is the structural reason this class of failure kept surprising us.
+### Steps 6–7 — the generator and ten scenarios (ADR-0029, ADR-0030)
+Deterministic substreams, a baseline with real diurnal/Zipf/lognormal shape, and ten scenarios whose
+signatures are asserted against produced events. Two defects caught by those tests:
+- **`IMPOSSIBLE_TRAVEL` did not enforce its own threshold.** An independently-drawn time gap produced
+  instances implying ordinary airline speed — a *wrong ground-truth label*, which nothing downstream
+  could detect. The gap is now derived from the distance.
+- **`fraud_rate` silently had no effect on small datasets**, because ten mandatory coverage instances
+  form a floor. Documented on the field and pinned by a test asserting the two *are* equal below it.
 
-*Fixed:* one shared `scripts/secret_scan.py` called identically by `make secrets`, `make verify` and
-CI, using the locked version and printing `file:line:type` so a failure explains itself without the CI
-log. `.env` is excluded (it holds local credentials by design) and replaced by a stronger control that
-asserts `.env` is gitignored and untracked. `requirements.lock` is excluded with a comment (1800+
-sha256 wheel hashes, high entropy by design, public). 9 tests in `tests/unit/test_secret_scan.py`,
-including a planted-credential test proving the scanner actually fails — one of which caught that the
-test file itself must not embed a literal key.
+### Step 8 — ground-truth write path (ADR-0031)
+A fifth role, `trace_generator`: INSERT on the label tables, SELECT on the dataset registry only. **It
+cannot read the labels it writes**, so no credential used in ordinary development can read ground
+truth. Isolation re-verified *with tables present*, which the Phase 0 test could not do. Adding the
+role broke three existing integration tests — all correct detections, all updated rather than loosened.
 
-`make verify` is now **9 gates**, up from 8.
+### Step 9 — CLI, `make seed`, and provenance
+`GeneratorRunRecord` fills the gap before ADR-0017's full manifest. The claim linter gained three
+checks because **it failed to catch a real number I published in ADR-0029 during step 6** — its
+throughput pattern required the words "throughput" or "sustained" nearby, so a rate slipped through.
+Now any per-second rate and dataset size is caught, a GENERATOR record cannot back a quality claim,
+and an incomplete record resolves nothing. Seven tests prove each rejection fires.
 
-### Control-plane documents (12)
-`CLAUDE.md` (constitution) · `docs/ARCHITECTURE.md` · `docs/ROADMAP.md` · `docs/PROGRESS.md` ·
-`docs/TESTING.md` · `docs/EVALUATION.md` · `docs/SECURITY.md` · `docs/API_CONTRACTS.md` ·
-`docs/EVENT_CONTRACTS.md` · `docs/DATA_ENGINEERING.md` · `docs/LOCAL_DEVELOPMENT.md` ·
-`docs/OPERATIONS.md`
+### Steps 10–11 — freeze, measure, document
+Parquet sink (the size target was previously unmeasurable), `eval-v1` frozen and reproduced at full
+size, distributions and fraud episodes inspected, docs and acceptance status updated.
 
-### Architecture Decision Records (26 + template + index)
-All major approved decisions recorded in `Context · Decision · Alternatives Considered · Consequences ·
-Status` format. 25 Accepted; **ADR-0015 deliberately remains `Proposed`** until the Phase 3 Delta layout
-benchmark produces committed evidence.
+---
 
-### Executable tooling
-| Command | What it does | Verified |
-|---|---|---|
-| `make doctor` | Asserts the version pin matrix, disk, Docker RAM, ports, LLM tier | ✅ exit 0; correctly flags Java 25 vs required Temurin 17 |
-| `make verify` | **Canonical health check** — doctor + acceptance + claims + lint + types + tests + bandit | ✅ see LAST VERIFICATION RESULTS |
-| `make check-claims` | Benchmark-integrity linter enforcing all five publication rules | ✅ exit 0; caught a real ambiguous line in `ARCHITECTURE.md` |
-| `make acceptance` | Machine-readable capability status | ✅ 58 capabilities tracked |
-| `make setup` / `up` / `down` / `lint` / `typecheck` / `test-fast` / `test` | Standard workflow | ✅ |
-| `seed`, `demo`, `eval`, `eval-external`, `e2e`, `bench-layout`, `fetch-external`, `pull-model` | Phase-gated | ✅ exit non-zero with an explicit phase message |
+## MANUAL VALIDATION PERFORMED
 
-### Bootstrap environment
-Python 3.12 venv, `pyproject.toml` with per-phase dependency extras (keeps bootstrap small on
-constrained disk), ruff / mypy / pytest / bandit / detect-secrets configuration, the version pin matrix
-declared once under `[tool.trace_x.pins]`, `.env.example` with working local defaults for every setting,
-profiled `docker compose` (`core` / `streaming` / `graph` / `llm`) with per-service memory limits and
-non-colliding ports (Postgres **5442**, Redis **6389**).
+ROADMAP Phase 1 requires generating 1 M transactions and inspecting distributions and a sample of each
+fraud pattern. Done, with the artefacts committed:
 
-### Database layer — Alembic owns schemas, roles and grants
-`migrations/versions/0001_schemas_roles_grants.py` is the **single source of truth**. The compose init
-script that previously duplicated the grant logic was removed: the grants *are* the ground-truth
-isolation control, and a control with two definitions can drift. A production deployment (RDS) has no
-init script either, so local and cloud follow one path. Role passwords are bound as query parameters
-and quoted server-side by `format(%L)` — no credential in any committed file.
+- `benchmarks/generator/eval-v1-distributions.md` — amounts (lognormal with a long right tail), hour
+  of day (a real overnight trough, peaks at midday and early evening), day of week (Friday highest,
+  Sunday lowest), channel mix, merchant country, MCC mix (everyday spend dominant, high-risk
+  categories present but uncommon), and merchant concentration (strongly skewed, not uniform).
+- `benchmarks/generator/eval-v1-fraud.md` — all ten patterns present with episode counts and the
+  recorded causal keys per pattern. **Produced by connecting as `trace_eval`**, the only role that may
+  read ground truth: the isolation control visible in ordinary tooling.
 
-**Executed against a live PostgreSQL 16 container:**
-
-| Check | Result |
-|---|---|
-| `trace_app` / `trace_stream` / `trace_auditor` reading `groundtruth` | ❌ denied — `permission denied for schema groundtruth` |
-| `trace_app` creating objects in `groundtruth` | ❌ denied |
-| Ground-truth values leaking through error output | ❌ none |
-| `trace_eval` reading `groundtruth` | ✅ permitted (the harness must measure) |
-| `trace_app` reading `app` schema | ✅ permitted (isolation must not break the app) |
-| `trace_app` INSERT into `audit` | ✅ permitted |
-| `trace_app` SELECT / UPDATE / DELETE on `audit` | ❌ denied — append-only at the database level |
-| `trace_app` `INSERT ... RETURNING` on `audit` | ❌ denied (RETURNING needs SELECT) — write-only is genuinely write-only |
-| `trace_auditor` reading what the app appended | ✅ permitted |
-| `alembic downgrade base` | ✅ removes all 5 schemas and all 4 roles (needs `DROP OWNED BY`) |
-| `alembic upgrade head` after downgrade | ✅ restores everything |
-
-This is the highest-severity control in the project: leakage would silently invalidate every metric.
-
-### Observability scaffold
-`configure_telemetry()` installs tracer and meter providers; `configure_logging()` installs a structlog
-chain whose **last processor before the renderer** is PII redaction, so nothing can introduce PII after
-it runs. Every log line inside a span carries `trace_id` and `span_id`. `carrier_inject`/`carrier_extract`
-carry W3C trace context across the hops nothing instruments for us — Kafka headers, MCP requests and
-Spark job parameters. A missing collector never breaks the application.
-
-### Dependency lock
-`requirements.lock` — 92 packages, fully hashed, generated with `--allow-unsafe` so a hashed install
-actually works. Its SHA-256 is the `env_lock_digest` field required by every evaluation run manifest
-(ADR-0017).
-
-### Test suite (249 tests, all passing)
-| File | Tests | Covers |
-|---|---|---|
-| `tests/unit/test_version_pins.py` | 7 | Pin matrix; Java 17/21-only assertion; drift rejection |
-| `tests/unit/test_doctor.py` | 13 | **NEW** — daemon-down must FAIL not WARN; `_run` keeps code/streams separate; disk floors; Java 25 flagged |
-| `tests/unit/test_toolchain_consistency.py` | 6 | **NEW** — `make setup` and every mypy workflow install the extras mypy's scope needs |
-| `tests/unit/test_secret_scan.py` | 9 | **NEW** — one shared definition, pinned tool version, planted credential is detected, `.env` untracked |
-| `tests/unit/test_pii_redaction.py` | 13 | Email, PAN, IPv4/6, IBAN, account; nested structures; Luhn false-positive guard |
-| `tests/unit/test_claim_linter.py` | 12 | All five publication rules, each proven by a fabricated violation |
-| `tests/unit/test_control_plane.py` | 146 | Doc existence and substance; ADR format, alternatives, negative consequences; dangling-reference check |
-| `tests/acceptance/test_acceptance_status.py` | 10 | PASS-requires-evidence rule; tooling refuses dishonest PASS |
-| `tests/integration/test_groundtruth_isolation.py` | 15 | Release-blocking isolation, against real PostgreSQL |
-
-**188 fast + 15 integration = 203 passed.**
-
-Two real defects were found and fixed by these tests during this session, which is the point of writing
-them first: the claim linter was over-applying tier gating to operational metrics (an obstructive rule
-gets bypassed) and was not recognising `e.g.` as example prose. Both are fixed and covered by
-regression tests.
+Judgement: the shapes are plausible for card spending, and each pattern's episodes match its documented
+signature. Note that the mix weights **episodes**, so patterns contributing many transactions each
+(velocity, rings) are a larger share of fraudulent *rows* than of *episodes* — expected, and visible in
+both reports.
 
 ---
 
@@ -296,11 +197,9 @@ regression tests.
 
 Nothing in flight. This is a clean stopping point.
 
----
-
 ## CURRENTLY FAILING TESTS
 
-**None.** Full results under LAST VERIFICATION RESULTS.
+**None.** One test is deliberately `xfail`: the generation-throughput budget, discussed above.
 
 ---
 
@@ -308,17 +207,15 @@ Nothing in flight. This is a clean stopping point.
 
 | # | Item | Impact | When |
 |---|---|---|---|
-| ~~D1~~ | ~~No Alembic migration layer~~ | **RESOLVED** — Alembic owns schemas, roles and grants; round-trip verified against real PostgreSQL | done |
-| ~~D2~~ | ~~CI execution~~ | **RESOLVED** — remote added, pushed, and all four workflows pass (`make ci-status`). Two red runs were root-caused and fixed, not waived | done |
-| ~~D3~~ | ~~No OpenTelemetry wiring~~ | **RESOLVED** — tracer/meter providers, W3C context propagation for non-HTTP hops, `trace_id` in every log line | done |
-| D4 | `compose.yml` declares `streaming`/`graph`/`llm` services that nothing consumes yet | Profile shape is reviewable but unexercised | Phases 3, 5, 6 |
-| D5 | `postgres:16` used instead of `postgres:16-alpine` | ~250 MB more disk; chosen because `postgres:16` was already local and disk is the binding constraint | Revisit if disk is freed |
-| D10 | No declarative SQLAlchemy models yet, so Alembic autogenerate is unused | Migrations are hand-written. Correct for the security-critical grants; will matter once tables arrive | Phase 1 |
-| D11 | CI job **logs** need repo-admin rights to download, so a CI-only failure cannot be read directly | Both CI failures this session had to be diagnosed by reproducing them locally. That is a healthier default, but it is slow. `gh auth login` would remove the friction | Optional |
-| ~~D6~~ | ~~No dependency lockfile~~ | **RESOLVED** — `requirements.lock`, 92 packages, hashed, installable; `env_lock_digest` is computable | done |
-| ~~D7~~ | ~~`make up-streaming` / `up-full` documented but undefined~~ | **RESOLVED** — both targets exist | done |
-| D8 | macOS Docker keychain credential helper hangs, blocking all registry pulls | Blocks `make up` on a cold image cache; workaround documented in `LOCAL_DEVELOPMENT.md` | Environment issue, not code |
-| D9 | Role passwords in `.env.example` are the literal `change_me_locally` | Fine locally; a real deployment must supply real values. Compose fails fast (`:?`) if any is unset, and the init script refuses to create passwordless roles | Before any shared deployment |
+| D4 | `compose.yml` declares `streaming`/`graph`/`llm` services nothing consumes yet | Profile shape reviewable but unexercised | Phases 3, 5, 6 |
+| D5 | `postgres:16` rather than `postgres:16-alpine` | ~250 MB more disk | Revisit if disk binds |
+| D8 | macOS Docker keychain helper hangs, blocking cold registry pulls | Workaround in `LOCAL_DEVELOPMENT.md` | Environment, not code |
+| D9 | Role passwords in `.env.example` are `change_me_locally` | Fine locally; a shared deployment must supply real values | Before any shared deployment |
+| D11 | CI job logs need repo-admin rights to download | CI-only failures are diagnosed by local reproduction | Optional (`gh auth login`) |
+| **D12** | **Generation throughput below the ROADMAP budget** | Slower dataset builds; no correctness impact. ADR-0029 names the batched-substream scheme as the first thing to try | Revisit if dataset size grows |
+| **D13** | `identity.events.v1` / `device.events.v1` are produced but nothing consumes them yet | The contracts are exercised by the generator only | Phase 3 |
+| ~~D1, D2, D3, D6, D7~~ | ~~Migrations, CI, OTel, lockfile, compose targets~~ | **RESOLVED in Phase 0** | done |
+| ~~D10~~ | ~~No declarative SQLAlchemy models, so autogenerate is unused~~ | Still true and still correct: migrations 0001 and 0002 are hand-written because they are security-critical grants. Re-evaluate when ordinary application tables arrive | Phase 2 |
 
 ---
 
@@ -326,14 +223,14 @@ Nothing in flight. This is a clean stopping point.
 
 | # | Risk | Status |
 |---|---|---|
-| ~~R1~~ | ~~Disk below the core-profile floor~~ | **RESOLVED** — ~28 GB free. `make doctor` passes; enough for Phase 3's ~15 GB. The threshold was never lowered to force it green |
-| R2 | **Java 25 is the system default**; Spark 4.0 requires Temurin 17. `JAVA_HOME` is unset | Mitigated — `make doctor` detects it and prints the exact `JAVA_HOME` fix. **Blocks Phase 3 entry**, not current work |
-| R3 | Docker RAM ceiling 7.7 GB; the full profile budget is tight | Open — mitigated by profiles and per-service memory limits |
-| R4 | No AWS credentials on this machine | Open — blocks Phase 12 only |
-| R8 | **Docker daemon does not survive a reboot unless Docker Desktop is set to start at login** | Open — `make doctor` now fails loudly with the fix, instead of passing and letting `make up` break confusingly |
-| R5 | IEEE-CIS (Track B) requires Kaggle credentials and a ~1.5 GB download | Open — blocks Phase 4B entry; `make fetch-external` fails with instructions |
-| R6 | Ollama not installed; `SMOKE` tier unavailable | Open — blocks Phase 6 keyless demo. `make doctor` warns |
-| R7 | Two transports (MCP + in-process) mean two places authorization could be wrong | Mitigated by design (single middleware chain, no unwrapped entrypoint); unproven until Phase 5 |
+| R2 | Java 25 is the system default; Spark 4.0 needs Temurin 17 | Mitigated — `make doctor` detects it. **Blocks Phase 3 entry** |
+| R3 | Docker RAM ceiling is tight for the full profile | Open — mitigated by profiles and per-service limits |
+| R4 | No AWS credentials | Open — blocks Phase 12 only |
+| R5 | IEEE-CIS needs Kaggle credentials and a ~1.5 GB download | Open — blocks Phase 4B entry |
+| R6 | Ollama not installed | Open — blocks Phase 6 keyless demo |
+| R7 | Two transports mean two places authorization could be wrong | Mitigated by design; unproven until Phase 5 |
+| R8 | Docker does not survive reboot unless set to start at login | Open — `make doctor` fails loudly |
+| **R9** | **The ten fraud typologies are an engineer's model, not a fraud analyst's ground truth** | Inherent to synthetic data, and precisely why Track B exists. No document may imply synthetic accuracy predicts real-world performance (CLAUDE.md §13) |
 
 ---
 
@@ -341,95 +238,48 @@ Nothing in flight. This is a clean stopping point.
 
 | # | Decision | Resolves at |
 |---|---|---|
-| U1 | **Delta table layout** — partitioning vs Z-order vs liquid clustering, locally and on Databricks | Phase 3, by benchmark. ADR-0015 stays `Proposed` until then |
-| U2 | Whether a 3B-class local model can complete investigations within budget | Phase 6. Fallback to a 7B-class model is documented in ADR-0016 |
-| U3 | Whether Neo4j outperforms `PostgresGraphStore` at this scale | Phase 9 Arm G ablation. Either answer is publishable |
-| U4 | Whether the Skeptic agent pays for its cost | Phase 9 Arm F ablation. A negative result will be published |
-| U5 | Whether LightGBM or XGBoost wins on measured PR-AUC | Phase 4. ADR-0011 chose LightGBM on operational grounds and says to revisit |
-| U6 | Whether Phase 13 (Go gateway) is worth doing | Phase 13 entry, against recorded Phase 2 p99 |
+| U1 | Delta table layout | Phase 3, by benchmark. ADR-0015 stays `Proposed` |
+| U2 | Whether a 3B-class local model can complete investigations within budget | Phase 6 |
+| U3 | Whether Neo4j outperforms `PostgresGraphStore` at this scale | Phase 9 Arm G |
+| U4 | Whether the Skeptic agent pays for its cost | Phase 9 Arm F — `UNUSUAL_LOCATION_DEVICE` was built deliberately ambiguous to give this ablation something real to measure |
+| U5 | LightGBM vs XGBoost on measured PR-AUC | Phase 4 |
+| U6 | Whether Phase 13 (Go gateway) is worth doing | Phase 13 entry |
 
 ---
 
-## PHASE 0 EXIT CRITERIA — all met
-
-| # | Criterion | Status | Evidence |
-|---|---|---|---|
-| 1 | All control-plane documents exist and are non-placeholder | ✅ | `pytest tests/unit/test_control_plane.py` — 146 passed (12 docs, 26 ADRs, no placeholders, no dangling ADR refs) |
-| 2 | `make verify` green | ✅ | 9/9 gates locally; 4/4 workflows green in CI (`make ci-status`) |
-| 3 | Ground-truth isolation test passing | ✅ | `pytest -m integration` — 23 passed against real PostgreSQL 16 with real Alembic |
-| 4 | Claim linter active | ✅ | `make check-claims` in `make verify` and in CI; 12 self-tests prove it rejects fabricated numbers |
-| 5 | ADRs merged | ✅ | 26 ADRs; ADR-0015 deliberately still `Proposed` pending its Phase 3 benchmark |
-
-Phase 0 targets also met: `make up` 6.4 s (target < 90 s), core RSS ~42 MiB (target < 2.7 GB),
-`test-fast` < 1 s (target < 5 min), and `make doctor` flags Java 25 loudly.
-
 ## NEXT EXECUTABLE TASKS
 
-**Phase 0 is closed.** The next action is a decision, not a task:
+**Phase 1 is closed.** The next action is a decision, not a task:
 
-1. **Await explicit user approval to begin Phase 1** — domain model, both state machines, event JSON
-   Schemas, `CanonicalTransaction` + `SourceAdapter` + `field_coverage`, the transaction generator with
-   all 10 fraud scenarios, and `causal_evidence_keys` written to `groundtruth` only.
+1. **Await explicit user approval to begin Phase 2** — `trace-gateway`, the Redis online feature store,
+   ~20 features, a declarative rule engine, `POST /v1/transactions`, idempotency, degraded mode, and
+   the committed OpenAPI.
 
-### Recommended before Phase 3 (not blocking Phase 1)
-- Set `JAVA_HOME` to Temurin 17 permanently. `JAVA_HOME` is currently unset and the system default is
-  Java 25, which Spark 4.0 does not support. `make doctor` warns.
-- Install Ollama and run `make pull-model` for the keyless `SMOKE` tier (needed from Phase 6).
-- Optionally `gh auth login`, so CI job logs can be read directly instead of reproduced locally (D11).
-
-### Optional, before Phase 3
-- Set `JAVA_HOME` to Temurin 17 permanently (`make doctor` warns; Spark 4.0 will fail on Java 25).
-- Install Ollama and `make pull-model` for the keyless `SMOKE` tier (needed from Phase 6).
+Phase 2 needs no new environment prerequisites beyond Docker, which is already in use.
 
 ---
 
 ## LAST VERIFICATION RESULTS
 
-Recorded from actual runs on 2026-09-12, after the shutdown-recovery fixes.
-
 ```
 TRACE-X verify
-  PASS  doctor              disk ~28 GB; docker v29.2.1 reachable, 7.7 GB RAM, 10 CPU
-                            (2 expected warnings: Java 25 vs Temurin 17, pyspark/delta absent)
+  PASS  doctor              disk ok; docker reachable
+                            (expected warnings: Java 25 vs Temurin 17, pyspark/delta absent, no Ollama)
   PASS  acceptance-status   58 capabilities, internally consistent
-  PASS  check-claims        40 documents scanned, 0 manifests, no unbacked numeric claim
+  PASS  check-claims        every published number resolves to a valid manifest
+  PASS  codegen-drift       generated event models match docs/contracts/events/
   PASS  ruff-format         clean
   PASS  ruff-lint           clean
-  PASS  mypy                clean, strict on trace_core (27 files, incl. migrations/)
-  PASS  test-fast           234 passed
+  PASS  mypy                clean, strict on trace_core
+  PASS  test-fast           716 passed
   PASS  bandit              clean at MEDIUM+
   PASS  secret-scan         detect-secrets 1.5.0, no findings
 ======================================================================
-  phase 0   9 passed   0 failed   0 skipped     VERIFY OK
+  phase 1   10 passed   0 failed   0 skipped     VERIFY OK
 ```
 
-Full suite: `pytest -m "not cloud"` — **257 passed** (234 fast + 23 integration).
+Integration suite against real PostgreSQL 16: **46 passed**.
+Full-size `eval-v1` regeneration (`pytest -m slow`): **digest reproduced exactly**.
 
-GitHub Actions (`make ci-status`) — **all 4 workflows pass**:
-```
-  claims  success | lint  success | test-fast  success | test-integration  success
-```
-
-CI history this session, which is the point of recording it:
-```
-  fa048a6  lint FAILURE   mypy: missing db/obs extras
-  bf38f45  lint FAILURE   secret scan: unpinned tool + duplicated definition (masked by the above)
-  03278d5  ALL GREEN
-```
-
-Fresh-clone validation (throwaway clone, no API keys, all key env vars unset):
-```
-  make setup && make doctor && make verify   ->  all pass
-```
-This is the check the `make setup` defect would have broken, so it is now run explicitly rather than
-assumed.
-
-Live stack (`make up`, then torn down):
-```
-  startup 6.4 s (target < 90 s) | postgres + redis healthy on 5442 / 6389
-  migrations auto-applied, alembic at 0001 (head) | core RSS ~42 MiB (target < 2.7 GB)
-  trace_app -> groundtruth: ERROR permission denied | trace_eval -> groundtruth: permitted
-```
-
-**Acceptance status: 10 PASS · 0 IN_PROGRESS · 48 NOT_STARTED · 0 FAIL · 0 BLOCKED** across 58 tracked
+**Acceptance status: 14 PASS · 0 IN_PROGRESS · 44 NOT_STARTED · 0 FAIL · 0 BLOCKED** across 58 tracked
 capabilities. `tests/acceptance/status.json` is the authoritative machine-readable record.

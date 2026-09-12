@@ -84,10 +84,13 @@ by handler logic.
 | `trace-worker` | `trace_app` | `app` RW, `audit` INSERT | consume `investigation.requested.v1`; produce `action.proposed.v1` |
 | `trace-stream` | `trace_stream` | `app` read-only | consume `tx.*`; produce Delta |
 | eval harness | `trace_eval` | `app` SELECT, **`groundtruth` SELECT**, `eval` RW, `external` RW | — |
+| generator (`make seed`) | `trace_generator` | `groundtruth` **INSERT only**; SELECT on the dataset registry alone | — |
 | migrations | `tracex_owner` | ALL | — |
 
 The gateway cannot read the evidence ledger. The worker cannot produce to `tx.raw.v1`. **Nothing but
-`trace_eval` can read `groundtruth`.**
+`trace_eval` can read `groundtruth`** — including `trace_generator`, which writes the labels and
+cannot read them back (ADR-0031). Combined with ADR-0004 that means **no credential used in
+ordinary development can read ground truth**, so a careless debugging session cannot surface a label.
 
 ### Plane C — agent capability tokens
 

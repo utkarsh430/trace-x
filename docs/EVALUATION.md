@@ -39,6 +39,22 @@ build if a Track-B `run_id` is cited beside an agent-quality metric.
 It is never regenerated in place. Any change produces `eval-v2` and a manifest-diff note; results across
 dataset versions are never compared without that note.
 
+*Status (Phase 1):* `eval-v1` exists. Its reproduction contract is
+`eval/track_a/eval-v1.manifest.json` — seed, full generator config, generator version, per-file
+digests, and the dataset digest the combination must produce. The dataset itself is **gitignored**, so
+the manifest is what is committed. `pytest -m slow tests/unit/test_eval_v1_freeze.py` regenerates every
+row and asserts the digest matches. Re-seeding an existing `dataset_version` is refused by a UNIQUE
+constraint in the database, not by an application check, so the refusal holds regardless of which
+writer runs.
+
+**Interim provenance before Phase 9.** The full 25-field `RunManifest` (ADR-0017) is a Phase 9
+deliverable, but Phase 1 already produces real measurements. A **`GeneratorRunRecord`** fills the gap:
+machine-assembled, written to the same `eval/manifest/` directory `make check-claims` resolves, and
+tagged `record_type: GENERATOR`. It carries the same discipline over a smaller surface — every field
+required, `dirty_worktree` recorded honestly, an incomplete record rejected rather than partially
+trusted. Because a generation run involves no model and no LLM tier, the claim linter **refuses to let
+one back a quality claim**: it can substantiate throughput and dataset size, and nothing else.
+
 **Ground-truth isolation is structural, not procedural.** Labels, `fraud_pattern` and
 `causal_evidence_keys` live in the Postgres schema `groundtruth`. `trace_app` — the role the
 application and every agent use — has **no grant on that schema at all**. Only `trace_eval` may read it,
