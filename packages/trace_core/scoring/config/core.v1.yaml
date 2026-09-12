@@ -1,0 +1,32 @@
+# =============================================================================
+# Risk banding thresholds — TRACE-X core v1
+#
+# Digest-pinned like the rule pack: every RiskDecision carries
+# `threshold_config_digest`, so a recorded decision names the operating point
+# that produced it rather than leaving it to be inferred from a deploy log.
+#
+# THESE ARE DECLARED, NOT FITTED. Phase 2 has no model and no access to labels --
+# the application role has no grant on the `groundtruth` schema at all
+# (ADR-0004), so fitting them here would be leakage by another route, and the
+# resulting numbers would be unpublishable anyway. Phase 4 selects an operating
+# point inside the evaluation harness, which may read ground truth because that
+# is its job, and records the selection against a run_id.
+#
+# They are therefore a STARTING POINT chosen so that a single strong rule can
+# reach HIGH on its own and a pair of weak ones cannot. Phase 4 will move them.
+# =============================================================================
+config_id: core
+version: 1.0.0
+description: >-
+  Initial declared banding thresholds for the rules-only hot path. Replaced by a
+  harness-selected operating point in Phase 4.
+
+# Lower bound of each band on the [0, 1] combined score. LOW is the implicit
+# floor; a score below `medium` is LOW.
+bands:
+  medium: 0.30
+  high: 0.60
+  critical: 0.85
+
+# Bands at or above this open an investigation (ARCHITECTURE.md §3).
+triage_at: HIGH

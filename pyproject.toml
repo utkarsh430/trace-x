@@ -63,7 +63,7 @@ where = ["packages"]
 # A wheel whose rules had to be supplied separately would be a gateway that
 # cannot boot, and the pack digest recorded on every decision would resolve to
 # nothing (ADR-0034).
-trace_core = ["py.typed", "rules/packs/*.yaml"]
+trace_core = ["py.typed", "rules/packs/*.yaml", "scoring/config/*.yaml"]
 
 # ----------------------------------------------------------------------------
 # Version pin matrix (ADR-0018). `make doctor` asserts these at runtime.
