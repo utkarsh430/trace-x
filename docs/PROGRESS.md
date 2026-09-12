@@ -84,6 +84,25 @@ than diagnosed by inspection.
 installed by **both** `make setup` and every workflow that runs mypy, so this drift cannot recur
 silently.
 
+**3. CI `lint` failed again after fix 2 — on a step the first failure had masked.** With mypy fixed,
+the job reached the *Secret scan* step, which had been skipped. Two defects there:
+
+- `make secrets` and the CI step implemented the same control **two different ways**, and CI installed
+  the tool with a bare `pip install detect-secrets` — **unpinned**, while `requirements.lock` pins
+  1.5.0. A security gate whose behaviour depends on which machine runs it is not a gate.
+- **Secret scanning was in CI but not in `make verify`**, so a local run could pass while CI went red.
+  That is the structural reason this class of failure kept surprising us.
+
+*Fixed:* one shared `scripts/secret_scan.py` called identically by `make secrets`, `make verify` and
+CI, using the locked version and printing `file:line:type` so a failure explains itself without the CI
+log. `.env` is excluded (it holds local credentials by design) and replaced by a stronger control that
+asserts `.env` is gitignored and untracked. `requirements.lock` is excluded with a comment (1800+
+sha256 wheel hashes, high entropy by design, public). 9 tests in `tests/unit/test_secret_scan.py`,
+including a planted-credential test proving the scanner actually fails — one of which caught that the
+test file itself must not embed a literal key.
+
+`make verify` is now **9 gates**, up from 8.
+
 ### Control-plane documents (12)
 `CLAUDE.md` (constitution) · `docs/ARCHITECTURE.md` · `docs/ROADMAP.md` · `docs/PROGRESS.md` ·
 `docs/TESTING.md` · `docs/EVALUATION.md` · `docs/SECURITY.md` · `docs/API_CONTRACTS.md` ·
@@ -155,6 +174,7 @@ actually works. Its SHA-256 is the `env_lock_digest` field required by every eva
 | `tests/unit/test_version_pins.py` | 7 | Pin matrix; Java 17/21-only assertion; drift rejection |
 | `tests/unit/test_doctor.py` | 13 | **NEW** — daemon-down must FAIL not WARN; `_run` keeps code/streams separate; disk floors; Java 25 flagged |
 | `tests/unit/test_toolchain_consistency.py` | 6 | **NEW** — `make setup` and every mypy workflow install the extras mypy's scope needs |
+| `tests/unit/test_secret_scan.py` | 9 | **NEW** — one shared definition, pinned tool version, planted credential is detected, `.env` untracked |
 | `tests/unit/test_pii_redaction.py` | 13 | Email, PAN, IPv4/6, IBAN, account; nested structures; Luhn false-positive guard |
 | `tests/unit/test_claim_linter.py` | 12 | All five publication rules, each proven by a fabricated violation |
 | `tests/unit/test_control_plane.py` | 146 | Doc existence and substance; ADR format, alternatives, negative consequences; dangling-reference check |

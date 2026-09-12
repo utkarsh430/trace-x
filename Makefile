@@ -99,9 +99,8 @@ lint: ## ruff format check + lint
 typecheck: ## mypy (strict on trace_core)
 	@$(VPY) -m mypy
 
-secrets: ## Secret scan (detect-secrets)
-	@$(VPY) -m detect_secrets scan --baseline .secrets.baseline 2>/dev/null \
-	  || $(VPY) -m detect_secrets scan > .secrets.baseline
+secrets: ## Secret scan — same definition CI runs
+	@$(VPY) scripts/secret_scan.py
 
 audit: ## Dependency vulnerability audit
 	@$(VPY) -m pip_audit --skip-editable || true

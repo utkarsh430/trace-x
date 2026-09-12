@@ -1,0 +1,145 @@
+"""Secret scan -- ONE definition, used identically by `make secrets` and CI.
+
+Written after a CI failure that could not be reproduced locally, because the
+Makefile target and the CI step implemented the same control two different ways
+and CI additionally installed the tool UNPINNED (`pip install detect-secrets`)
+while the lockfile pins 1.5.0. A security gate whose behaviour depends on which
+machine runs it is not a gate.
+
+This module therefore:
+  * uses the INSTALLED (locked) detect-secrets, never a fresh unpinned install
+  * reports the tool version and the scanned file count, so a failure explains
+    itself without needing the CI log
+  * prints every finding as file:line:type
+  * exits non-zero if and only if a finding survives the baseline
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import shutil
+import subprocess
+import sys
+from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+GIT = shutil.which("git") or "git"
+BASELINE = ROOT / ".secrets.baseline"
+
+# Paths that are never secrets but reliably trip entropy heuristics.
+EXCLUDE_FILES = (
+    r"\.venv/",
+    r"\.git/",
+    r"node_modules/",
+    r"\.mypy_cache/",
+    r"\.pytest_cache/",
+    r"\.ruff_cache/",
+    r"egg-info/",
+    # 1800+ sha256 wheel hashes: high entropy by design, and public.
+    r"^requirements\.lock$",
+    # A developer's local .env holds real local credentials BY DESIGN. It is
+    # gitignored and must never be committed -- which is asserted separately by
+    # check_env_is_not_committed(), a stronger control than scanning it.
+    r"^\.env$",
+)
+
+
+def tool_version() -> str:
+    try:
+        return version("detect-secrets")
+    except PackageNotFoundError:  # pragma: no cover - install is a hard requirement
+        print(
+            "detect-secrets is not installed. It is part of the `dev` extra;\n"
+            "run `make setup` rather than installing it ad hoc, so the version\n"
+            "matches requirements.lock.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2) from None
+
+
+def check_env_is_not_committed() -> list[str]:
+    """`.env` holds real local credentials; it must be gitignored and untracked.
+
+    This is the control that actually matters. Scanning the file's contents only
+    produces a guaranteed false positive for every developer.
+    """
+    problems: list[str] = []
+    tracked = subprocess.run(  # noqa: S603
+        [GIT, "ls-files", "--error-unmatch", ".env"],
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+    )
+    if tracked.returncode == 0:
+        problems.append(".env is TRACKED by git. It holds local credentials and must never be.")
+    ignored = subprocess.run(  # noqa: S603
+        [GIT, "check-ignore", "-q", ".env"], capture_output=True, cwd=ROOT
+    )
+    if ignored.returncode != 0:
+        problems.append(".env is not covered by .gitignore; add it before it gets committed.")
+    return problems
+
+
+def run_scan() -> dict:
+    cmd = [sys.executable, "-m", "detect_secrets", "scan", "--all-files"]
+    for pattern in EXCLUDE_FILES:
+        cmd += ["--exclude-files", pattern]
+    proc = subprocess.run(cmd, capture_output=True, text=True, cwd=ROOT, timeout=300)  # noqa: S603
+    if proc.returncode != 0:
+        print(f"detect-secrets exited {proc.returncode}", file=sys.stderr)
+        print(proc.stderr.strip()[:2000], file=sys.stderr)
+        raise SystemExit(proc.returncode)
+    try:
+        return json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        # This is the failure mode that produced an unexplained CI red.
+        print(f"detect-secrets did not emit valid JSON: {exc}", file=sys.stderr)
+        print(f"first 500 bytes of stdout:\n{proc.stdout[:500]!r}", file=sys.stderr)
+        raise SystemExit(2) from exc
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument(
+        "--update-baseline",
+        action="store_true",
+        help="write the current findings to .secrets.baseline (review the diff!)",
+    )
+    args = ap.parse_args()
+
+    print(f"secret-scan — detect-secrets {tool_version()}")
+
+    if env_problems := check_env_is_not_committed():
+        for problem in env_problems:
+            print(f"  FAIL {problem}", file=sys.stderr)
+        return 1
+
+    report = run_scan()
+    results: dict[str, list[dict]] = report.get("results", {})
+
+    if args.update_baseline:
+        BASELINE.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+        print(f"baseline written: {BASELINE.name} ({len(results)} file(s))")
+        return 0
+
+    if not results:
+        print("PASS — no potential secrets detected.")
+        return 0
+
+    print(f"\n{len(results)} file(s) with potential secrets:\n", file=sys.stderr)
+    for path, findings in sorted(results.items()):
+        for f in findings:
+            print(f"  {path}:{f.get('line_number')}: {f.get('type')}", file=sys.stderr)
+    print(
+        "\nIf a finding is a false positive, exclude the path in EXCLUDE_FILES "
+        "with a comment explaining why, or use a placeholder value. "
+        "Never commit a real credential (CLAUDE.md §9).",
+        file=sys.stderr,
+    )
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

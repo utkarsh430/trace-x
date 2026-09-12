@@ -63,6 +63,14 @@ else
   skip_gate "bandit" "dev deps not installed — run 'make setup'"
 fi
 
+# The same script CI runs. Secret scanning belongs in the canonical gate: it was
+# only in CI, so a local `make verify` could pass while CI went red.
+if [[ -x .venv/bin/python ]]; then
+  run_gate "secret-scan"       "$VPY" scripts/secret_scan.py
+else
+  skip_gate "secret-scan" "dev deps not installed — run 'make setup'"
+fi
+
 echo
 for r in "${RESULTS[@]}"; do
   IFS='|' read -r status name detail <<< "$r"

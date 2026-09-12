@@ -39,19 +39,11 @@ jobs:
       - name: bandit
         run: bandit -q -ll -c pyproject.toml -r packages scripts eval migrations
 
+      # Identical to `make secrets`. detect-secrets comes from the `dev` extra
+      # installed above, so CI uses the version requirements.lock pins -- never a
+      # fresh unpinned install, which made CI and local disagree.
       - name: Secret scan
-        run: |
-          pip install detect-secrets
-          detect-secrets scan --all-files \
-            --exclude-files '\.venv/' --exclude-files 'uv\.lock' > /tmp/secrets.json
-          python - <<'PY'
-          import json, sys
-          found = json.load(open("/tmp/secrets.json")).get("results", {})
-          if found:
-              print("Potential secrets detected:", *found, sep="\n  ")
-              sys.exit(1)
-          print("No secrets detected.")
-          PY
+        run: python scripts/secret_scan.py
 
       - name: Dependency audit
         run: |
