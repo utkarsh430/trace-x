@@ -15,12 +15,14 @@ someone wondering why a topic is empty.
 from __future__ import annotations
 
 import gzip
+import json
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final, Protocol
 
 from data.generator.digest import DatasetDigest, canonical_bytes
+from trace_core.contracts.topics import partition_key
 from trace_core.domain.errors import MissingDependencyError, SchemaValidationError
 
 TOPIC_SUFFIX: Final = ".jsonl"
@@ -220,7 +222,14 @@ class ParquetSink:
 
 @dataclass
 class KafkaSink:
-    """Publish to Kafka. Requires the `stream` extra and a running broker."""
+    """Publish to Kafka. Requires the `stream` extra and a running broker.
+
+    **Keyed, always.** An earlier version produced with `value=` alone, which
+    round-robins the partitions and silently voids the per-key ordering the
+    release ledger asserts. The key now comes from
+    `trace_core.contracts.topics`, which is diffed against that ledger, and a
+    row whose key cannot be resolved raises instead of being published unkeyed.
+    """
 
     bootstrap_servers: str
     _producer: Any = None
@@ -235,7 +244,12 @@ class KafkaSink:
         self._producer = Producer({"bootstrap.servers": self.bootstrap_servers})
 
     def write(self, topic: str, payload: bytes) -> None:
-        self._producer.produce(topic, value=payload)
+        # The key is re-read from the encoded bytes rather than threaded through
+        # the Sink protocol: `write(topic, payload)` is the contract every sink
+        # shares, and widening it for one implementation would push Kafka's
+        # concern into the JSONL and Parquet sinks too.
+        key = partition_key(topic, json.loads(payload))
+        self._producer.produce(topic, key=key.encode(), value=payload)
         self._producer.poll(0)
 
     def close(self) -> None:

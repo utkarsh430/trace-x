@@ -40,6 +40,10 @@ dev = [
   "detect-secrets>=1.5",
   "datamodel-code-generator>=0.25",
   "types-jsonschema>=4.21",   # contract tests validate the committed schemas
+  # Phase 2: property-based contract testing against the committed OpenAPI
+  # (docs/TESTING.md §3). It drives the real app, so it lives in `dev` rather
+  # than `api` -- CI runs it, a deployment never does.
+  "schemathesis>=3.25,<4",
 ]
 
 [build-system]
@@ -69,10 +73,24 @@ delta = "4.0.1"
 hadoop = "3.4"        # Delta 4.0.1 + Spark 4.0.1 require Hadoop 3.4.x
 scala = "2.13"
 
+# ----------------------------------------------------------------------------
+# Non-Python tooling, pinned as container images (ADR-0038).
+#
+# These are gates and measurement instruments, so an unpinned version would
+# silently change either what CI rejects or what a benchmark reports. Pinned by
+# tag AND digest: a tag can be moved, a digest cannot. Delivered as images rather
+# than as binaries on PATH so no developer's globally-installed version can
+# disagree with CI's -- the same reasoning that put Python dependencies in a
+# hashed lockfile.
+# ----------------------------------------------------------------------------
+[tool.trace_x.tools]
+oasdiff = "tufin/oasdiff:v1.11.7@sha256:d6f1e645251cc1da527311955347d8ce8bd2b7ed09bcce07176b2577b8daf19c"
+k6 = "grafana/k6:0.49.0@sha256:8cd78f9d0de5f50bc8821cceecf356d5d9e839e6611c226a3fcf13c591080fbd"
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-src = ["packages", "scripts", "tests", "eval", "mcp_servers", "data"]
+src = ["packages", "scripts", "tests", "eval", "mcp_servers", "data", "services"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "SIM", "ARG", "PTH", "RUF", "S", "T20"]
@@ -108,7 +126,7 @@ warn_unused_ignores = true
 no_implicit_optional = true
 strict_equality = true
 # `eval` is added once the harness has Python modules (Phase 9).
-files = ["packages", "scripts", "tests", "migrations", "data"]
+files = ["packages", "scripts", "tests", "migrations", "data", "services"]
 # `tests/conformance/` is a real package (it holds shared suites that concrete
 # test modules subclass), while `tests/` itself is not. Without an explicit base
 # mypy cannot decide whether that file is `source_adapter_suite` or

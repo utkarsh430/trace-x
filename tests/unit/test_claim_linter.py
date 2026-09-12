@@ -53,8 +53,10 @@ def linter(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 def _manifest(**over: object) -> dict:
     base = {
         "run_id": "run-abc123",
+        "record_type": "EVAL",
         "track": "SYNTHETIC",
         "llm_tier": "EVAL",
+        "git_commit_sha": "0" * 40,
         "dirty_worktree": False,
     }
     base.update(over)
@@ -221,3 +223,93 @@ def test_target_prose_is_still_exempt(linter) -> None:
     """A budget is not a measured result. Gating it would be obstructive, and an
     obstructive rule gets worked around."""
     assert linter("The target is at least 50,000 tx/s single-process.") == []
+
+
+# --- Phase 2: load-test records --------------------------------------------
+#
+# The gap these close: `incomplete_fields` previously returned an empty list for
+# every record type that was not GENERATOR, so a record could substantiate a
+# published p99 simply by declaring a type nobody had defined requirements for.
+# Phase 2's exit condition is a committed load report with real measured
+# numbers, which makes that hole load-bearing.
+
+
+def _loadtest_record(**over: object) -> dict:
+    base: dict = {
+        "run_id": "load-20260912-gateway-abcd1234",
+        "record_type": "LOADTEST",
+        "track": "SYNTHETIC",
+        "git_commit_sha": "0" * 40,
+        "dirty_worktree": False,
+        "env_lock_digest": "sha256:" + "c" * 64,
+        "python_version": "3.12.0",
+        "started_at": "2026-09-12T10:00:00Z",
+        "finished_at": "2026-09-12T10:10:00Z",
+        "service": "trace-gateway",
+        "service_version": "0.1.0",
+        "tool": "k6",
+        "tool_version": "v0.49.0",
+        "target_tps": 500,
+        "duration_s": 600,
+        "rule_pack_digest": "sha256:" + "d" * 64,
+        "threshold_config_digest": "sha256:" + "e" * 64,
+        "feature_set_version": "1.0.0",
+        "degraded_mode": False,
+        "measured": {"p99_ms": 42.0, "p50_ms": 7.0, "http_5xx": 0},
+    }
+    base.update(over)
+    return base
+
+
+LOAD_CITED = "(run_id: load-20260912-gateway-abcd1234)"
+
+
+def test_a_latency_number_with_a_complete_loadtest_record_passes(linter) -> None:
+    assert linter(f"Measured p99 was 42 ms {LOAD_CITED}.", _loadtest_record()) == []
+
+
+def test_an_incomplete_loadtest_record_cannot_back_a_latency_number(linter) -> None:
+    """Without the rule-pack digest a p99 cannot be attributed to the behaviour
+    that produced it, so the record substantiates nothing."""
+    record = _loadtest_record()
+    del record["rule_pack_digest"]
+    violations = linter(f"Measured p99 was 42 ms {LOAD_CITED}.", record)
+    assert violations
+    assert any("missing" in v and "rule_pack_digest" in v for v in violations)
+
+
+def test_a_loadtest_record_cannot_back_a_quality_claim(linter) -> None:
+    """A load run exercises a service; it trains and scores no model."""
+    violations = linter(f"PR-AUC was 0.91 {LOAD_CITED}.", _loadtest_record())
+    assert violations
+    assert any("LOADTEST record" in v for v in violations)
+
+
+def test_an_unknown_record_type_cannot_back_anything(linter) -> None:
+    """The hole itself: a type with no declared requirements must not resolve.
+
+    Before this, `record_type: "WHATEVER"` skipped completeness checking
+    entirely and any number citing it passed.
+    """
+    violations = linter(
+        f"Measured p99 was 42 ms {LOAD_CITED}.",
+        _loadtest_record(record_type="WHATEVER"),
+    )
+    assert violations
+    assert any("no declared required fields" in v for v in violations)
+
+
+def test_a_record_with_no_record_type_cannot_back_anything(linter) -> None:
+    record = _loadtest_record()
+    del record["record_type"]
+    violations = linter(f"Measured p99 was 42 ms {LOAD_CITED}.", record)
+    assert violations
+    assert any("no declared required fields" in v for v in violations)
+
+
+def test_a_dirty_worktree_loadtest_record_cannot_back_a_number(linter) -> None:
+    violations = linter(
+        f"Measured p99 was 42 ms {LOAD_CITED}.", _loadtest_record(dirty_worktree=True)
+    )
+    assert violations
+    assert any("dirty worktree" in v for v in violations)

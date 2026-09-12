@@ -39,9 +39,10 @@ setup: ## Create venv and install dev + core dependencies
 	@test -d $(VENV) || $(PY) -m venv $(VENV)
 	@$(VPIP) install --quiet --upgrade pip setuptools wheel
 	@# Must cover every extra mypy's `files` scope imports (migrations -> db,
-	@# the lazily-imported OTLP exporter -> obs). Installing less means a fresh
-	@# clone fails `make verify` on mypy. Asserted by test_toolchain_consistency.
-	@$(VPIP) install --quiet -e ".[dev,db,obs,gen]"
+	@# the lazily-imported OTLP exporter -> obs, services/ -> api). Installing
+	@# less means a fresh clone fails `make verify` on mypy. Asserted by
+	@# test_toolchain_consistency.
+	@$(VPIP) install --quiet -e ".[dev,db,obs,gen,api]"
 	@test -f .env || (cp .env.example .env && echo "  created .env from template")
 	@echo "setup complete — run 'make doctor' next"
 

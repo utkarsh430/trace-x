@@ -64,6 +64,12 @@ def pins() -> dict[str, str]:
     return dict(data["tool"]["trace_x"]["pins"])
 
 
+def tool_images() -> dict[str, str]:
+    """Pinned container images for the non-Python tooling (ADR-0038)."""
+    data = tomllib.loads((ROOT / "pyproject.toml").read_text())
+    return dict(data["tool"]["trace_x"].get("tools", {}))
+
+
 def _run(cmd: list[str]) -> tuple[int, str, str]:
     """Run a command, returning (returncode, stdout, stderr).
 
@@ -283,6 +289,46 @@ def check_llm_tier(rep: Report) -> None:
         )
 
 
+def check_tool_images(rep: Report) -> None:
+    """The pinned non-Python tools (ADR-0038).
+
+    Reported as WARN rather than FAIL: both are pulled on demand by the target
+    that needs them, and a developer running `make test-fast` should not be told
+    their environment is broken because they have not yet run a load test. What
+    would be a real failure is an UNPINNED tool, and that cannot happen here --
+    the pin lives in pyproject.toml and is asserted by a unit test.
+    """
+    images = tool_images()
+    if not images:
+        rep.add("tool_images", FAIL, "no pinned tool images declared in pyproject.toml")
+        return
+    if not shutil.which("docker"):
+        rep.add(
+            "tool_images",
+            WARN,
+            f"{len(images)} pinned image(s) declared; docker not found",
+            "Needed for `make contracts-check` (Phase 2) and `make load-gateway`.",
+            required=False,
+        )
+        return
+    missing = []
+    for name, ref in sorted(images.items()):
+        rc, _out, _err = _run(["docker", "image", "inspect", ref])
+        if rc != 0:
+            missing.append(name)
+    rep.add(
+        "tool_images",
+        OK if not missing else WARN,
+        f"{len(images)} pinned: {', '.join(sorted(images))}"
+        + (f" (not pulled: {', '.join(missing)})" if missing else ""),
+        "They are pulled by the target that uses them; `docker pull` them ahead of time "
+        "to avoid a first-run delay."
+        if missing
+        else "",
+        required=False,
+    )
+
+
 def check_env_file(rep: Report) -> None:
     if (ROOT / ".env").exists():
         rep.add("env", OK, ".env present")
@@ -308,6 +354,7 @@ def main() -> int:
     check_disk(rep)
     check_docker(rep)
     check_ports(rep)
+    check_tool_images(rep)
     check_env_file(rep)
     check_llm_tier(rep)
 

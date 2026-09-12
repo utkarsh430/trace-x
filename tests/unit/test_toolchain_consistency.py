@@ -35,6 +35,12 @@ SCOPE_REQUIREMENTS = {
     # drift is only invisible on a machine that already has them installed.
     "pyarrow": "gen",
     "jsonschema": "gen",
+    # Phase 2 put `services/` (the thin ASGI entrypoints, CLAUDE.md S4) into
+    # mypy's scope, and `trace_core.repositories` imports the Redis and psycopg
+    # drivers. Added with the scope change rather than after it, for the reason
+    # this module exists.
+    "fastapi": "api",
+    "redis": "db",
 }
 
 EXTRAS_RE = re.compile(r'install[^\n]*-e\s+"\.\[([a-z,\s]+)\]"')
@@ -56,6 +62,11 @@ def test_mypy_scope_is_declared(pyproject: dict) -> None:
     assert "data" in files, (
         "the generator and the source adapters live under data/ (CLAUDE.md S4); "
         "outside mypy's scope they would be the largest untyped surface in the repo"
+    )
+    assert "services" in files, (
+        "the service entrypoints live under services/ (CLAUDE.md S4). They are thin, "
+        "but they are where request handling and dependency wiring live -- exactly "
+        "the code an untyped gap would hide a defect in"
     )
 
 

@@ -82,35 +82,90 @@ AGENT_METRIC = re.compile(
 )
 
 
-# A generator run record must carry all of these to resolve a citation. Same
-# discipline as ADR-0017's full manifest, smaller surface: a number whose
-# provenance is incomplete is indistinguishable from one that was invented.
-GENERATOR_REQUIRED = (
+# Required fields per record type. Same discipline as ADR-0017's full manifest,
+# smaller surface: a number whose provenance is incomplete is indistinguishable
+# from one that was invented.
+_SHARED_REQUIRED = (
     "run_id",
     "record_type",
     "track",
     "git_commit_sha",
     "dirty_worktree",
+    "env_lock_digest",
+    "python_version",
+    "started_at",
+    "finished_at",
+    "measured",
+)
+
+GENERATOR_REQUIRED = (
+    *_SHARED_REQUIRED,
     "generator_version",
     "seed",
     "fraud_scenario_config_digest",
     "dataset_version",
     "dataset_digest",
     "row_count",
-    "env_lock_digest",
-    "python_version",
-    "started_at",
-    "finished_at",
     "validation_policy",
-    "measured",
 )
+
+# A load run measures a SERVICE, so its provenance is the service's resolved
+# configuration, not a dataset's. Without the rule pack and threshold digests a
+# recorded p99 cannot be attributed to the behaviour that produced it, and
+# without the tool version and target load it cannot be compared to the next run.
+LOADTEST_REQUIRED = (
+    *_SHARED_REQUIRED,
+    "service",
+    "service_version",
+    "tool",
+    "tool_version",
+    "target_tps",
+    "duration_s",
+    "rule_pack_digest",
+    "threshold_config_digest",
+    "feature_set_version",
+    "degraded_mode",
+)
+
+# The full 25-field RunManifest is a Phase 9 deliverable (ADR-0017). Declared
+# here with only the fields THIS LINTER depends on, so an evaluation record is a
+# recognised type rather than an unknown one -- Phase 9 extends the tuple when it
+# defines the manifest. Deliberately not guessed at in full: a required-field
+# list invented before the thing it describes exists would have to be rewritten,
+# and would give a false impression of having been reviewed.
+EVAL_REQUIRED = (
+    "run_id",
+    "record_type",
+    "track",
+    "git_commit_sha",
+    "dirty_worktree",
+    "llm_tier",
+)
+
+REQUIRED_BY_TYPE: dict[str, tuple[str, ...]] = {
+    "GENERATOR": GENERATOR_REQUIRED,
+    "LOADTEST": LOADTEST_REQUIRED,
+    "EVAL": EVAL_REQUIRED,
+}
 
 
 def incomplete_fields(manifest: dict[str, object]) -> list[str]:
-    """Required fields a manifest is missing, for its record type."""
-    if str(manifest.get("record_type", "")).upper() != "GENERATOR":
-        return []
-    return [f for f in GENERATOR_REQUIRED if manifest.get(f) is None or manifest.get(f) == ""]
+    """Required fields a manifest is missing, for its record type.
+
+    An UNKNOWN record type is itself a violation. The earlier version returned
+    an empty list for anything that was not GENERATOR, so a record could resolve
+    a published number by declaring a type nobody had defined requirements for --
+    a hole in exactly the gate that exists to stop unbacked numbers.
+    """
+    record_type = str(manifest.get("record_type", "")).upper()
+    required = REQUIRED_BY_TYPE.get(record_type)
+    if required is None:
+        return [
+            f"record_type {record_type or '<missing>'!r} has no declared required fields "
+            f"(known: {sorted(REQUIRED_BY_TYPE)}); an unrecognised record cannot "
+            f"substantiate a number"
+        ]
+    return [f for f in required if manifest.get(f) is None or manifest.get(f) == ""]
 
 
 def manifests() -> dict[str, dict[str, object]]:
@@ -177,9 +232,13 @@ def scan() -> list[str]:
                 # no inference, no LLM tier. It can substantiate throughput and
                 # size, never accuracy. Without this, the tier gate below would
                 # wave it through, because a generator run has no tier to fail.
-                if kind == "quality" and str(man.get("record_type", "")).upper() == "GENERATOR":
+                if kind == "quality" and str(man.get("record_type", "")).upper() in {
+                    "GENERATOR",
+                    "LOADTEST",
+                }:
                     violations.append(
-                        f"{rel}:{n}: run_id '{rid}' is a GENERATOR record and cannot "
+                        f"{rel}:{n}: run_id '{rid}' is a "
+                        f"{str(man.get('record_type', '')).upper()} record and cannot "
                         f"substantiate a quality claim -- it involved no model"
                     )
                 if str(man.get("track", "")).upper() == "EXTERNAL" and AGENT_METRIC.search(line):
