@@ -259,9 +259,50 @@ def create_app(state: GatewayState | None = None) -> FastAPI:
         docs_url=None,
         redoc_url=None,
     )
+    _register_middleware(app)
     _register_handlers(app)
     _register_routes(app)
     return app
+
+
+def _register_middleware(app: FastAPI) -> None:
+    @app.middleware("http")
+    async def _observe_request(request: Request, call_next: Any) -> Response:
+        """One structured log line per request, and the trace context to pivot on.
+
+        **What is logged is a closed list, not "the request".** Every field below
+        is either computed by us or an identifier the redaction pipeline already
+        recognises; the body is never logged. Request fields are
+        attacker-controlled and may carry PII (docs/SECURITY.md §10), and
+        `PIIRedactingProcessor` is a backstop rather than a licence -- the cheapest
+        way to keep PII out of logs is not to put it there.
+
+        `X-Request-Id` is echoed on EVERY response including errors, because the
+        identifier a caller quotes in a support ticket has to exist on the
+        response that went wrong.
+        """
+        request_id = _request_id(request)
+        started = time.perf_counter()
+        response: Response = await call_next(request)
+        response.headers.setdefault(HEADER_REQUEST_ID, request_id)
+        if request.url.path not in _QUIET_PATHS:
+            log.info(
+                "http_request",
+                method=request.method,
+                path=request.url.path,
+                status=response.status_code,
+                duration_ms=round((time.perf_counter() - started) * 1000, 3),
+                request_id=request_id,
+            )
+        return response
+
+
+_QUIET_PATHS: Final[frozenset[str]] = frozenset({"/healthz", "/readyz", "/metrics"})
+"""Probe endpoints are not logged.
+
+A Kubernetes liveness probe every second is 86,400 log lines a day that say
+nothing, and they are the lines that push the useful ones out of a retention
+window."""
 
 
 # --------------------------------------------------------------- plumbing ---
