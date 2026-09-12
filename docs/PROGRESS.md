@@ -51,7 +51,7 @@ frontend code has been written, by instruction.
 
 ## LAST VERIFIED COMMIT
 
-`fa048a6` — recovery baseline. Fixes made during recovery are committed on top; see git log.
+`7cf30ed` — *Close Phase 0: CI green, add ci-status, harden the Actions API client*
 
 All results below were produced after the recovery fixes.
 
