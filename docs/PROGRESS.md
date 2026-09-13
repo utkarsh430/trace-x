@@ -23,6 +23,23 @@ Phase 0 and Phase 1 remain complete; nothing in either was weakened.
 integration and chaos, the integration and chaos layers against real PostgreSQL and Redis
 containers.
 
+**CI on the Phase 2 PR went red on two defects; both are fixed at the commit that follows this file,
+and neither touched runtime code or Phase 2 semantics.** (1) `contracts.yml` runs `make codegen-openapi`,
+and the Makefile ran `.venv/bin/python` unconditionally — present on every laptop, absent on every GitHub
+runner, where setup-python installs into the interpreter on PATH. The Makefile now resolves ONE
+interpreter (`make toolchain` prints it: the venv when `make setup` created it, PATH otherwise),
+`scripts/verify.sh` consumes that same resolution instead of keeping its own copy, and
+`tests/unit/test_toolchain_consistency.py` dry-runs every target CI calls with the venv pointed at a
+directory that does not exist. (2) `test_request_latency_strictly_exceeds_scoring_latency` compared one
+response's `latency_ms` against a histogram `_sum` that is cumulative over the whole pytest process —
+`/metrics` serves the process-global registry, so a fresh `TestClient` isolates nothing. The seven
+requests an earlier test file makes summed to a fraction of the tolerance locally and to several times
+it on the runner. The test now measures before/after deltas over exactly one transaction, with a
+deliberate delay on each side of the scoring boundary, and its agreement tolerance is one microsecond
+because the two figures are the same number; the instrumentation itself was correct. GitHub showed
+three failed checks for these two causes because `test-fast.yml` runs on both `push` and
+`pull_request`, so one push produces two runs of it.
+
 **The canonical load gate passes on the corrected topology**, `run_id: load-20260913-gateway-c86c6cdd`,
 on a clean tree: 499.98 TPS sustained of 500 offered, **0 dropped iterations**, **p50 1.73 ms** against
 a 20 ms budget, **p99 25.30 ms** against a 100 ms budget, **0 5xx / 0 4xx / 0 429**, 0 unparseable,
@@ -131,8 +148,10 @@ afterwards as `trace_eval`: known fraud triaged at **37.3%** against **0.0%** fo
 
 ## LAST VERIFIED COMMIT
 
-Phase 1 closes at the commit that immediately follows this file, which changes only documentation and
-`tests/acceptance/status.json`. Re-confirm in ~30 s with `make verify`.
+Phase 2's acceptance evidence was recorded at `c86c6cd` (`run_id: load-20260913-gateway-c86c6cdd`).
+The CI fix described under CURRENT STATUS is the commit that immediately follows this file; it changes
+the Makefile's interpreter resolution, `scripts/verify.sh`, and two unit-test files — no runtime code.
+Re-confirm in ~70 s with `make verify`.
 
 ---
 
@@ -358,24 +377,28 @@ Phase 2 needs no new environment prerequisites beyond Docker, which is already i
 ## LAST VERIFICATION RESULTS
 
 ```
-TRACE-X verify
-  PASS  doctor              disk ok; docker reachable
-                            (expected warnings: Java 25 vs Temurin 17, pyspark/delta absent, no Ollama)
-  PASS  acceptance-status   58 capabilities, internally consistent
-  PASS  check-claims        every published number resolves to a valid manifest
-  PASS  codegen-drift       generated event models match docs/contracts/events/
-  PASS  ruff-format         clean
-  PASS  ruff-lint           clean
-  PASS  mypy                clean, strict on trace_core
-  PASS  test-fast           716 passed
-  PASS  bandit              clean at MEDIUM+
-  PASS  secret-scan         detect-secrets 1.5.0, no findings
+TRACE-X verify — 2026-09-13T03:45:35Z
+  PASS  doctor
+  PASS  acceptance-status
+  PASS  check-claims
+  PASS  codegen-drift
+  PASS  openapi-drift
+  PASS  ruff-format
+  PASS  ruff-lint
+  PASS  mypy
+  PASS  test-fast           1260 passed, 120 deselected
+  PASS  bandit
+  PASS  secret-scan
 ======================================================================
-  phase 1   10 passed   0 failed   0 skipped     VERIFY OK
+  phase 2   11 passed   0 failed   0 skipped     VERIFY OK
 ```
 
-Integration suite against real PostgreSQL 16: **46 passed**.
-Full-size `eval-v1` regeneration (`pytest -m slow`): **digest reproduced exactly**.
+Run on the CI-fix tree with `.venv` present; the same targets were also replayed with the venv pointed
+at a nonexistent directory and the interpreter taken from PATH, which is the runner's situation
+(`make codegen-openapi`, the spec drift check, `make contracts-self-test`, the event-schema contract
+tests). The integration and chaos layers were last run in the session that closed the load gate
+(1,360 tests across all layers, see CURRENT STATUS) and were not re-run for a change that touches no
+runtime code.
 
-**Acceptance status: 14 PASS · 0 IN_PROGRESS · 44 NOT_STARTED · 0 FAIL · 0 BLOCKED** across 58 tracked
+**Acceptance status: 19 PASS · 0 IN_PROGRESS · 39 NOT_STARTED · 0 FAIL · 0 BLOCKED** across 58 tracked
 capabilities. `tests/acceptance/status.json` is the authoritative machine-readable record.

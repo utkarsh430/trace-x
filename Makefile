@@ -9,11 +9,20 @@
 SHELL := /bin/bash
 PY    := python3
 VENV  := .venv
-VPY   := $(VENV)/bin/python
+# The ONE interpreter every target runs, resolved here and nowhere else. `make
+# setup` creates $(VENV) and installs into it, so on a developer machine that is
+# the interpreter; on a machine without it -- CI, where setup-python installs
+# into the interpreter on PATH -- the same targets run on $(PY) instead. Naming
+# $(VENV)/bin/python directly worked on every laptop and failed the contracts
+# job with "No such file or directory". Exported so scripts/verify.sh runs the
+# same one. Asserted by tests/unit/test_toolchain_consistency.py.
+VPY   := $(if $(wildcard $(VENV)/bin/python),$(VENV)/bin/python,$(PY))
+export VPY
+# `setup` only: it is the target that creates $(VENV), so it cannot resolve.
 VPIP  := $(VENV)/bin/pip
 COMPOSE := docker compose -f deploy/compose.yml --env-file .env
 
-.PHONY: help doctor setup up up-streaming up-full down ps logs test-fast test e2e lint typecheck \
+.PHONY: help doctor toolchain setup up up-streaming up-full down ps logs test-fast test e2e lint typecheck \
         secrets audit audit-full migrate migrate-down migrate-status lock ci-status codegen \
         verify eval eval-external demo seed fetch-external pull-model bench-layout \
         codegen-openapi contracts-check contracts-self-test load-gateway \
@@ -36,6 +45,9 @@ help: ## Show available commands
 ## ---------------------------------------------------------------------------
 doctor: ## Preflight: versions, pins, disk, RAM, ports, LLM tier
 	@$(PY) scripts/doctor.py
+
+toolchain: ## Print the interpreter every target runs: the venv if `make setup` made it, else PATH
+	@echo $(VPY)
 
 setup: ## Create venv and install dev + core dependencies
 	@test -d $(VENV) || $(PY) -m venv $(VENV)

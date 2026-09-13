@@ -9,8 +9,11 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-VPY=".venv/bin/python"
-[[ -x "$VPY" ]] || VPY="python3"
+# The interpreter is resolved ONCE, in the Makefile (`VPY`), and arrives in the
+# environment when this runs as `make verify`. Run directly, ask make for the
+# same answer rather than keep a second copy of the rule here that could drift.
+VPY="${VPY:-$(make -s toolchain)}"
+have() { "$VPY" -m "$1" --version >/dev/null 2>&1; }   # is this dev tool installed for $VPY?
 
 PASS=0; FAIL=0; SKIP=0
 declare -a RESULTS=()
@@ -45,35 +48,35 @@ run_gate "codegen-drift"       "$VPY" scripts/generate_event_models.py --check
 # spec that only CI regenerates lets a local run pass while CI goes red.
 run_gate "openapi-drift"       "$VPY" scripts/generate_openapi.py --check
 
-if [[ -x .venv/bin/ruff ]]; then
-  run_gate "ruff-format"       .venv/bin/ruff format --check .
-  run_gate "ruff-lint"         .venv/bin/ruff check .
+if have ruff; then
+  run_gate "ruff-format"       "$VPY" -m ruff format --check .
+  run_gate "ruff-lint"         "$VPY" -m ruff check .
 else
   skip_gate "ruff-format" "dev deps not installed — run 'make setup'"
   skip_gate "ruff-lint"   "dev deps not installed — run 'make setup'"
 fi
 
-if [[ -x .venv/bin/mypy ]]; then
-  run_gate "mypy"              .venv/bin/mypy
+if have mypy; then
+  run_gate "mypy"              "$VPY" -m mypy
 else
   skip_gate "mypy" "dev deps not installed — run 'make setup'"
 fi
 
-if [[ -x .venv/bin/pytest ]]; then
-  run_gate "test-fast"         .venv/bin/pytest -m "not integration and not e2e and not load and not chaos and not external and not cloud and not slow" -q
+if have pytest; then
+  run_gate "test-fast"         "$VPY" -m pytest -m "not integration and not e2e and not load and not chaos and not external and not cloud and not slow" -q
 else
   skip_gate "test-fast" "dev deps not installed — run 'make setup'"
 fi
 
-if [[ -x .venv/bin/bandit ]]; then
-  run_gate "bandit"            .venv/bin/bandit -q -ll -c pyproject.toml -r packages scripts eval migrations
+if have bandit; then
+  run_gate "bandit"            "$VPY" -m bandit -q -ll -c pyproject.toml -r packages scripts eval migrations
 else
   skip_gate "bandit" "dev deps not installed — run 'make setup'"
 fi
 
 # The same script CI runs. Secret scanning belongs in the canonical gate: it was
 # only in CI, so a local `make verify` could pass while CI went red.
-if [[ -x .venv/bin/python ]]; then
+if have detect_secrets; then
   run_gate "secret-scan"       "$VPY" scripts/secret_scan.py
 else
   skip_gate "secret-scan" "dev deps not installed — run 'make setup'"
