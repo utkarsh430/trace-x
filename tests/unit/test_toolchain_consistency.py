@@ -8,11 +8,22 @@ and a fresh clone would have failed too, violating the Phase 0 exit criteria.
 
 The invariant: every extra that mypy's declared `files` scope needs must be
 installed by BOTH `make setup` and every workflow that runs mypy.
+
+Extended after a second failure of the same family. `make codegen-openapi` ran
+`.venv/bin/python`, which every developer machine has and no GitHub runner does
+-- setup-python installs into the interpreter on PATH -- so the contracts job
+died with "No such file or directory" one step after installing everything it
+needed. The Makefile now resolves ONE interpreter (the venv when `make setup`
+created it, PATH otherwise) and the second half of this module holds every
+target CI calls to that resolution, by dry-running them with the venv pointed
+at a directory that does not exist.
 """
 
 from __future__ import annotations
 
 import re
+import shutil
+import subprocess
 import tomllib
 from pathlib import Path
 
@@ -35,6 +46,12 @@ SCOPE_REQUIREMENTS = {
     # drift is only invisible on a machine that already has them installed.
     "pyarrow": "gen",
     "jsonschema": "gen",
+    # Phase 2 put `services/` (the thin ASGI entrypoints, CLAUDE.md S4) into
+    # mypy's scope, and `trace_core.repositories` imports the Redis and psycopg
+    # drivers. Added with the scope change rather than after it, for the reason
+    # this module exists.
+    "fastapi": "api",
+    "redis": "db",
 }
 
 EXTRAS_RE = re.compile(r'install[^\n]*-e\s+"\.\[([a-z,\s]+)\]"')
@@ -56,6 +73,11 @@ def test_mypy_scope_is_declared(pyproject: dict) -> None:
     assert "data" in files, (
         "the generator and the source adapters live under data/ (CLAUDE.md S4); "
         "outside mypy's scope they would be the largest untyped surface in the repo"
+    )
+    assert "services" in files, (
+        "the service entrypoints live under services/ (CLAUDE.md S4). They are thin, "
+        "but they are where request handling and dependency wiring live -- exactly "
+        "the code an untyped gap would hide a defect in"
     )
 
 
@@ -147,3 +169,108 @@ def test_opentelemetry_core_is_not_in_an_extra(pyproject: dict) -> None:
     assert "opentelemetry-sdk" in core
     obs = " ".join(pyproject["project"]["optional-dependencies"]["obs"]).lower()
     assert "opentelemetry-sdk" not in obs, "sdk is core; duplicating it in an extra invites drift"
+
+
+# ------------------------------------------ the interpreter make runs (CI) ----
+
+NOWHERE = "/nonexistent-venv"
+"""A `VENV` override that exists on no machine, so make has to fall back."""
+
+CONTRACT_TARGETS = {"codegen-openapi", "contracts-self-test", "contracts-check"}
+"""What contracts.yml runs through make. Named so the discovery below cannot
+pass on an empty set if a workflow is rewritten to call the scripts directly."""
+
+
+def _make(*args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(  # noqa: S603 -- fixed argv, no shell
+        ["make", "-s", *args], cwd=ROOT, capture_output=True, text=True, check=False
+    )
+
+
+@pytest.fixture(scope="module")
+def make_on_path() -> str:
+    binary = shutil.which("make")
+    if binary is None:
+        pytest.skip(
+            "SKIPPED (NOT PASSED): `make` is not on PATH, so the developer command "
+            "interface cannot be exercised here"
+        )
+    return binary
+
+
+def _targets_ci_calls() -> set[str]:
+    """Every `make <target>` a workflow RUNS.
+
+    Comments are dropped, including the inline kind (a `pip install` line that
+    ends `# must match make setup`), because a target mentioned is not a target
+    called.
+    `setup` itself is excluded even if a workflow did call it: it is the target
+    that creates the venv, so naming the venv is its job, not a defect.
+    """
+    targets: set[str] = set()
+    for wf in sorted(WORKFLOWS.glob("*.yml")):
+        for line in wf.read_text().splitlines():
+            code = line.split("#", 1)[0]
+            targets.update(re.findall(r"\bmake ([a-z][a-z-]*)", code))
+    return targets - {"setup"}
+
+
+def test_ci_calls_make_targets_at_all() -> None:
+    """Without this the dry-run loop below would pass on an empty set."""
+    assert _targets_ci_calls() >= CONTRACT_TARGETS
+
+
+def test_make_resolves_an_interpreter_that_exists_without_a_venv(make_on_path: str) -> None:
+    """The CI half of the contract: no venv means the interpreter on PATH."""
+    resolved = _make("toolchain", f"VENV={NOWHERE}").stdout.strip()
+    assert resolved and NOWHERE not in resolved, f"make resolved {resolved!r} with no venv"
+    assert shutil.which(resolved), f"make resolved {resolved!r}, which is not on PATH"
+
+
+def test_make_prefers_the_venv_when_setup_created_it(make_on_path: str) -> None:
+    """The developer half: `make lint` must not quietly run on a system interpreter
+    that lacks the dev extras, which would pass by importing nothing."""
+    if not (ROOT / ".venv" / "bin" / "python").exists():
+        pytest.skip(
+            "SKIPPED (NOT PASSED): no .venv here (run `make setup`), so the venv-preference "
+            "half of the rule cannot be observed on this machine"
+        )
+    assert _make("toolchain").stdout.strip() == ".venv/bin/python"
+
+
+def test_every_make_target_ci_calls_runs_without_a_venv(make_on_path: str) -> None:
+    """The exact CI failure, reproduced as a dry run.
+
+    With the venv pointed at a directory that does not exist, the command line
+    make would execute for each target CI calls must not name that directory.
+    Before the fix it printed `/nonexistent-venv/bin/python scripts/...`, which
+    is precisely the line the contracts job died on.
+    """
+    for target in sorted(_targets_ci_calls()):
+        result = _make("-n", target, f"VENV={NOWHERE}", "BASE=/dev/null")
+        assert result.returncode == 0, f"make -n {target}: {result.stderr.strip()}"
+        assert NOWHERE not in result.stdout, (
+            f"`make {target}` is called from CI and would run "
+            f"{result.stdout.strip()!r} on a machine with no venv. Use $(VPY), which "
+            f"falls back to the interpreter on PATH."
+        )
+
+
+def test_no_recipe_names_the_venv_directly() -> None:
+    """The static half of the same rule, for targets CI does not call yet.
+
+    Only `setup` may name `$(VENV)`: it is the target that creates it. Every
+    other recipe goes through `$(VPY)`, or it is one CI workflow edit away from
+    the failure this module was extended for.
+    """
+    offenders: list[str] = []
+    target = None
+    for line in MAKEFILE.read_text().splitlines():
+        head = re.match(r"^([a-zA-Z_-]+):", line)
+        if head:
+            target = head.group(1)
+        if not line.startswith("\t") or target == "setup":
+            continue
+        if re.search(r"\$\(VENV\)|\$\(VPIP\)|\.venv/", line):
+            offenders.append(f"{target}: {line.strip()}")
+    assert not offenders, "recipes that assume a venv exists:\n  " + "\n  ".join(offenders)

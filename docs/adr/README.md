@@ -14,7 +14,7 @@ been thought through.
 |---|---|---|---|
 | [0001](0001-modular-monolith-process-boundaries.md) | Modular monolith with four justified process boundaries | 0 | Accepted |
 | [0002](0002-dual-path-spark-not-on-hot-path.md) | Dual-path architecture — Spark is not on the hot path | 0 | Accepted |
-| [0003](0003-redis-online-feature-store.md) | Redis as the online feature store | 0 | Accepted |
+| [0003](0003-redis-online-feature-store.md) | Redis as the online feature store | 0 | Accepted — distinct-cardinality row amended by [0034](0034-hybrid-distinct-cardinality-storage.md) |
 | [0004](0004-postgres-system-of-record-ground-truth-isolation.md) | PostgreSQL system of record; ground-truth isolation by schema and role | 0 | Accepted |
 | [0005](0005-delta-lake-medallion.md) | Delta Lake medallion architecture | 0 | Accepted |
 | [0006](0006-kafka-kraft-event-backbone.md) | Kafka (KRaft) as the event backbone | 0 | Accepted |
@@ -43,6 +43,19 @@ been thought through.
 | [0029](0029-deterministic-generation.md) | Deterministic generation — stdlib RNG, named substreams, row-JSON digests | 1 | Accepted |
 | [0030](0030-fraud-scenario-taxonomy.md) | Fraud scenario taxonomy and the causal evidence key contract | 1 | Accepted |
 | [0031](0031-trace-generator-write-only-role.md) | `trace_generator` — a write-only ground-truth role | 1 | Accepted |
+| [0032](0032-declarative-feature-semantics.md) | Features declare their semantics, not just their implementation | 2 | Accepted |
+| [0033](0033-declarative-rule-packs.md) | Rule packs are data in a closed grammar, digest-pinned and fail-safe on reload | 2 | Accepted |
+| [0034](0034-hybrid-distinct-cardinality-storage.md) | Hybrid distinct-cardinality storage — exact where bounded, estimated where not | 2 | Accepted (amends 0003) |
+| [0035](0035-gateway-degradation-and-fail-safe-direction.md) | Where "scoring fails open" ends — gateway degradation, per dependency | 2 | Accepted |
+| [0036](0036-pinned-container-tooling.md) | Non-Python tooling pinned as container images, by tag and digest | 2 | Accepted |
+| [0037](0037-openapi-breaking-change-gate.md) | The API breaking-change gate is `oasdiff`, not a bespoke rule engine | 2 | Accepted |
+| [0038](0038-hot-path-cpu-budget.md) | The hot path is CPU-bound; the online snapshot reads only what the features declare | 2 | Accepted; §3 superseded by 0039, write-path choice superseded by 0044 |
+| [0039](0039-event-loop-over-threadpool.md) | The hot path stays on the event loop; the workload, not the scheduler, is the bottleneck | 2 | Accepted |
+| [0040](0040-two-workload-profiles.md) | Two workload profiles: a representative acceptance gate and an adversarial saturation benchmark | 2 | Accepted |
+| [0041](0041-online-store-memory-and-eviction.md) | Online-store memory classes: a best-effort cache must not evict correctness-relevant state | 2 | Superseded by 0042 |
+| [0042](0042-online-store-memory-corrected.md) | Online-store memory corrected: AOF was the latency cause, eviction is the correctness cause | 2 | Accepted |
+| [0043](0043-small-threadpool-measured.md) | The small-threadpool middle ground is measured, and it is worse | 2 | Accepted |
+| [0044](0044-online-store-correctness-topology.md) | Feature state cannot silently evict: two Redis instances, a declaration-driven write plan, and a completeness epoch | 2 | Accepted |
 
 ## Notes on status
 

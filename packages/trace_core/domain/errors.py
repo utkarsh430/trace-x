@@ -139,6 +139,23 @@ class MissingDependencyError(TraceXError):
         )
 
 
+class FeatureWriteFailedError(TraceXError):
+    """The online store is reachable but refused to record an observation.
+
+    Distinct from an unreachable store on purpose. Unreachable is an outage the
+    circuit breaker should learn about; refused-because-full is a capacity
+    condition the breaker must NOT open on, because the store is still
+    answering reads and opening the circuit would blind scoring to punish a
+    write. Under `noeviction` this is the ONLY way memory pressure can present
+    (ADR-0044): loudly, as a counted degradation, rather than as feature state
+    quietly disappearing.
+
+    Raising it also invalidates the store's completeness epoch: an observation
+    that was not recorded is a hole in the history, and every window that
+    spans the hole is no longer complete.
+    """
+
+
 # ------------------------------------------- declared now, used later ------
 # Declared here so the taxonomy is complete and downstream phases extend it
 # rather than inventing a parallel hierarchy.

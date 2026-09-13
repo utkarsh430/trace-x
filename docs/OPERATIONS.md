@@ -26,6 +26,7 @@
 |---|---|---|
 | `/healthz` | gateway, api | Process alive |
 | `/readyz` | gateway, api | Dependencies reachable; **returns 503 while degraded past threshold** |
+| container healthcheck | gateway | Probes `/healthz` only. **Liveness and readiness are wired to different consumers on purpose**: the orchestrator restarts on liveness, the load balancer drains on readiness. A restart triggered by a database blip takes out a process that was degrading correctly |
 | `/metrics` | all services | Prometheus scrape |
 | `make verify` | CLI | Canonical repository health |
 | Grafana → Real-Time Ops | `obs` profile | Latency, throughput, bands, degraded rate |
@@ -53,12 +54,105 @@
 
 ## 4. Failure playbooks
 
-### Redis unavailable
-**Detect:** health probe, 20 ms timeouts, `degraded_mode_total{reason="redis"}` climbing.
+### Gateway refuses to start
+**Detect:** the container never reports healthy; logs end in `TokenConfigurationError`, a rule-pack
+load error, or `Application startup failed`. Under compose a missing `TRACE_SERVICE_TOKEN_<ID>` stops
+the `up` itself, before any container is created.
+**Behaviour:** **by design.** Service tokens and the rule pack are fatal when absent, for the same
+reason a corrupt model artifact is (`docs/ARCHITECTURE.md` §18): a gateway serving traffic it cannot
+authenticate, or scoring with rules it could not load, is worse than a gateway that is down, because it
+looks like it is working.
+**Action:** read the last log line — it names the missing configuration and what it must contain.
+Restore it from the secret store; **never** start the gateway with a hand-typed placeholder token to
+"get traffic flowing", because every request it then authenticates is unattributable. Restarting will
+not fix it: the process is refusing, not crashing.
+
+### Gateway is live but never becomes ready
+**Detect:** `/healthz` 200, `/readyz` 503 with `checks.postgres` naming the error. The load balancer
+drains the instance; the container healthcheck still reports healthy, and that is correct — the process
+is alive.
+**Behaviour:** triage cannot durably record a case, so a CRITICAL transaction is refused with 503
+rather than approved and lost (ADR-0035).
+**Action:** distinguish the two causes. *Postgres down* → the Postgres playbook below. *Postgres up but
+the role or grants are missing* (the usual cause on a fresh environment) → run the migrations; the
+schema, roles and grants are created there and nowhere else (ADR-0004). Do not grant the gateway a
+broader role to clear the error: `trace_app` has no access to `groundtruth` and that is the isolation
+control (CLAUDE.md §11).
+
+### Gateway killed on its memory limit
+**Detect:** exit code 137, no stack trace, restart loop under `restart: unless-stopped`.
+**Behaviour:** the container is bounded so it dies alone rather than starving Postgres and Redis
+beside it — on a laptop an unbounded container takes the whole VM with it.
+**Action:** capture the limit and the working set before changing anything, then look for the cause
+rather than raising the ceiling: a connection pool sized past the database's own limit, or an
+unbounded in-process cache, both present exactly this way. If the limit genuinely needs to rise,
+`docs/ARCHITECTURE.md` §14 budgets the whole `core` profile, so raising one service means lowering
+another — `tests/unit/test_compose_profiles.py` fails when the sum stops fitting.
+
+### Feature-store Redis unavailable
+**Detect:** health probe (`redis: degraded`), 20 ms timeouts, the feature breaker open,
+`degraded_mode_total{reason="redis_unavailable"}` climbing. The cache instance is separate and is
+not blamed (ADR-0044).
 **Behaviour:** hot path falls back to rules-only; responses carry `X-Trace-Degraded: true`.
 **Action:** confirm the fallback is active (not 5xx). Restore Redis. **Do not** backfill counters by
 hand — let the Spark reconciliation job rebuild them, then confirm `feature_parity_drift` settles.
 **Do not** treat the degraded window's decisions as normal-quality; they are flagged for review.
+
+### Feature store full — writes refused, loudly
+
+**This is a capacity condition, not an outage, and the gateway treats it that way.** The feature
+store runs `noeviction` (ADR-0044): when it is full it REFUSES the write instead of discarding
+someone else's history. The decision is still made, it is marked degraded with reason
+`feature_write_failed`, and the store's completeness epoch is withdrawn — so every decision after it
+also says `history_incomplete`, because an observation that was not recorded is a hole in the
+history and no window spanning the hole is complete.
+
+**Detect:** `degraded_mode_total{reason="feature_write_failed"}` rising;
+`online_store_memory_bytes{store="features"}` at `maxmemory`; `/readyz` still ready.
+`online_store_evicted_keys_total{store="features"}` must read **zero forever** — any rise at all is a
+configuration fault (the policy is not `noeviction`), not load.
+
+**Why it is designed this way.** Under `allkeys-lru` a full store discarded feature keys, and an
+evicted key reads back empty — indistinguishable from an account with no history — so the rules
+abstained and transactions that should have been CRITICAL were approved with `degraded=false`. A
+passing acceptance run did exactly that and looked perfectly healthy. Loud is the only acceptable
+failure for state that decides fraud.
+
+**Action:** do not restart Redis — that empties the store, which costs a warm-up (below). Reduce
+offered rate if it is a spike; provision memory if it is not. The memory model
+(`benchmarks/features/memory_model.py`, `benchmarks/features/MEMORY.md`) says what the store needs for
+a given rate and retention. Keys expire on their declared retention, so a full store recovers on its
+own once the rate drops; the epoch is re-established by the first successful write and warm-up begins
+from there.
+
+### Feature store empty or warming — after a restart or `FLUSHALL`
+
+**Detect:** `/readyz` reports `feature_history: warming since …; complete for every feature at …`
+(or `empty: no epoch`); `degraded_mode_total{reason="history_incomplete"}` on every decision.
+
+**Behaviour:** the store is healthy and reachable and does not know the past. Windowed features
+resolve as soon as their window has fully elapsed since the epoch (up to 24 h); profile features need
+the declared 30-day horizon, so **the tenure, habitual-merchant and new-device rules cannot fire for
+thirty days after a restart.** Before ADR-0044 the same restart produced thirty days of false
+new-device alarms and a day of confident wrong scores, and neither was flagged; now it is a visible
+detection gap instead of a silent one.
+
+**Action:** nothing restores history locally until Phase 3's reconciliation exists. Treat decisions
+in the warming window as reduced-confidence *by the flag they carry*. If a restart was avoidable, it
+was expensive; the store is deliberately not persisted (AOF off, ADR-0042) because persistence cost
+the latency budget and could not be reloaded within the container's memory anyway.
+
+### Cache Redis unavailable
+
+**Detect:** `/readyz` `redis_cache: degraded`; `degraded_mode_total{reason="rate_limit_unavailable"}`
+and `{reason="idempotency_cache_unavailable"}`.
+
+**Behaviour:** **no decision changes.** The limiter fails open and counts it; replay lookups are
+skipped and a retry is re-scored, returning the existing `case_id` from Postgres — never a duplicate
+case (ADR-0007). The feature store is not blamed: `redis` stays `ok` and `redis_unavailable` does not
+appear.
+
+**Action:** restore it at leisure. Nothing in it is authoritative and nothing in it is missed.
 
 ### Postgres unavailable
 **Detect:** connection errors; gateway 503; workers stop consuming.

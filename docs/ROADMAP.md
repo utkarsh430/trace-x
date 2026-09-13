@@ -201,6 +201,18 @@ parallelism is what keeps the mandatory data-engineering track from serialising 
 - **p99 < 100 ms, p50 < 20 ms at 500 TPS sustained**, measured by k6 and recorded.
 - Zero 5xx over a 10-minute run.
 
+**The target is stated against the `representative` workload profile** (ADR-0040). The numbers
+above are unchanged; what is now stated is the distribution they are measured on. A hot-path
+latency target is only meaningful against a declared traffic shape, because the shape decides how
+many requests take the expensive path: measured, the original profile put **91.7%** of requests
+into triage — a three-insert Postgres transaction each — where the project's own frozen `eval-v1`
+produces **0.222%**. Measuring a scoring budget on the first distribution measures the cost of
+opening investigations instead.
+
+`tests/load/k6/triage_saturation.js` preserves that original profile unweakened, as an adversarial
+characterisation of behaviour under triage saturation. It is **not** the gate and its report is
+written to a separate file.
+
 **EXIT CONDITIONS**
 - Load report committed with real measured numbers.
 - Degraded mode proven.

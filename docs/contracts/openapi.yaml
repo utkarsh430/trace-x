@@ -1,0 +1,610 @@
+# GENERATED FROM packages/trace_core/contracts/api/ -- DO NOT EDIT BY HAND.
+#
+# Pydantic models are the source of truth for the API (docs/API_CONTRACTS.md §1).
+# Change a model, then run `make codegen-openapi`. A gate in `make verify` and in
+# CI regenerates and fails on any diff, so an edit made here is reverted rather
+# than merged.
+#
+# Committed on purpose: the CI breaking-change diff needs a stored previous
+# version to compare against, and a client generator needs a file it can fetch
+# without booting the service.
+components:
+  schemas:
+    AcceptedResponse:
+      additionalProperties: false
+      description: 'What a 202 returns: enough to correlate, nothing more.'
+      properties:
+        accepted:
+          title: Accepted
+          type: boolean
+        event_id:
+          maxLength: 64
+          minLength: 1
+          title: Event Id
+          type: string
+        request_id:
+          maxLength: 64
+          minLength: 1
+          title: Request Id
+          type: string
+      required:
+      - accepted
+      - event_id
+      - request_id
+      title: AcceptedResponse
+      type: object
+    AuthorizationOutcome:
+      description: What the upstream authorization system did with the transaction.
+      enum:
+      - APPROVED
+      - DECLINED
+      - REVERSED
+      - UNKNOWN
+      title: AuthorizationOutcome
+      type: string
+    DeviceEventRequest:
+      additionalProperties: false
+      description: A change in the device fingerprint an account presents.
+      properties:
+        account_id:
+          pattern: ^acct_\d{6,}$
+          title: Account Id
+          type: string
+        device_event_type:
+          $ref: '#/components/schemas/DeviceEventType'
+        device_id:
+          pattern: ^dev_\d{6,}$
+          title: Device Id
+          type: string
+        ip_id:
+          anyOf:
+          - pattern: ^ip_\d{5,}$
+            type: string
+          - type: 'null'
+          title: Ip Id
+        occurred_at:
+          format: date-time
+          title: Occurred At
+          type: string
+        platform:
+          anyOf:
+          - maxLength: 32
+            type: string
+          - type: 'null'
+          title: Platform
+      required:
+      - device_id
+      - account_id
+      - device_event_type
+      - occurred_at
+      title: DeviceEventRequest
+      type: object
+    DeviceEventType:
+      description: A change in the device fingerprint an account presents.
+      enum:
+      - FIRST_SEEN
+      - FINGERPRINT_CHANGED
+      - ATTRIBUTE_CHANGED
+      - UNKNOWN
+      title: DeviceEventType
+      type: string
+    EntryMode:
+      description: How the card details were captured.
+      enum:
+      - CHIP
+      - CONTACTLESS
+      - MAGSTRIPE
+      - MANUAL
+      - ECOMMERCE
+      - TOKEN
+      - UNKNOWN
+      title: EntryMode
+      type: string
+    FeatureSource:
+      description: 'Whether a feature value has been reconciled by the warm path.
+
+
+        Degradation must be visible, never silent: with the streaming profile down
+
+        the hot path still works, and says so (ADR-0002).'
+      enum:
+      - ONLINE_ONLY
+      - RECONCILED
+      title: FeatureSource
+      type: string
+    IdentityEventRequest:
+      additionalProperties: false
+      description: A change to the account holder's identity, credentials or login state.
+      properties:
+        account_id:
+          pattern: ^acct_\d{6,}$
+          title: Account Id
+          type: string
+        device_id:
+          anyOf:
+          - pattern: ^dev_\d{6,}$
+            type: string
+          - type: 'null'
+          title: Device Id
+        identity_event_type:
+          $ref: '#/components/schemas/IdentityEventType'
+        ip_id:
+          anyOf:
+          - pattern: ^ip_\d{5,}$
+            type: string
+          - type: 'null'
+          title: Ip Id
+        occurred_at:
+          format: date-time
+          title: Occurred At
+          type: string
+        user_agent:
+          anyOf:
+          - maxLength: 256
+            type: string
+          - type: 'null'
+          title: User Agent
+      required:
+      - account_id
+      - identity_event_type
+      - occurred_at
+      title: IdentityEventRequest
+      type: object
+    IdentityEventType:
+      description: A change to the account holder's identity or credentials.
+      enum:
+      - PASSWORD_CHANGE
+      - EMAIL_CHANGE
+      - PHONE_CHANGE
+      - ADDRESS_CHANGE
+      - MFA_RESET
+      - MFA_ENROLLED
+      - LOGIN_FAILED
+      - LOGIN_SUCCEEDED
+      - UNKNOWN
+      title: IdentityEventType
+      type: string
+    Problem:
+      additionalProperties: false
+      description: An RFC 9457 problem document.
+      properties:
+        detail:
+          title: Detail
+          type: string
+        errors:
+          items:
+            type: string
+          title: Errors
+          type: array
+        instance:
+          title: Instance
+          type: string
+        request_id:
+          title: Request Id
+          type: string
+        status:
+          maximum: 599
+          minimum: 100
+          title: Status
+          type: integer
+        title:
+          title: Title
+          type: string
+        trace_id:
+          title: Trace Id
+          type: string
+        type:
+          title: Type
+          type: string
+      required:
+      - type
+      - title
+      - status
+      - detail
+      - instance
+      - trace_id
+      - request_id
+      title: Problem
+      type: object
+    RiskBand:
+      description: Synchronous scoring outcome band. HIGH and CRITICAL open an investigation.
+      enum:
+      - LOW
+      - MEDIUM
+      - HIGH
+      - CRITICAL
+      title: RiskBand
+      type: string
+    RiskDecision:
+      additionalProperties: false
+      description: The synchronous scoring outcome for one transaction.
+      properties:
+        case_id:
+          anyOf:
+          - pattern: ^case_[0-9a-f]{32}$
+            type: string
+          - type: 'null'
+          title: Case Id
+        decision:
+          pattern: ^(APPROVE|FLAG|DECLINE)$
+          title: Decision
+          type: string
+        degraded:
+          title: Degraded
+          type: boolean
+        degraded_reasons:
+          items:
+            type: string
+          title: Degraded Reasons
+          type: array
+        feature_set_version:
+          pattern: ^\d+\.\d+\.\d+$
+          title: Feature Set Version
+          type: string
+        feature_source:
+          $ref: '#/components/schemas/FeatureSource'
+        insufficient_history_features:
+          items:
+            type: string
+          title: Insufficient History Features
+          type: array
+        latency_ms:
+          minimum: 0.0
+          title: Latency Ms
+          type: number
+        reasons:
+          items:
+            $ref: '#/components/schemas/RuleReason'
+          title: Reasons
+          type: array
+        risk_band:
+          $ref: '#/components/schemas/RiskBand'
+        rule_pack_digest:
+          pattern: ^sha256:[0-9a-f]{64}$
+          title: Rule Pack Digest
+          type: string
+        rule_pack_id:
+          maxLength: 64
+          minLength: 1
+          title: Rule Pack Id
+          type: string
+        score:
+          maximum: 1.0
+          minimum: 0.0
+          title: Score
+          type: number
+        scored_at:
+          format: date-time
+          title: Scored At
+          type: string
+        threshold_config_digest:
+          pattern: ^sha256:[0-9a-f]{64}$
+          title: Threshold Config Digest
+          type: string
+        transaction_id:
+          maxLength: 64
+          minLength: 1
+          title: Transaction Id
+          type: string
+        unavailable_features:
+          items:
+            type: string
+          title: Unavailable Features
+          type: array
+      required:
+      - transaction_id
+      - decision
+      - risk_band
+      - score
+      - feature_source
+      - degraded
+      - rule_pack_id
+      - rule_pack_digest
+      - threshold_config_digest
+      - feature_set_version
+      - scored_at
+      - latency_ms
+      title: RiskDecision
+      type: object
+    RuleReason:
+      additionalProperties: false
+      description: One rule that fired, and the evidence it fired on.
+      properties:
+        band_floor:
+          anyOf:
+          - $ref: '#/components/schemas/RiskBand'
+          - type: 'null'
+        description:
+          maxLength: 256
+          minLength: 1
+          title: Description
+          type: string
+        features_read:
+          additionalProperties:
+            type: number
+          title: Features Read
+          type: object
+        rule_id:
+          maxLength: 64
+          minLength: 1
+          title: Rule Id
+          type: string
+        rule_version:
+          pattern: ^\d+\.\d+\.\d+$
+          title: Rule Version
+          type: string
+        weight:
+          maximum: 1.0
+          minimum: 0.0
+          title: Weight
+          type: number
+      required:
+      - rule_id
+      - rule_version
+      - description
+      - weight
+      title: RuleReason
+      type: object
+    TransactionChannel:
+      description: How the transaction was presented.
+      enum:
+      - CARD_PRESENT
+      - CARD_NOT_PRESENT
+      - ATM
+      - RECURRING
+      - UNKNOWN
+      title: TransactionChannel
+      type: string
+    TransactionRequest:
+      additionalProperties: false
+      description: One transaction presented for synchronous scoring.
+      properties:
+        account_id:
+          pattern: ^acct_\d{6,}$
+          title: Account Id
+          type: string
+        amount_minor:
+          title: Amount Minor
+          type: integer
+        authorization_outcome:
+          anyOf:
+          - $ref: '#/components/schemas/AuthorizationOutcome'
+          - type: 'null'
+        card_id:
+          anyOf:
+          - pattern: ^card_\d{6,}$
+            type: string
+          - type: 'null'
+          title: Card Id
+        channel:
+          anyOf:
+          - $ref: '#/components/schemas/TransactionChannel'
+          - type: 'null'
+        currency:
+          pattern: ^[A-Z]{3}$
+          title: Currency
+          type: string
+        device_id:
+          anyOf:
+          - pattern: ^dev_\d{6,}$
+            type: string
+          - type: 'null'
+          title: Device Id
+        entry_mode:
+          anyOf:
+          - $ref: '#/components/schemas/EntryMode'
+          - type: 'null'
+        ip_id:
+          anyOf:
+          - pattern: ^ip_\d{5,}$
+            type: string
+          - type: 'null'
+          title: Ip Id
+        latitude:
+          anyOf:
+          - maximum: 90.0
+            minimum: -90.0
+            type: number
+          - type: 'null'
+          title: Latitude
+        longitude:
+          anyOf:
+          - maximum: 180.0
+            minimum: -180.0
+            type: number
+          - type: 'null'
+          title: Longitude
+        memo:
+          anyOf:
+          - maxLength: 256
+            type: string
+          - type: 'null'
+          title: Memo
+        merchant_country:
+          anyOf:
+          - pattern: ^[A-Z]{2}$
+            type: string
+          - type: 'null'
+          title: Merchant Country
+        merchant_id:
+          anyOf:
+          - pattern: ^mrch_\d{5,}$
+            type: string
+          - type: 'null'
+          title: Merchant Id
+        merchant_mcc:
+          anyOf:
+          - pattern: ^\d{4}$
+            type: string
+          - type: 'null'
+          title: Merchant Mcc
+        merchant_name:
+          anyOf:
+          - maxLength: 128
+            type: string
+          - type: 'null'
+          title: Merchant Name
+        occurred_at:
+          format: date-time
+          title: Occurred At
+          type: string
+        transaction_id:
+          maxLength: 64
+          minLength: 1
+          title: Transaction Id
+          type: string
+        user_agent:
+          anyOf:
+          - maxLength: 256
+            type: string
+          - type: 'null'
+          title: User Agent
+      required:
+      - transaction_id
+      - account_id
+      - amount_minor
+      - currency
+      - occurred_at
+      title: TransactionRequest
+      type: object
+info:
+  description: 'The hot path: one transaction in, one banded, explainable RiskDecision out, within a 100
+    ms p99 budget. Every decision cites the rules that fired, the feature values they read, and the digests
+    of the rule pack and thresholds that produced it.'
+  summary: Synchronous fraud scoring and triage.
+  title: TRACE-X Gateway
+  version: '1'
+openapi: 3.1.0
+paths:
+  /v1/events/device:
+    post:
+      operationId: ingest_device_v1_events_device_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeviceEventRequest'
+        required: true
+      responses:
+        '202':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AcceptedResponse'
+          description: Successful Response
+        '400':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+          description: "Malformed request: the body does not match the schema (\xA76.1)."
+        '401':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+          description: 'Unauthenticated: no valid service token was presented.'
+        '422':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+          description: "Semantically invalid: the shape is right and a value cannot be (\xA76.6)."
+      summary: Ingest a device event
+  /v1/events/identity:
+    post:
+      operationId: ingest_identity_v1_events_identity_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IdentityEventRequest'
+        required: true
+      responses:
+        '202':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AcceptedResponse'
+          description: Successful Response
+        '400':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+          description: "Malformed request: the body does not match the schema (\xA76.1)."
+        '401':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+          description: 'Unauthenticated: no valid service token was presented.'
+        '422':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+          description: "Semantically invalid: the shape is right and a value cannot be (\xA76.6)."
+      summary: Ingest an identity event
+  /v1/transactions:
+    post:
+      operationId: score_transaction_v1_transactions_post
+      parameters:
+      - in: header
+        name: X-Idempotency-Key
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Idempotency-Key
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransactionRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RiskDecision'
+          description: Successful Response
+        '400':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+          description: "Malformed request: the body does not match the schema (\xA76.1)."
+        '401':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+          description: 'Unauthenticated: no valid service token was presented.'
+        '409':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+          description: "Idempotency conflict: the key was reused with a different payload (\xA75)."
+        '422':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+          description: "Semantically invalid: the shape is right and a value cannot be (\xA76.6)."
+        '429':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+          description: Rate limited. Carries Retry-After.
+        '503':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+          description: The decision could not be durably recorded, so it was not returned (ADR-0035).
+      summary: Score a transaction synchronously

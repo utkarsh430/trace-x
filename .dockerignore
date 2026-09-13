@@ -1,0 +1,29 @@
+# ============================================================================
+# Build context for deploy/gateway.Dockerfile.
+#
+# DENY EVERYTHING, then re-admit the four paths the image is built from. The
+# inverse (listing what to exclude) fails open: a new `.env.staging`, a dumped
+# database, or a downloaded IEEE-CIS archive would land in the context and then
+# in a layer, and CLAUDE.md §9 forbids a secret in an image. It also keeps the
+# context small -- `.venv/` and `data/` alone are the bulk of this working tree,
+# and neither has any business being sent to the daemon.
+# ============================================================================
+*
+
+# The project metadata and the pinned dependency set (ADR-0018 / `make lock`).
+!pyproject.toml
+!requirements.lock
+
+# The modular monolith, installed as a package: its rule packs and threshold
+# config ship as package data, so the gateway can boot on its own.
+!packages
+
+# The thin HTTP entrypoint. NOT part of the installed package
+# ([tool.setuptools.packages.find] looks only in packages/), so it is copied and
+# imported from the working directory.
+!services
+
+# Compiled artefacts of the host's Python, which is not the image's Python.
+# Copying them in would leave stale bytecode shadowing the source it came from.
+**/__pycache__
+**/*.py[cod]

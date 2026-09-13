@@ -261,6 +261,10 @@ def test_topic_keys_match_the_documented_keys(manifest: dict[str, Any]) -> None:
         "tx.raw.v1": "account_id",
         "identity.events.v1": "account_id",
         "device.events.v1": "device_id",
+        # NOT investigation_id, which the earlier PLANNED entry anticipated: an
+        # investigation is minted by the worker that leases the case, so at
+        # produce time it does not exist yet (ADR-0027).
+        "investigation.requested.v1": "case_id",
     }
     for entry in manifest["released"]:
         assert entry["key"] == expected[entry["topic"]]

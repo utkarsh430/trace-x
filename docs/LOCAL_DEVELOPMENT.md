@@ -37,9 +37,13 @@ Put it in your shell profile. `make doctor` warns until it is correct.
 git clone <repo> && cd trace-x
 make setup      # venv + dev dependencies, creates .env from the template
 make doctor     # preflight — fix anything it reports before continuing
-make up         # core profile: postgres + redis, then applies migrations
+make up         # core profile: postgres, redis, gateway, then applies migrations
 make verify     # ★ canonical health check
 ```
+
+The first `make up` **builds** the gateway image from this repository, which takes a few minutes on a
+cold Docker cache and is then reused. It also needs one service token in `.env` — see
+[Running the gateway](#running-the-gateway) — because the gateway refuses to start without one.
 
 `make verify` is the single command that answers "is this repository healthy?". Run it before claiming
 anything works, and after every change.
@@ -66,6 +70,10 @@ make up                  # core
 make up-streaming        # core + streaming
 make up-full             # everything — needs ~15 GB free and 8 GB Docker RAM
 ```
+
+The table is the design. **What `core` actually starts today is postgres, redis and the gateway**;
+`trace-api`, `trace-worker` and the dashboard arrive with their phases, and the MCP servers are
+spawned over stdio by the worker rather than run as containers. `docs/PROGRESS.md` is the live state.
 
 **Every degraded mode is visible, never silent.** A response made without reconciled features says so
 in a header; graph evidence gathered from the fallback adapter carries lower confidence and records
@@ -172,8 +180,87 @@ without a `--result`.
 | `permission denied for table events` on an audit `SELECT` | **Working as designed** | The audit log is append-only: `trace_app` may `INSERT` only. Note `INSERT ... RETURNING` also fails, because it needs `SELECT` |
 | Migration fails: `TRACE_APP_DB_PASSWORD is not set` | `.env` not exported | `make migrate` sources `.env`; if running alembic directly, export the four `TRACE_*_DB_PASSWORD` variables |
 | `docker pull` hangs; `error getting credentials` | macOS keychain credential helper is blocked (common when the keychain is locked or the login session is non-interactive) | Unlock the login keychain, or bypass the helper for one command: `export DOCKER_CONFIG=$(mktemp -d); echo '{}' > $DOCKER_CONFIG/config.json; ln -s ~/.docker/cli-plugins $DOCKER_CONFIG/cli-plugins`. The symlink is required — without it the `docker compose` plugin is not discovered |
+| Any `docker compose` command stops with `required variable TRACE_SERVICE_TOKEN_LOCAL is missing a value` | No service token in `.env` | Add `TRACE_SERVICE_TOKEN_LOCAL=<32+ chars>`. The gateway refuses to start without one, so compose refuses first |
+| Gateway container restarts in a loop, logs `TokenConfigurationError` | A token shorter than 32 characters | `openssl rand -hex 32`. A short secret is guessable and a gateway is a public surface |
+| `make up` hangs on `Container tracex-gateway-1 Waiting` | The image is building on a cold cache, or the app is waiting out its Postgres pool timeout | `docker compose -f deploy/compose.yml logs -f gateway`. Start-up waits the pool's full timeout before serving degraded, which is why the healthcheck allows for it |
+| Gateway is healthy but `/readyz` returns 503 | Migrations have not run, so the `trace_app` role does not exist | `make migrate`. Health is liveness; readiness needs the database |
+| Gateway logs `connection refused` for port 5442 or 6389 | The container inherited the **host** ports from `.env` | Inside the compose network Postgres is `postgres:5432` and Redis is `redis:6379`; `deploy/compose.yml` sets those explicitly |
+| Code changes have no effect on the running gateway | The image is built, not mounted | `docker compose -f deploy/compose.yml --env-file .env --profile core up -d --build gateway` |
 | Integration tests skipped | Docker not running | Start Docker; the skip message names the reason |
 | `external` tests skipped | IEEE-CIS not downloaded | `make fetch-external` (needs Kaggle credentials) |
+
+---
+
+## Running the gateway
+
+`trace-gateway` is the synchronous scoring surface. It runs in the `core` profile as a container built
+from this repository (`deploy/gateway.Dockerfile`), published on **8010**.
+
+### It will not start without a service token
+
+Callers are payment systems, not people, so the gateway authenticates **service identity**
+(`docs/SECURITY.md` §3, Plane B) and **refuses to start when no token is configured** — a gateway that
+authenticated a built-in credential would be open by default and fail silently. `.env` must therefore
+carry at least one:
+
+```bash
+TRACE_SERVICE_TOKEN_LOCAL=<at least 32 characters>   # openssl rand -hex 32
+```
+
+A caller presents it as `Bearer <token_id>.<secret>`, where the id is the part of the variable name
+after the prefix, lowercased — `TRACE_SERVICE_TOKEN_LOCAL` is presented as `local.<secret>`. Only the
+id is ever logged or used as a rate-limit key; the secret stays out of Redis, logs and metrics.
+
+If the variable is missing, **every** `docker compose` command in this repository stops with
+`required variable TRACE_SERVICE_TOKEN_LOCAL is missing a value` — including `make down`. That is
+deliberate: the alternative is a container that starts, crash-loops and has to be diagnosed from a
+stack trace.
+
+### Probing it
+
+```bash
+curl -s localhost:8010/healthz    # liveness — touches no dependency
+curl -s localhost:8010/readyz     # readiness — 503 while Postgres is unreachable
+curl -s localhost:8010/metrics    # Prometheus exposition, with the `obs` profile down
+```
+
+`/readyz` returns 503 until `make migrate` has run, because it connects as `trace_app` and that role is
+created by the migration. The container's own healthcheck probes `/healthz` for exactly this reason:
+`make up` waits for health *before* it migrates, so a readiness probe there would deadlock a fresh
+clone — and a process degrading correctly through a database blip is not a process to restart.
+
+### Scoring a transaction
+
+```bash
+curl -s -X POST localhost:8010/v1/transactions \
+  -H "Authorization: Bearer local.$TRACE_SERVICE_TOKEN_LOCAL" \
+  -H "Content-Type: application/json" \
+  -H "X-Idempotency-Key: $(uuidgen)" \
+  -d '{"transaction_id":"txn_local_001","account_id":"acct_100001","amount_minor":4599,
+       "currency":"USD","occurred_at":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'",
+       "merchant_id":"mrch_10001","channel":"CARD_PRESENT"}'
+```
+
+`X-Idempotency-Key` is required on every mutating POST: without one the request is rejected rather than
+given an invented key, which would make a retry a new request. Repeat the call with the same key and
+the same body to get the stored response back and no second case.
+
+Two response headers say what the decision was made with — `X-Trace-Degraded` and `X-Feature-Source`.
+Stop Redis (`docker compose -f deploy/compose.yml --env-file .env stop redis`) and score again: the
+request still succeeds, the rules over online features abstain, and both headers change. That is the
+designed degraded mode, not a fault.
+
+### After changing the code
+
+The image is **built, not mounted**, so a change to `services/` or `packages/` does not reach a running
+container until it is rebuilt:
+
+```bash
+docker compose -f deploy/compose.yml --env-file .env --profile core up -d --build gateway
+```
+
+Its memory limit is set so the whole `core` profile stays inside the budget `docs/ARCHITECTURE.md` §14
+gives it; `tests/unit/test_compose_profiles.py` fails if a change to any limit breaks that sum.
 
 ---
 

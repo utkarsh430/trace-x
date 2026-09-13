@@ -135,7 +135,11 @@ RLS · `409` idempotency conflict — same key, different payload · `422` seman
    the schema level.**
 3. Timestamps are RFC 3339 with an explicit offset. Naive datetimes are rejected. `occurred_at` (event
    time) and `ingested_at` (processing time) are distinct fields and are never interchanged.
-4. Identifiers are typed and prefixed (`acc_`, `dev_`, `mer_`, `inv_`, `act_`), validated by pattern.
+4. Identifiers are typed and prefixed (`acct_`, `card_`, `dev_`, `mrch_`, `ip_`, `inv_`, `act_`),
+   validated by pattern. The first five are fixed by the **released, immutable** `tx.raw.v1` schema
+   and by `trace_core.domain.identifiers`, and they are also the prefixes the PII redaction pattern
+   recognises — a different spelling would put account identifiers into log output.
+   `tests/unit/test_identifier_formats.py` pins all three together.
 5. String fields sourced from clients carry a maximum length and are stamped `trust_tier=UNTRUSTED`.
 6. Enums are closed on input. Unknown request enum values are `422`, never coerced to a default.
 7. Pagination is cursor-based (`cursor`, `limit`, max 200). Offset pagination is not offered — it is

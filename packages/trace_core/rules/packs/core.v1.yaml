@@ -1,0 +1,244 @@
+# =============================================================================
+# TRACE-X core rule pack v1
+#
+# Eighteen deterministic rules over the 26 declared online features. Digest-
+# pinned: every RiskDecision carries this pack's sha256, so "which rules were
+# live at 14:03?" is answerable from the decision rather than from a deploy log.
+#
+# THRESHOLDS HERE ARE DECLARED CONFIGURATION, NOT FITTED PARAMETERS.
+# Phase 2 has no model and no access to labels -- the application role cannot
+# read the `groundtruth` schema at all (ADR-0004). Tuning these against labels
+# from inside the application would be leakage by another route. They are set
+# from the published fraud SIGNATURES (docs/FRAUD_SCENARIOS.md §3), which are
+# properties of the data. Phase 4 selects operating points through the
+# evaluation harness, which may read ground truth because that is its job.
+#
+# A rule whose inputs are absent ABSTAINS and is counted. It never evaluates to
+# false: that would make a missing feature look like a measured "no risk".
+# =============================================================================
+pack_id: core
+version: 1.0.0
+description: >-
+  Baseline deterministic rules for the synchronous scoring path, covering all ten
+  documented Track A fraud signatures plus supporting context.
+
+constants:
+  # MCCs where a novel, out-of-profile transaction is worth more attention.
+  # ISO 18245 codes; named once so a reviewer can find the definition.
+  high_risk_mcc:
+    - "7995"   # betting and wagering
+    - "6051"   # quasi-cash, crypto and money transfer
+    - "6011"   # ATM cash disbursement
+    - "5967"   # direct marketing, inbound teleservices
+    - "4816"   # computer network and information services
+  card_not_present_channels:
+    - "CARD_NOT_PRESENT"
+  manual_entry_modes:
+    - "MANUAL"
+    - "MAGSTRIPE"
+
+rules:
+  # --- CARD_TESTING ---------------------------------------------------------
+  - id: R001_card_testing_burst
+    version: 1.0.0
+    description: >-
+      Many small authorisations across many merchant categories in minutes, which is
+      what probing a stolen card looks like before the payoff charge.
+    weight: 0.85
+    band_floor: HIGH
+    when:
+      all_of:
+        - { feature: account_distinct_mcc_5m, op: ">=", value: 5 }
+        - { feature: account_tx_count_5m, op: ">=", value: 8 }
+
+  - id: R002_declined_ratio_high
+    version: 1.0.0
+    description: >-
+      A high share of declines over a meaningful number of attempts. Card testing
+      generates declines by design, and this survives when the amounts are tiny.
+    weight: 0.7
+    band_floor: HIGH
+    when:
+      all_of:
+        - { feature: declined_ratio_1h, op: ">=", value: 0.4 }
+        - { feature: account_tx_count_1h, op: ">=", value: 10 }
+
+  - id: R003_card_probing_velocity
+    version: 1.0.0
+    description: >-
+      A burst concentrated on one card rather than one account, which distinguishes
+      a compromised instrument from a busy customer.
+    weight: 0.5
+    when:
+      { feature: card_tx_count_5m, op: ">=", value: 10 }
+
+  # --- VELOCITY_ATTACK ------------------------------------------------------
+  - id: R004_velocity_spike_1m
+    version: 1.0.0
+    description: >-
+      More transactions in one minute than an ordinary customer produces, regardless
+      of the amounts involved.
+    weight: 0.6
+    when:
+      { feature: account_tx_count_1m, op: ">=", value: 5 }
+
+  - id: R005_velocity_spike_5m
+    version: 1.0.0
+    description: >-
+      A sustained five-minute burst on one account, the shape a scripted attack makes
+      when it is not trying to stay quiet.
+    weight: 0.7
+    band_floor: HIGH
+    when:
+      { feature: account_tx_count_5m, op: ">=", value: 12 }
+
+  - id: R006_velocity_spike_1h
+    version: 1.0.0
+    description: >-
+      Sustained hourly volume far above what a single cardholder plausibly generates.
+    weight: 0.5
+    when:
+      { feature: account_tx_count_1h, op: ">=", value: 40 }
+
+  # --- IMPOSSIBLE_TRAVEL ----------------------------------------------------
+  - id: R007_impossible_travel
+    version: 1.0.0
+    description: >-
+      Two card-present transactions implying a speed no commercial travel achieves.
+      Either the card is in two places, or the data is wrong; both need a human.
+    weight: 1.0
+    band_floor: CRITICAL
+    when:
+      { feature: implied_speed_kmh_from_last, op: ">", value: 1000 }
+
+  # --- ACCOUNT_TAKEOVER -----------------------------------------------------
+  - id: R008_identity_change_then_new_device
+    version: 1.0.0
+    description: >-
+      Spending from an unfamiliar device within a day of a credential change. A
+      takeover begins with the credential change, which is why recency is the signal.
+    weight: 0.9
+    band_floor: HIGH
+    when:
+      all_of:
+        - { feature: hours_since_identity_change, op: "<=", value: 24 }
+        - { feature: device_is_known_for_account, op: "==", value: 0 }
+
+  - id: R009_new_device_high_value
+    version: 1.0.0
+    description: >-
+      An unfamiliar device spending well outside the account's own amount baseline,
+      which is the takeover shape once the attacker stops being careful.
+    weight: 0.8
+    band_floor: HIGH
+    when:
+      all_of:
+        - { feature: device_is_known_for_account, op: "==", value: 0 }
+        - { feature: amount_zscore_vs_account, op: ">=", value: 3 }
+
+  # --- DEVICE_FARM and FRAUD_RING -------------------------------------------
+  - id: R010_device_shared_across_accounts
+    version: 1.0.0
+    description: >-
+      One device fingerprint transacting for many unrelated accounts in a day. The
+      concentration is the signal a device farm cannot avoid producing.
+    weight: 0.85
+    band_floor: HIGH
+    when:
+      { feature: device_distinct_accounts_24h, op: ">=", value: 5 }
+
+  - id: R011_ip_shared_across_accounts
+    version: 1.0.0
+    description: >-
+      Many distinct accounts transacting from one address within an hour, the
+      structural signature of a ring or a stuffing run rather than a shared household.
+    weight: 0.7
+    when:
+      { feature: ip_distinct_accounts_1h, op: ">=", value: 10 }
+
+  # --- CREDENTIAL_STUFFING --------------------------------------------------
+  - id: R012_failed_login_burst
+    version: 1.0.0
+    description: >-
+      A burst of failed logins against this account in the last hour. Credential
+      stuffing IS that burst; the transaction alone shows only the aftermath.
+    weight: 0.75
+    band_floor: HIGH
+    when:
+      { feature: failed_logins_1h, op: ">=", value: 20 }
+
+  - id: R013_stuffing_origin_and_spend
+    version: 1.0.0
+    description: >-
+      Failed logins against the account combined with an address serving many other
+      accounts, which separates a stuffing run from a customer mistyping a password.
+    weight: 0.8
+    band_floor: HIGH
+    when:
+      all_of:
+        - { feature: failed_logins_1h, op: ">=", value: 5 }
+        - { feature: ip_distinct_accounts_1h, op: ">=", value: 5 }
+
+  # --- MERCHANT_COLLUSION ---------------------------------------------------
+  - id: R014_merchant_uniform_amounts
+    version: 1.0.0
+    description: >-
+      One merchant taking unusually uniform amounts from many unrelated accounts.
+      Genuine spend is dispersed; laundering through one merchant is not.
+    weight: 0.65
+    when:
+      all_of:
+        - { feature: merchant_amount_cv_24h, op: "<=", value: 0.05 }
+        - { feature: merchant_distinct_accounts_1h, op: ">=", value: 20 }
+
+  # --- ANOMALOUS_HIGH_VALUE -------------------------------------------------
+  - id: R015_high_value_anomaly
+    version: 1.0.0
+    description: >-
+      An amount far outside the account's own distribution. Defined per account
+      rather than globally, so it does not simply select wealthy customers.
+    weight: 0.8
+    band_floor: HIGH
+    when:
+      { feature: amount_zscore_vs_account, op: ">=", value: 6 }
+
+  - id: R016_unhabitual_merchant_and_category
+    version: 1.0.0
+    description: >-
+      An unfamiliar merchant in an unfamiliar category at an unusual amount, the
+      combination that distinguishes a new purchase from a new pattern.
+    weight: 0.55
+    when:
+      all_of:
+        - { feature: merchant_is_habitual, op: "==", value: 0 }
+        - { feature: mcc_is_habitual_for_account, op: "==", value: 0 }
+        - { feature: amount_zscore_vs_account, op: ">=", value: 2 }
+
+  # --- UNUSUAL_LOCATION_DEVICE ----------------------------------------------
+  # Deliberately the weakest rule in the pack, matching the deliberately weakest
+  # scenario (docs/FRAUD_SCENARIOS.md §3.10). It overlaps heavily with a customer
+  # travelling with a new phone. Strengthening it would destroy what the Phase 9
+  # Arm F ablation measures, so it carries low weight and forces no band floor.
+  - id: R017_far_from_home_new_device
+    version: 1.0.0
+    description: >-
+      A never-seen device a long way from the account's usual location. Weak and
+      ambiguous by design: it overlaps with ordinary travel, and it should.
+    weight: 0.35
+    when:
+      all_of:
+        - { feature: device_is_known_for_account, op: "==", value: 0 }
+        - { feature: distance_from_account_home_km, op: ">=", value: 500 }
+
+  # --- supporting context ---------------------------------------------------
+  - id: R018_high_risk_category_unfamiliar
+    version: 1.0.0
+    description: >-
+      A high-risk merchant category the account has never used before, on a young
+      account. Category alone is not a signal; category plus unfamiliarity is.
+    weight: 0.45
+    when:
+      all_of:
+        - { field: merchant_mcc, in_set: high_risk_mcc }
+        - { feature: mcc_is_habitual_for_account, op: "==", value: 0 }
+        - { feature: account_tenure_days, op: "<=", value: 30 }

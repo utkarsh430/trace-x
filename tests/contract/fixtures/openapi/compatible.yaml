@@ -1,0 +1,61 @@
+# Fixture: two changes §2 classifies as COMPATIBLE.
+#
+#   1. an OPTIONAL request field added -- existing clients keep working;
+#   2. a NEW endpoint added -- nothing existing is affected.
+#
+# The gate must accept this. A checker that rejects everything is bypassed within
+# a week, and then nothing is checked at all -- which is strictly worse than a
+# checker that is merely imperfect.
+openapi: 3.1.0
+info:
+  title: Fixture API
+  version: "1"
+paths:
+  /v1/things:
+    post:
+      summary: Create a thing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ThingRequest'
+      responses:
+        '200':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThingResponse'
+  /v1/things/count:
+    get:
+      summary: Count things
+      responses:
+        '200':
+          description: A count
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count:
+                    type: integer
+components:
+  schemas:
+    ThingRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        note:
+          type: string
+        label:
+          type: string
+    ThingResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ACCEPTED, REJECTED, PENDING]

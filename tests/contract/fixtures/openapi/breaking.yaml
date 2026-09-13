@@ -1,0 +1,50 @@
+# Fixture: two changes docs/API_CONTRACTS.md §2 classifies as BREAKING.
+#
+#   1. `reason` added as a REQUIRED request field -- "make an optional request
+#      field required" is a new major version. Every existing client's requests
+#      become invalid the moment this ships.
+#   2. `PENDING` removed from a response enum -- "remove or rename any field" and
+#      narrowing a value range are both breaking. A client with an exhaustive
+#      match over the old enum still compiles and is now wrong.
+#
+# The gate must reject this. If it ever accepts it, the gate is decorative.
+openapi: 3.1.0
+info:
+  title: Fixture API
+  version: "1"
+paths:
+  /v1/things:
+    post:
+      summary: Create a thing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ThingRequest'
+      responses:
+        '200':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThingResponse'
+components:
+  schemas:
+    ThingRequest:
+      type: object
+      required: [name, reason]
+      properties:
+        name:
+          type: string
+        note:
+          type: string
+        reason:
+          type: string
+    ThingResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ACCEPTED, REJECTED]

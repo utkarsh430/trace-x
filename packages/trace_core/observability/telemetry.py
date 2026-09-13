@@ -66,11 +66,20 @@ def _sampler(ratio_env: str = "TRACE_OTEL_SAMPLE_RATIO") -> Any:
     return ParentBased(TraceIdRatioBased(max(0.0, min(1.0, ratio))))
 
 
-def configure_telemetry(service_name: str, *, force: bool = False) -> None:
+def configure_telemetry(
+    service_name: str, *, force: bool = False, prometheus: bool = False
+) -> None:
     """Install tracer and meter providers for this process.
 
     Idempotent: calling it twice is a no-op, because a second TracerProvider
     would silently orphan every span created against the first.
+
+    `prometheus=True` adds a scrape reader to the SAME meter provider, so
+    `/metrics` serves the instruments the application already writes rather than
+    a parallel set. Two metric pipelines would mean two definitions of every
+    counter, and the one an alert watches would be whichever the author found
+    first. ARCHITECTURE §14 requires `/metrics` to work with the `obs` profile
+    down, which is exactly what a scrape endpoint with no collector gives.
     """
     global _configured
     if _configured and not force:
@@ -80,7 +89,14 @@ def configure_telemetry(service_name: str, *, force: bool = False) -> None:
     resource = _resource(service_name)
 
     tracer_provider = TracerProvider(resource=resource, sampler=_sampler())
-    metric_readers: list[PeriodicExportingMetricReader] = []
+    metric_readers: list[Any] = []
+
+    if prometheus:
+        # Imported lazily for the same reason as the OTLP exporter: a process
+        # that does not serve /metrics should not pay the import.
+        from opentelemetry.exporter.prometheus import PrometheusMetricReader
+
+        metric_readers.append(PrometheusMetricReader())
 
     if endpoint:
         # Imported lazily: the OTLP exporter pulls in grpc, and a process with

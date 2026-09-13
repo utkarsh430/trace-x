@@ -78,11 +78,39 @@ Two contract gates were added in Phase 1 and run inside `make verify`:
   direction. A released schema file is immutable, so freezing a contract before a producer exists
   guarantees a `.v2` later.
 
+Phase 2 added three more:
+
+- **openapi drift** — `scripts/generate_openapi.py --check` regenerates the committed spec from the
+  Pydantic models and compares. In `make verify` rather than CI alone, for the reason the Phase 0
+  secret scan was moved there: a gate that only runs in CI lets a local run pass while CI goes red.
+- **breaking-change gate** — `scripts/openapi_diff.py`, the pinned `oasdiff` image (ADR-0036,
+  ADR-0037). It has a **self-test with both halves**: a breaking fixture pair that must be rejected
+  and a compatible pair that must be accepted. A checker that rejects everything is bypassed within a
+  week, and then nothing is checked at all.
+- **online-store correctness** — `tests/integration/test_online_store_capacity.py` starts a real
+  Redis with a 2 MB limit and `noeviction`, fills it, and asserts the store refuses rather than evicts
+  (`evicted_keys` stays 0), the refusal is typed, and the breaker stays closed;
+  `tests/chaos/test_redis_down.py` pauses the **cache** instance and asserts no decision changes, and
+  `FLUSHALL`s the feature store and asserts `history_incomplete`; the conformance suite carries
+  `complete_since` explicitly, so "an unseen device is not known" is asserted on a store that has
+  watched for its horizon and "cannot tell" on one that has not (ADR-0044).
+- **feature-semantics conformance** — `tests/conformance/feature_semantics_suite.py`, run unmodified
+  against the naive reference implementation and against Redis, and against Spark from Phase 3. It is
+  how online/offline parity is proven without anyone redefining a feature (ADR-0032).
+
 ```bash
 make test-fast   # unit + property + contract + conformance + transport_parity  (< 5 min, no services)
 make test        # everything except cloud
-make verify      # ★ canonical: doctor + acceptance + claims + lint + types + test-fast + bandit
+make verify      # ★ canonical: doctor + acceptance + claims + codegen + openapi + lint + types +
+                 #   test-fast + bandit + secret-scan
 ```
+
+**Chaos tests produce the failure, they do not simulate it.** `pytest -m chaos
+tests/chaos/test_redis_down.py` pauses the real Redis container under a running gateway. `docker
+pause` rather than `stop`, because pausing reproduces a network partition — connections hang and time
+out — while stopping gives an immediate refusal, and the timeout path is the one with a latency budget
+attached. That distinction is not academic: the first run of that suite found a degraded request
+taking **21.8 s** against a configured 20 ms timeout (ADR-0035).
 
 ---
 

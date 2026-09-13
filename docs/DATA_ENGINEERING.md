@@ -76,6 +76,10 @@ Redis (hot) and Spark (warm) compute the same features by two different mechanis
 ADR-0002. The risk is silent divergence, so it is measured rather than trusted:
 
 - A **single feature definition module** declares each feature's semantics and `required_fields`.
+  From Phase 2 that declaration is machine-readable (ADR-0032): every feature carries a `semantics`
+  object naming its entity, stream, window and aggregation, so Phase 3 compiles the offline version
+  from the declaration rather than re-deriving the intent from prose. A shared module that shared only
+  Python closures would not have helped — a closure over a Redis client cannot be run by Spark.
 - The Gold → Redis **reconciliation job** writes authoritative values back to the online store.
 - **`feature_parity_drift{feature}`** is a first-class monitored metric.
 - An automated **parity test** (`pytest -m parity`) replays a 100 k-event stream through both paths and
@@ -83,9 +87,34 @@ ADR-0002. The risk is silent divergence, so it is measured rather than trusted:
   cardinality features and is documented per feature.
 - **Widening a tolerance to make the test pass is prohibited** — it converts a detected bug into a
   hidden one. Investigate the divergence instead.
+- **Most features are compared by equality, not tolerance.** ADR-0034 stores distinct counts exactly
+  wherever cardinality is bounded by one entity's own behaviour, so five of the seven distinct counts
+  have a parity tolerance of *zero*; only the two whose cardinality is bounded by a sharing
+  population, plus the robust z-score, are estimates. A tolerance is a declared property of a named
+  feature, never a global allowance.
 
 When the `streaming` profile is off, responses carry `X-Feature-Source: ONLINE_ONLY` so degradation is
 visible rather than silent.
+
+### The backfill contract (ADR-0044)
+
+The online store holds **only** the state the released features declare — `trace_core.features.state_plan`
+derives what is written, for which entities, and with what retention from every `FeatureSpec.semantics`.
+Nothing is retained for a feature that has not been released, so a feature released later must not
+pretend its history exists:
+
+```
+new feature → required state declared in FeatureSpec.semantics
+            → PLAN derives its primitives and retention
+            → backfill (Phase 3: durable replay from Bronze/Silver into the store) or warm-up
+            → INSUFFICIENT_HISTORY, decisions carry history_incomplete, until the lookback is complete
+            → /readyz reports "complete since …" → feature enabled
+```
+
+The store records a **completeness epoch**; a window that began before it is incomplete and reads as
+`INSUFFICIENT_HISTORY`, one that began after it is complete and an absent key is a measured zero. The
+Gold → Redis reconciliation job is what makes backfill possible: it is the only path by which a store
+younger than a feature's lookback can become complete without waiting the lookback out.
 
 ---
 

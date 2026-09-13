@@ -162,7 +162,7 @@ records Redpanda as a documented alternative if the RAM ceiling binds).
 | `identity.events.v1` | `account_id` | 3 / 12 | 30 d | gateway → stream |
 | `device.events.v1` | `device_id` | 3 / 12 | 30 d | gateway → stream |
 | `tx.scored.v1` | `account_id` | 6 / 24 | 7 d | gateway → stream, triage |
-| `investigation.requested.v1` | `investigation_id` | 3 / 6 | 30 d | triage → worker |
+| `investigation.requested.v1` | `case_id` | 3 / 6 | 30 d | triage → worker |
 | `investigation.events.v1` | `investigation_id` | 3 / 6 | 90 d | worker → api, audit, eval |
 | `action.proposed.v1` | `investigation_id` | 3 / 6 | 90 d | worker → policy |
 | `action.executed.v1` | `action_id` | 3 / 6 | ∞ compacted | executor → audit |
@@ -470,7 +470,14 @@ forbids UPDATE/DELETE, and a verifier job detects tampering. A broken chain is a
 **Tracing.** One `trace_id` flows HTTP ingress → Kafka header → Spark → worker → each agent node →
 each tool call (including across MCP) → action execution. An investigation is one distributed trace.
 
-**Metrics.** Hot path: `tx_score_latency_seconds`, `tx_scored_total{band}`, `degraded_mode_total{reason}`.
+**Metrics.** Hot path: `tx_score_latency_seconds`, `gateway_request_latency_seconds`, `online_store_memory_bytes{store}`, `online_store_evicted_keys_total{store}`, `tx_scored_total{band}`, `degraded_mode_total{reason}`.
+The two latency histograms measure deliberately different things and neither is a substitute for
+the other: `tx_score_latency_seconds` covers **scoring only** — the feature read, the rules and the
+banding — and is the `latency_ms` the caller is told; `gateway_request_latency_seconds` covers the
+**whole server-side request**, including authentication, the rate limit, the replay lookup, triage
+and the observe-write, and is the one to compare against the p99 budget. They were briefly one
+metric that spanned scoring plus triage plus the observe-write, which on a workload where most
+requests open an investigation reported a Postgres transaction as scoring time.
 Streaming: consumer lag, batch duration, `late_events_total`, `dedup_dropped_total`,
 `feature_parity_drift{feature}`. Agents: `investigation_duration_seconds`,
 `agent_invocations_total{agent,outcome}`, `tool_calls_total{tool,transport,status}`,
@@ -494,7 +501,7 @@ Profiled compose; `core` is a complete working product on its own.
 
 | Profile | Services | ~RAM | ~Disk | Degraded behaviour when off |
 |---|---|---|---|---|
-| `core` | postgres, redis, gateway, api, worker, ui, 3 MCP servers via stdio | 2.7 GB | ~4 GB | — |
+| `core` | postgres, redis (feature store, `noeviction`), redis-cache (replay + rate limit, `allkeys-lru`), gateway, api, worker, ui, 3 MCP servers via stdio | 2.7 GB | ~4 GB | — |
 | `streaming` | kafka (KRaft), spark master + worker | 3.5 GB | ~5 GB | Online features only; `FeatureSource=ONLINE_ONLY` |
 | `graph` | neo4j | 1.5 GB | ~1 GB | `PostgresGraphStore` fallback; graph evidence confidence reduced |
 | `ml` | mlflow | 0.5 GB | ~1 GB | Serving unaffected (pinned artifacts); training unavailable |
@@ -504,6 +511,18 @@ Profiled compose; `core` is a complete working product on its own.
 
 MCP servers run over **stdio by default**, spawned by the worker — a real protocol boundary at zero
 container cost, which is what makes local-first MCP viable on an 8 GB VM.
+
+**Two Redis instances, because eviction policy is per instance** (ADR-0044). The feature store holds
+correctness-relevant state and runs `noeviction`: when full it refuses the write, the decision says
+`feature_write_failed`, and its completeness epoch is withdrawn. The cache instance holds the replay
+cache and rate-limit windows and runs `allkeys-lru`, because nothing in it decides — the replay
+guarantee's authority is `cases.trigger_transaction_id` in Postgres and the limiter fails open. The
+feature store's limit follows from `benchmarks/features/memory_model.py`: 704 MiB holds the
+ten-minute representative acceptance run with 1.25× headroom and about thirteen minutes of 500 TPS;
+the steady-state requirement at that rate is ~26 GiB and does not fit this profile, which ADR-0044
+states structure by structure rather than resolving by changing feature semantics. Allocated:
+postgres 768M, redis 832M, redis-cache 160M, gateway 384M — 2,144 MiB, leaving 621 MiB for `api`,
+`worker` and `ui`.
 
 Full workflow: `docs/LOCAL_DEVELOPMENT.md`.
 
@@ -585,7 +604,10 @@ zero unauthorized tool calls.
 
 | Failure | Detection | Behaviour |
 |---|---|---|
-| Redis down | health probe / 20 ms timeout | Hot path → rules-only, `degraded=true` on the response, alert. Never fail-open silently |
+| Feature-store Redis down | health probe / 20 ms timeout / breaker | Hot path → rules-only, `degraded=true` reason `redis_unavailable`, alert. Never fail-open silently. The cache instance and its limiter are NOT blamed |
+| Feature-store Redis **full** | `feature_write_failed` counted; `online_store_memory_bytes{store="features"}` at `maxmemory`; `online_store_evicted_keys_total{store="features"}` must stay 0 | Write refused (`noeviction`), decision made and marked degraded, completeness epoch withdrawn so every later decision says `history_incomplete`. Reads continue; the breaker does NOT open (ADR-0044) |
+| Feature-store Redis **empty or warming** (restart, `FLUSHALL`) | `/readyz` `feature_history: warming since …`; `degraded_mode_total{reason="history_incomplete"}` | Decisions made, `degraded=true` reason `history_incomplete`, until the store has recorded for the widest declared lookback (24 h windowed, 30 d profile). New-device and tenure rules cannot fire meanwhile. Readiness stays healthy (ADR-0044) |
+| Cache Redis down | health probe on `redis_cache` / cache breaker | Rate limiter fails open (`rate_limit_unavailable`), replay lookups skipped and retries re-scored against Postgres's `case_id`. **No decision changes** (ADR-0044) |
 | Postgres down | connection error | Gateway 503; worker stops consuming — no work lost, the queue is in PG |
 | Kafka down | producer timeout | Gateway buffers to a bounded local WAL then sheds; scoring continues |
 | Model artifact missing/corrupt | digest check at boot | **Refuse to start.** A gateway serving an unknown model is worse than a down gateway |

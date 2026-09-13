@@ -199,7 +199,7 @@ def test_migration_is_recorded_in_the_version_table(seeded: str) -> None:
     """Pinned to the current head, so adding a migration is a deliberate edit
     here rather than something that slips through unnoticed."""
     r = _as(seeded, OWNER, "select version_num from app.alembic_version")
-    assert r.stdout.strip() == "0002"
+    assert r.stdout.strip() == "0003"
 
 
 def test_ground_truth_schema_carries_an_explanatory_comment(seeded: str) -> None:

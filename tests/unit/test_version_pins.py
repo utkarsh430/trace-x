@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import re
+import tomllib
+from pathlib import Path
+
 import pytest
 
 from trace_core.config import PINS, PinMismatchError, assert_pin
 
 pytestmark = pytest.mark.unit
+
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_all_required_pins_are_declared() -> None:
@@ -44,3 +50,33 @@ def test_assert_pin_rejects_missing_component() -> None:
 def test_assert_pin_rejects_unknown_component() -> None:
     with pytest.raises(PinMismatchError, match="not a declared pin"):
         assert_pin("cobol", "85")
+
+
+# --- non-Python tooling (ADR-0036) -----------------------------------------
+
+
+def _tool_images() -> dict[str, str]:
+    data = tomllib.loads((ROOT / "pyproject.toml").read_text())
+    return dict(data["tool"]["trace_x"].get("tools", {}))
+
+
+def test_every_tool_image_is_pinned_by_digest() -> None:
+    """A tag can be moved; a digest cannot.
+
+    These images are a CI gate (oasdiff) and a measurement instrument (k6).
+    An image that changed under a stable tag would silently alter either what
+    the build rejects or what a published benchmark number means -- the same
+    failure the hashed Python lockfile exists to prevent.
+    """
+    images = _tool_images()
+    assert images, "no pinned tool images declared; the gate would pass vacuously"
+    for name, ref in images.items():
+        assert "@sha256:" in ref, (
+            f"tool image '{name}' is pinned as {ref!r}, without a digest. Pin it as "
+            f"repo:tag@sha256:<digest> so a moved tag cannot change a gate or a benchmark."
+        )
+        tag, _, digest = ref.partition("@sha256:")
+        assert ":" in tag, f"tool image '{name}' has no explicit tag: {ref!r}"
+        assert re.fullmatch(r"[0-9a-f]{64}", digest), (
+            f"tool image '{name}' has a malformed digest: {digest!r}"
+        )
