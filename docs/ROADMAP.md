@@ -229,36 +229,66 @@ written to a separate file.
 - Disk freed to ≥ 15 GB.
 - `make doctor` green on the full pin matrix (Java **17**, not 25).
 
+**APPROVED PLAN:** `docs/PHASE3_PLAN.md` (approved 2026-09-13). It records why the implementation list
+below was amended after the planning investigation: implementation items were replaced per the approved
+decisions, and no target or exit condition was lowered.
+
 **IMPLEMENTATION**
-- Kafka KRaft; Bronze / Silver / Gold Spark jobs with watermarking,
-  `dropDuplicatesWithinWatermark`, late-event routing, checkpointing.
-- Gold → Redis reconciliation job; `late_events` table; `feature_parity_drift` metric.
-- `benchmarks/delta_layout/` harness running the real Gold query mix at ≥ 10 M rows across
-  partitioning / partition+Z-order / liquid `CLUSTER BY`. **ADR-0015 is written from those numbers.**
+- Kafka KRaft with declared topics. The gateway publishes a durable observation log (`tx.scored.v1`)
+  whose coverage makes every loss by crash, shedding or outage detectable.
+- Bronze / Silver / Gold Spark jobs with checkpointing. **Silver is the complete accepted history:**
+  exactly deduplicated by declared identity, validated, with late events kept, tagged by a deterministic
+  arrival-delay rule, copied to `late_events` and counted; rejects go to a Delta quarantine table.
+  **Gold is computed in batch:** primitive-shaped state and per-transaction point-in-time features.
+- **Durable feature-state reconstruction:** Gold/Silver → Redis hydration that rebuilds the online
+  primitives (never writes feature values) and claims history completeness only with evidence;
+  `feature_parity_drift` metric.
+- Feature semantics declared precisely, with an idempotent, order-independent online write path; an
+  `eval-v2` dataset in which identity and device events are not a fraud-label proxy (`eval-v1` stays
+  frozen).
+- `benchmarks/delta_layout/` harness running the real Gold query mix at ≥ 10 M rows across partitioning /
+  partition+Z-order / liquid `CLUSTER BY`, plus a no-layout control. **ADR-0015 is written from those
+  numbers** for local OSS Delta; the Databricks layout is decided in Phase 12.
 - Medallion code written adapter-agnostically so P4B requires no changes to it.
 
 **AUTOMATED TESTS**
-- Integration on testcontainers Kafka + local Delta.
+- Integration on real Kafka containers + local Delta.
 - Out-of-order events aggregate correctly by event time.
-- Duplicates dropped exactly once.
-- Late-beyond-watermark events land in `late_events`, never silently dropped.
+- Duplicates dropped exactly once — including retries that carry a new envelope id.
+- Late events are never silently dropped: they stay in Silver, tagged, and land in `late_events`, counted.
 - Checkpoint kill/resume: no data loss, no double-count.
-- **Feature parity: online vs offline within tolerance on a 100 k-event stream.**
+- **Feature parity on a 100 k-event adversarial stream:** implementation parity is exact for exact
+  features; approximate features meet a per-feature error bound no looser than 1% over a declared
+  minimum sample. Hand-derived literal fixtures remain an independent oracle, because implementations
+  can share a bug.
+- Observation-log coverage: every crash, shedding and outage point yields a detectable gap.
 - Version-pin mismatch fails fast with an actionable message, not a `NoSuchMethodError`.
 
 **MANUAL VALIDATION**
-- Kill the Spark worker mid-stream; confirm checkpoint resume and correct final Gold state.
+- Kill the Spark JVM (the local-mode driver) mid-stream; confirm checkpoint resume and correct final
+  Gold state.
 - Read the layout benchmark table and confirm ADR-0015's conclusion follows from it.
 
 **TARGETS**
-- Sustain ≥ 5 k events/s locally; consumer lag recovers to < 10 s after a 2-minute outage.
-- Parity drift < 1% on windowed counters.
+- Sustain ≥ 5k events/s locally; consumer lag recovers to < 10 s after a 2-minute outage, with the
+  outage test offering the 5,000 events/s target rate. The rate is fixed before measurement and never
+  lowered afterwards; insufficient recovery capacity is recorded as a failure.
+- Implementation parity exact on exact features and within an error bound no looser than 1% on
+  approximate ones; arrival skew (as-served versus event-time-complete)
+  < 1% on windowed counters as a pass/fail target on the representative partition declared before
+  measurement, with adversarial classes recorded.
 - Layout benchmark: ≥ 3 options × ≥ 3 query shapes with files-scanned and bytes-scanned recorded.
   **The winner is whatever the numbers say.**
 
 **EXIT CONDITIONS**
-- All medallion tables produced; parity test in CI; replay-from-offset demonstrated.
+- All medallion tables produced; parity test in CI with Spark actually executed; replay-from-offset
+  demonstrated.
 - **ADR-0015 merged citing committed benchmark output.**
+- Every Phase 3 capability in `tests/acceptance/status.json` PASS with executable evidence — including
+  durable reconstruction, observation-log coverage, semantics hardening with the Phase 2 load gate
+  re-met, and `eval-v2`.
+- Local Kafka byte caps and bounded lake retention documented as **local-development overrides**; the
+  production retention contract is unchanged.
 
 ---
 

@@ -1,9 +1,9 @@
 {
   "$schema": "./status.schema.json",
   "project": "TRACE-X",
-  "current_phase": "2",
-  "current_phase_name": "Hot Path: Gateway, Rules, Online Features",
-  "updated_at": "2026-09-12",
+  "current_phase": "3",
+  "current_phase_name": "Streaming & Medallion",
+  "updated_at": "2026-09-13",
   "last_verified_commit": "c86c6cd",
   "legend": {
     "NOT_STARTED": "No implementation exists.",
@@ -137,7 +137,7 @@
       "evidence": {
         "command": "pytest -m property tests/unit/test_state_machines.py",
         "verified_at": "2026-09-12",
-        "result": "pytest -m property tests/unit/test_state_machines.py: 40 passed. Three machines (case/investigation/agent_invocation) as validated transition tables; every illegal transition raises across the full state x event product; tables self-validate at import (dead-end state refused); EXECUTING provably has exactly two entry points; no side effect reachable without passing DECIDED; investigation table diffed edge-for-edge against the ARCHITECTURE.md \u00a78 mermaid block. ADR-0027."
+        "result": "pytest -m property tests/unit/test_state_machines.py: 40 passed. Three machines (case/investigation/agent_invocation) as validated transition tables; every illegal transition raises across the full state x event product; tables self-validate at import (dead-end state refused); EXECUTING provably has exactly two entry points; no side effect reachable without passing DECIDED; investigation table diffed edge-for-edge against the ARCHITECTURE.md §8 mermaid block. ADR-0027."
       }
     },
     {
@@ -193,7 +193,8 @@
         "command": "pytest tests/unit/test_online_features.py",
         "verified_at": "2026-09-12",
         "result": "pytest tests/conformance + tests/integration/test_feature_semantics_redis.py: the SAME feature-semantics suite runs unmodified against the naive reference implementation and against Redis, now with completeness declared per test (ADR-0044): an unseen device is 'not known' on a store that has watched for its horizon and 'cannot tell' on one that started an hour ago; an unseen account on a complete store has measured-zero velocity; an empty store is never silently zero. 26 features with declarative semantics; hybrid EXACT/APPROXIMATE distinct storage (ADR-0034). The store writes only what the released features declare, with per-primitive retention derived from the declarations (state_plan.py; tests/unit/test_state_plan.py). Feature state cannot silently evict: the feature store is noeviction and separate from the disposable cache; tests/integration/test_online_store_capacity.py fills a real 2 MB noeviction Redis and proves evicted_keys stays 0, the refusal is typed, and the breaker stays closed. Memory model run_id bench-20260913-memory-model-5c770259: ten-minute working set 548 MiB, limit 704 MiB; steady state 25.82 GiB recorded as an open limitation, not tuned away."
-      }
+      },
+      "notes": "PASS stands on its recorded evidence, with a caveat recorded in Phase 3 planning: the online store disagrees with the reference on inputs the conformance suite never supplied (boundary minutes, duplicates, out-of-order arrival, currency scope, future-dated trims), the Redis conformance suite skips in CI, and an unreachable store does not withdraw completeness. Owned by Phase 3 Step 1 (docs/PHASE3_PLAN.md)."
     },
     {
       "id": "P2.rules-engine",
@@ -283,6 +284,95 @@
         "result": null
       },
       "notes": "ADR-0015 may not be merged until this produces committed output."
+    },
+    {
+      "id": "P3.kafka-ingest",
+      "phase": "3",
+      "name": "Declared Kafka topics, a correct producer, and conservation into Bronze",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "pytest -m 'stream and integration' tests/integration/test_kafka_ingest.py",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P3.observation-log",
+      "phase": "3",
+      "name": "Gateway observation log: every crash, shed and outage loss is a detectable gap",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "pytest -m chaos tests/chaos/test_observation_log.py",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P3.semantics-hardening",
+      "phase": "3",
+      "name": "Declared feature semantics pass literal fixtures on every implementation; Phase 2 gates re-met",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "pytest -m 'conformance or property' && make load-gateway",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P3.redis-hydration",
+      "phase": "3",
+      "name": "Redis reconstruction reaches completeness only through evidence, never across a gap",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "pytest -m 'stream and integration' tests/integration/test_redis_hydration.py",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P3.stream-throughput",
+      "phase": "3",
+      "name": "Sustained stream throughput and outage recovery at the 5,000 events/s target rate, recorded honestly",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "make load-stream",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P3.pin-failfast",
+      "phase": "3",
+      "name": "A wrong Java, Spark, Delta, Hadoop, Scala or jar fails fast with an actionable message",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "pytest tests/unit/test_stream_toolchain.py && pytest -m stream tests/stream/test_session_failfast.py",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P3.resource-bounds",
+      "phase": "3",
+      "name": "Local resource caps asserted; unsafe lake maintenance refused",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "pytest -m 'unit or integration' -k resource_bounds",
+        "verified_at": null,
+        "result": null
+      }
+    },
+    {
+      "id": "P3.eval-v2",
+      "phase": "3",
+      "name": "eval-v2: legitimate identity/device activity, own manifest and digest, and presence is not a label proxy",
+      "status": "NOT_STARTED",
+      "evidence": {
+        "command": "pytest -m slow tests/integration/test_eval_v2.py",
+        "verified_at": null,
+        "result": null
+      },
+      "notes": "Lead-added tracker for the user-approved Q5 requirements (docs/PHASE3_PLAN.md §3); not a separately approved capability."
     },
     {
       "id": "P4.training",

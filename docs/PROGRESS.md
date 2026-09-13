@@ -10,11 +10,61 @@
 
 ## CURRENT PHASE
 
-**Phase 2 — Hot Path: Gateway, Rules, Online Features** (mandatory)
+**Phase 3 — Streaming & Medallion** (mandatory) — **in progress**, approved 2026-09-13.
 
-Gate: `docs/ROADMAP.md` § Phase 2.
+Gate: `docs/ROADMAP.md` § Phase 3. Approved scope, decisions, safeguards and step order:
+`docs/PHASE3_PLAN.md`. Phase 2 is complete on its exit conditions (below), with the caveats Phase 3
+planning surfaced recorded under *What Phase 3 planning found in Phase 2's artefacts*.
 
 ## CURRENT STATUS
+
+### Phase 3
+
+**Planning is complete and approved; Step 0 (toolchain and dependency contract) is next.** No Phase 3
+capability is PASS yet. The plan was built by six specialist reviews whose load-bearing claims were
+checked against the code, by experiment in a throwaway container, or against cited upstream
+documentation — claims resting only on documentation are re-verified by the step that depends on
+them. The architecture that
+came out of it (reconstruction by rebuilding primitives, a durable gateway observation log, a complete
+exactly-deduplicated Silver, batch Gold, declared feature semantics, a split parity criterion, and
+`eval-v2`) is summarised in `docs/PHASE3_PLAN.md` §2.
+
+**The entry condition "`make doctor` green on the full pin matrix (Java 17)" was met only nominally at
+approval:** the Java check is warning-level, Hadoop and Scala are declared but never asserted, and a
+non-interactive shell runs Java 25. Step 0 remediates it; it was not waived.
+
+### What Phase 3 planning found in Phase 2's artefacts
+
+Recorded because an over-optimistic tracker is worse than none. None of these changes a Phase 2
+exit condition; each is owned by a Phase 3 step.
+
+* **The online store disagrees with the naive reference on inputs the conformance suite never
+  supplies** — boundary minutes of bucket-derived sums, duplicate delivery, out-of-order arrival of
+  the previous observation and of first-seen, the home location, per-currency profile keys,
+  event-time filtering of profile reads, future-dated trims and backdated distinct counts; and the
+  coefficient of variation divides same-currency sums by an all-currency count in *both*
+  implementations. Each produces a wrong number rather than an absence. Owned by Step 1, which re-runs
+  the Phase 2 load gate afterwards.
+* **An unreachable feature store does not withdraw completeness.** When Redis is unreachable (as
+  opposed to full) an observation goes unrecorded but the completeness epoch stands, so after the
+  outage the store claims completeness over a hole. Owned by Step 1.
+* **Phase 2's manual validation carries a label-proxy caveat.** The generator emits identity and
+  device events only inside fraud scenarios, so any identity signal in `eval-v1` marks fraud. The
+  recorded fraud-vs-legitimate banding result stands as measured, but it cannot be read as evidence
+  that identity-based rules generalise. Owned by Step E (`eval-v2`).
+* **The steady-state memory projection in ADR-0044 §5 is not a reliable architecture input.** Its
+  velocity fits extrapolate listpack-encoded sizes into skiplist territory, buckets were counted per
+  observation rather than per active minute, arrivals are uniform, and the population is held fixed
+  across a 30-day horizon; the ADR also quotes a merchant-bucket figure that differs from the report
+  its own `run_id` produced. The ten-minute acceptance figure is unaffected (it was measured). Owned
+  by Step 12.
+* **Several gates were weaker than they looked:** the Redis conformance suite and other
+  Redis-dependent integration tests skip in CI (no Redis is provisioned) and flush the live feature
+  store when run locally; the profile-leakage conformance test cannot fail (identical amounts saturate
+  the z-score); `requirements.lock` is installed by nothing; the ADR-0015 gate unlocks on any non-empty
+  file; and the generator's Kafka sink drops unsent messages at close. Owned by Steps 0, 1, 2, 8 and 14.
+
+### Phase 2 (complete)
 
 **All five Phase 2 capabilities PASS. All three exit conditions are met with recorded evidence.**
 Phase 0 and Phase 1 remain complete; nothing in either was weakened.
@@ -54,7 +104,7 @@ exposed the eviction defect.
 changed was the workload, a bug in the load generator, Redis persistence, and the measurement
 technique — in that order of impact. See ADR-0040 and ADR-0042.
 
-**Phase 3 has not begun and must not begin without explicit user approval.**
+**Phase 3 was approved and begun on 2026-09-13** (see *Phase 3* above).
 
 ### The correctness blocker, resolved (ADR-0044)
 
@@ -119,15 +169,17 @@ Docker is needed for the integration and chaos suites, for `make seed`, and for 
 
 | Question a cold session will ask | Answer |
 |---|---|
-| What phase are we in? | Phase 2 **complete on its stated exit conditions**; the correctness blocker is resolved (ADR-0044), with the steady-state capacity limitation recorded. Phase 3 not started. |
-| What do I do next? | Await approval for Phase 3; the steady-state memory decision (ADR-0044 §5) is the one open product-level question. |
+| What phase are we in? | **Phase 3 in progress** (approved 2026-09-13). Phase 2 complete on its exit conditions, with the caveats recorded above. |
+| What do I do next? | The next unfinished step in `docs/PHASE3_PLAN.md` §5, in wave order. Read §3 (decisions) and §4 (safeguards) first — they are binding. |
 | What exists now? | Everything from Phases 0–1, plus: `trace-gateway` with auth, rate limiting, idempotency, RFC 9457 problems and triage; two Redis instances — a `noeviction` feature store with a completeness epoch and a declaration-driven write plan, and a disposable cache — holding 26 declared features with hybrid distinct-count storage; 18 declarative rules with Kleene semantics and fail-safe hot reload; noisy-OR scoring and banding; the transactional outbox; two workload profiles and a three-stream replay harness. |
 | Which benchmark is the gate? | `benchmarks/gateway/REPORT.md` (representative profile). `benchmarks/gateway/ADVERSARIAL.md` is **not** a gate — it characterises saturation at 97% triage. |
 | What must I never do? | `CLAUDE.md` §17, and §11 (ground-truth isolation) above all. |
 | Where do I record results? | This file and `tests/acceptance/status.json` (which refuses `PASS` without evidence). |
 
 **Known environment gaps:**
-`JAVA_HOME` unset and system Java is 25 (Spark 4.0 needs Temurin 17) — blocks **Phase 3**.
+Temurin 17 is installed and an interactive shell's profile selects it, but a non-interactive shell
+(tooling, `make` from elsewhere) still gets system Java 25 — Step 0 enforces Java 17 in the repository
+itself rather than relying on a shell profile.
 Ollama not installed — blocks **Phase 6**. No AWS credentials — blocks **Phase 12**.
 
 ---
@@ -310,7 +362,7 @@ both reports.
 
 ## WORK IN PROGRESS
 
-Nothing in flight. This is a clean stopping point.
+None committed. Phase 3 Step 0 (toolchain and dependency contract) is next.
 
 ## CURRENTLY FAILING TESTS
 
@@ -322,13 +374,13 @@ Nothing in flight. This is a clean stopping point.
 
 | # | Item | Impact | When |
 |---|---|---|---|
-| D4 | `compose.yml` declares `streaming`/`graph`/`llm` services nothing consumes yet | Profile shape reviewable but unexercised | Phases 3, 5, 6 |
+| D4 | `compose.yml` declares `streaming`/`graph`/`llm` services nothing consumes yet | Profile shape reviewable but unexercised | Phase 3 in progress (Steps 2–3); Phases 5, 6 |
 | D5 | `postgres:16` rather than `postgres:16-alpine` | ~250 MB more disk | Revisit if disk binds |
 | D8 | macOS Docker keychain helper hangs, blocking cold registry pulls | Workaround in `LOCAL_DEVELOPMENT.md` | Environment, not code |
 | D9 | Role passwords in `.env.example` are `change_me_locally` | Fine locally; a shared deployment must supply real values | Before any shared deployment |
 | D11 | CI job logs need repo-admin rights to download | CI-only failures are diagnosed by local reproduction | Optional (`gh auth login`) |
 | **D12** | **Generation throughput below the ROADMAP budget** | Slower dataset builds; no correctness impact. ADR-0029 names the batched-substream scheme as the first thing to try | Revisit if dataset size grows |
-| **D13** | `identity.events.v1` / `device.events.v1` are produced but nothing consumes them yet | The contracts are exercised by the generator only | Phase 3 |
+| **D13** | `identity.events.v1` / `device.events.v1` are produced but nothing consumes them yet | The contracts are exercised by the generator only | Phase 3 Steps 4–6 |
 | ~~D1, D2, D3, D6, D7~~ | ~~Migrations, CI, OTel, lockfile, compose targets~~ | **RESOLVED in Phase 0** | done |
 | ~~D10~~ | ~~No declarative SQLAlchemy models, so autogenerate is unused~~ | Still true and still correct: migrations 0001 and 0002 are hand-written because they are security-critical grants. Re-evaluate when ordinary application tables arrive | Phase 2 |
 
@@ -338,7 +390,7 @@ Nothing in flight. This is a clean stopping point.
 
 | # | Risk | Status |
 |---|---|---|
-| R2 | Java 25 is the system default; Spark 4.0 needs Temurin 17 | Mitigated — `make doctor` detects it. **Blocks Phase 3 entry** |
+| R2 | Java 25 is the system default; Spark 4.0 needs Temurin 17 | Temurin 17 installed; enforcement in the repository is Phase 3 Step 0 |
 | R3 | Docker RAM ceiling is tight for the full profile | Open — mitigated by profiles and per-service limits |
 | R4 | No AWS credentials | Open — blocks Phase 12 only |
 | R5 | IEEE-CIS needs Kaggle credentials and a ~1.5 GB download | Open — blocks Phase 4B entry |
@@ -353,7 +405,7 @@ Nothing in flight. This is a clean stopping point.
 
 | # | Decision | Resolves at |
 |---|---|---|
-| U1 | Delta table layout | Phase 3, by benchmark. ADR-0015 stays `Proposed` |
+| U1 | Delta table layout | Phase 3 Step 14, by benchmark, for local OSS Delta; Databricks layout in Phase 12. ADR-0015 stays `Proposed` until then |
 | U2 | Whether a 3B-class local model can complete investigations within budget | Phase 6 |
 | U3 | Whether Neo4j outperforms `PostgresGraphStore` at this scale | Phase 9 Arm G |
 | U4 | Whether the Skeptic agent pays for its cost | Phase 9 Arm F — `UNUSUAL_LOCATION_DEVICE` was built deliberately ambiguous to give this ablation something real to measure |
@@ -364,13 +416,13 @@ Nothing in flight. This is a clean stopping point.
 
 ## NEXT EXECUTABLE TASKS
 
-**Phase 1 is closed.** The next action is a decision, not a task:
+Phase 3, in the wave order of `docs/PHASE3_PLAN.md` §5:
 
-1. **Await explicit user approval to begin Phase 2** — `trace-gateway`, the Redis online feature store,
-   ~20 features, a declarative rule engine, `POST /v1/transactions`, idempotency, degraded mode, and
-   the committed OpenAPI.
-
-Phase 2 needs no new environment prerequisites beyond Docker, which is already in use.
+1. **Step 0 — toolchain and dependency contract** (lead): the `stream` extra in the hashed lock and in
+   every install path; verified JVM jars; Java 17 enforced by the Makefile, `make doctor` and a
+   fail-fast Spark session factory; a CI `test-stream` job that actually executes Spark.
+2. **Wave B, in parallel once Step 0 lands:** Step 1 (feature semantics and online-store correctness),
+   Step 2 (Kafka platform), Step 3 (Delta capability spike and stream runtime), Step E (`eval-v2`).
 
 ---
 
