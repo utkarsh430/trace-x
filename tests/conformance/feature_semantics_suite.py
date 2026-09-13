@@ -42,6 +42,16 @@ from trace_core.features.reference import Event
 from trace_core.features.semantics import Stream
 
 T0: Final = event_time(dt.datetime(2026, 3, 1, 12, 0, 0, tzinfo=dt.UTC))
+
+WATCHED_LONG_ENOUGH: Final = event_time(T0 - dt.timedelta(days=31))
+"""A store that has been recording for longer than any feature needs: every
+window and the profile horizon (30 d) began after it. Absent state on this
+store is a measured zero."""
+
+WATCHED_ONE_HOUR: Final = event_time(T0 - dt.timedelta(hours=1, seconds=1))
+"""A store that started an hour ago. Complete for the 1 m, 5 m and 1 h windows,
+incomplete for 24 h and for the profile horizon. Absent 24 h state on this store
+is not evidence of anything."""
 FULL_COVERAGE: Final = frozenset(CanonicalField)
 ACCOUNT: Final = "acct_000001"
 OTHER_ACCOUNT: Final = "acct_000002"
@@ -160,9 +170,23 @@ class FeatureSemanticsConformanceSuite(ABC):
 
     @abstractmethod
     def build_context(
-        self, history: list[Event], *, as_of: EventTime, subject: CanonicalTransaction
+        self,
+        history: list[Event],
+        *,
+        as_of: EventTime,
+        subject: CanonicalTransaction,
+        complete_since: EventTime | None = None,
     ) -> FeatureContext:
-        """Load `history` into the implementation and read a snapshot."""
+        """Load `history` into the implementation and read a snapshot.
+
+        `complete_since` is when the store began recording, or None for a store
+        that makes no completeness claim. It is a parameter of every test rather
+        than a property of the suite because the two states give different,
+        equally correct answers to the same question -- an unseen device is
+        "not known" on a store that has watched for the horizon and "cannot
+        tell" on one that has not (ADR-0044) -- and a test that did not say
+        which store it meant would be asserting a coincidence.
+        """
 
     # -- harness ------------------------------------------------------------
 
@@ -171,9 +195,14 @@ class FeatureSemanticsConformanceSuite(ABC):
         history: list[Event],
         subject: CanonicalTransaction,
         expectations: list[Expectation],
+        *,
+        complete_since: EventTime | None = None,
     ) -> None:
         context = self.build_context(
-            history, as_of=event_time(subject.occurred_at), subject=subject
+            history,
+            as_of=event_time(subject.occurred_at),
+            subject=subject,
+            complete_since=complete_since,
         )
         for expected in expectations:
             spec = ONLINE_FEATURES.get(expected.feature_id)
@@ -394,12 +423,126 @@ class FeatureSemanticsConformanceSuite(ABC):
             "anomaly the feature exists to detect"
         )
 
-    def test_a_never_seen_device_is_not_known(self) -> None:
+    def test_a_never_seen_device_is_not_known_on_a_store_that_has_watched_long_enough(
+        self,
+    ) -> None:
+        """ "Not known" is a claim about everything the account has ever done.
+
+        It is only sound once the store has watched for its declared horizon.
+        This test used to make the claim on a store of unknown completeness,
+        which is the exact false positive a Redis restart produces: every
+        returning customer's device looks novel to a store that started
+        yesterday. The expectation is unchanged; the store it is made on is now
+        stated (ADR-0044).
+        """
         history = [tx_event(occurred_at=at(-3_600), device_id="dev_000009")]
         self.check(
             history,
             transaction(occurred_at=T0, device_id="dev_000123"),
             [Expectation("device_is_known_for_account", 0.0)],
+            complete_since=WATCHED_LONG_ENOUGH,
+        )
+
+    def test_a_never_seen_device_cannot_be_called_unknown_by_a_young_store(self) -> None:
+        """Same history, same device -- and a store that started an hour ago.
+
+        The store has seen this account use one device in the hour it has been
+        watching. It has not seen the previous year. "Unknown device" would be
+        the restart false positive; the honest answer is that it cannot tell.
+        A KNOWN device, by contrast, is sound the moment it is observed.
+        """
+        history = [tx_event(occurred_at=at(-1_800), device_id="dev_000009")]
+        self.check(
+            history,
+            transaction(occurred_at=T0, device_id="dev_000123"),
+            [
+                Expectation(
+                    "device_is_known_for_account", None, state=FeatureState.INSUFFICIENT_HISTORY
+                )
+            ],
+            complete_since=WATCHED_ONE_HOUR,
+        )
+        self.check(
+            history,
+            transaction(occurred_at=T0, device_id="dev_000009"),
+            [Expectation("device_is_known_for_account", 1.0)],
+            complete_since=WATCHED_ONE_HOUR,
+        )
+
+    # -- completeness: absent state means zero only on a store that would know --
+
+    def test_an_unseen_account_on_a_complete_store_has_measured_zero_velocity(self) -> None:
+        """The store watched the whole window and saw nothing. That is a zero.
+
+        Not a fabricated one: the account genuinely made no transactions in the
+        last minute, hour or day, and the store can say so because it was
+        recording throughout. The rules over these counts settle FALSE rather
+        than abstain, which changes no firing but stops a warm store from
+        reporting every quiet account as "insufficient history".
+        """
+        history = [tx_event(occurred_at=at(-60), account_id="acct_000777")]
+        self.check(
+            history,
+            transaction(occurred_at=T0, account_id="acct_000001"),
+            [
+                Expectation("account_tx_count_1m", 0.0),
+                Expectation("account_tx_count_1h", 0.0),
+                Expectation("account_tx_count_24h", 0.0),
+                Expectation("account_distinct_devices_24h", 0.0),
+            ],
+            complete_since=WATCHED_LONG_ENOUGH,
+        )
+
+    def test_a_young_store_reports_only_the_windows_it_has_watched(self) -> None:
+        """Complete for an hour: 1 m and 1 h are measured, 24 h is not."""
+        history = [tx_event(occurred_at=at(-60), account_id="acct_000777")]
+        self.check(
+            history,
+            transaction(occurred_at=T0, account_id="acct_000001"),
+            [
+                Expectation("account_tx_count_1m", 0.0),
+                Expectation("account_tx_count_1h", 0.0),
+                Expectation("account_tx_count_24h", None, state=FeatureState.INSUFFICIENT_HISTORY),
+                Expectation(
+                    "account_distinct_devices_24h", None, state=FeatureState.INSUFFICIENT_HISTORY
+                ),
+            ],
+            complete_since=WATCHED_ONE_HOUR,
+        )
+
+    def test_a_store_that_makes_no_completeness_claim_reports_nothing_as_zero(self) -> None:
+        """No epoch, no zeros. The pre-ADR-0044 behaviour, and still the default.
+
+        A store that cannot say when it began is treated as if it began just
+        now. Over-caution is the failure mode of a missing epoch; a fabricated
+        zero must never be.
+        """
+        history = [tx_event(occurred_at=at(-60), account_id="acct_000777")]
+        self.check(
+            history,
+            transaction(occurred_at=T0, account_id="acct_000001"),
+            [
+                Expectation("account_tx_count_1m", None, state=FeatureState.INSUFFICIENT_HISTORY),
+                Expectation("account_tx_count_24h", None, state=FeatureState.INSUFFICIENT_HISTORY),
+            ],
+            complete_since=None,
+        )
+
+    def test_tenure_needs_the_store_to_have_watched_for_its_horizon(self) -> None:
+        """An account first seen three days ago is three days old only to a
+        store that would have seen it a year ago had it existed."""
+        history = [tx_event(occurred_at=at(-3 * 86_400))]
+        self.check(
+            history,
+            transaction(occurred_at=T0),
+            [Expectation("account_tenure_days", 3.0)],
+            complete_since=WATCHED_LONG_ENOUGH,
+        )
+        self.check(
+            history,
+            transaction(occurred_at=T0),
+            [Expectation("account_tenure_days", None, state=FeatureState.INSUFFICIENT_HISTORY)],
+            complete_since=WATCHED_ONE_HOUR,
         )
 
     def test_device_novelty_is_absent_rather_than_zero_for_a_first_transaction(self) -> None:
@@ -526,11 +669,16 @@ class ReferenceStoreConformanceTest(FeatureSemanticsConformanceSuite):
     """The naive implementation, as the first subject of the shared suite."""
 
     def build_context(
-        self, history: list[Event], *, as_of: EventTime, subject: CanonicalTransaction
+        self,
+        history: list[Event],
+        *,
+        as_of: EventTime,
+        subject: CanonicalTransaction,
+        complete_since: EventTime | None = None,
     ) -> FeatureContext:
         from trace_core.features.reference import ReferenceFeatureStore
 
-        store = ReferenceFeatureStore()
+        store = ReferenceFeatureStore(complete_since=complete_since)
         store.observe_all(history)
         return store.snapshot(
             as_of=as_of,

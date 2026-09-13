@@ -100,11 +100,21 @@ class GatewayState:
     idempotency: RedisIdempotencyCache | None = None
     triage: PostgresTriageStore | None = None
     redis: Any = None
+    """The feature-store client (ADR-0044: `noeviction`)."""
+    cache_redis: Any = None
+    """The disposable-cache client (ADR-0044: `allkeys-lru`)."""
     pool: Any = None
     breaker: CircuitBreaker | None = None
-    """One breaker for the whole Redis dependency, shared by the feature store,
-    the limiter and the replay cache. Per-collaborator breakers would each have
-    to learn the outage separately, which is three timeouts instead of one."""
+    """Breaker for the FEATURE store. One per instance, not one per
+    collaborator: the two collaborators on the cache instance share
+    `cache_breaker` below, so an outage there is learned once, not twice --
+    and it is a different outage from the feature store's, with a different
+    consequence (a retry re-scored versus a decision made blind)."""
+    cache_breaker: CircuitBreaker | None = None
+    """Breaker for the disposable-cache store, shared by the limiter and the
+    replay cache."""
+    feature_store: Any = None
+    """Kept on the state so readiness can report how warm the store is."""
 
     def ready(self) -> tuple[bool, dict[str, str]]:
         """Readiness, per ADR-0035.
@@ -134,7 +144,45 @@ class GatewayState:
             # Degraded, not unhealthy. §18: the hot path is fully functional on
             # rules alone, and it says so in every response it returns.
             checks["redis"] = f"degraded: {type(exc).__name__}"
+        try:
+            checks["redis_cache"] = (
+                "ok" if self.cache_redis is not None and self.cache_redis.ping() else "degraded"
+            )
+        except Exception as exc:
+            checks["redis_cache"] = f"degraded: {type(exc).__name__}"
+        checks["feature_history"] = self._history_status()
         return healthy, checks
+
+    def _history_status(self) -> str:
+        """How much of the declared lookback the feature store can vouch for.
+
+        Reported, never gated on: a warming store is a correct store that has
+        not been running long enough, and failing readiness on it would take a
+        healthy instance out of rotation for a day after every restart.
+        Operators read it here; every decision carries it as
+        `history_incomplete` until it clears (ADR-0044).
+        """
+        store = self.feature_store
+        if store is None or not hasattr(store, "epoch_key") or self.redis is None:
+            return "unknown"
+        try:
+            stored = self.redis.get(store.epoch_key)
+        except Exception as exc:
+            return f"unknown: {type(exc).__name__}"
+        if stored is None:
+            return "empty: no epoch; complete for nothing until the first write"
+        from trace_core.domain.time import from_millis
+        from trace_core.features.state_plan import PLAN
+
+        since = from_millis(int(stored))
+        warm_at = since + dt.timedelta(seconds=PLAN.widest_lookback_s)
+        now = dt.datetime.now(dt.UTC)
+        if now >= warm_at:
+            return f"complete since {since.isoformat()}"
+        return (
+            f"warming since {since.isoformat()}; "
+            f"complete for every feature at {warm_at.isoformat()}"
+        )
 
 
 def build_state(settings: GatewaySettings | None = None) -> GatewayState:
@@ -152,6 +200,7 @@ def build_state(settings: GatewaySettings | None = None) -> GatewayState:
     thresholds = load_thresholds()
 
     redis_client: Any = None
+    cache_client: Any = None
     limiter: RedisRateLimiter | None = None
     idempotency: RedisIdempotencyCache | None = None
     feature_store: Any = None
@@ -162,6 +211,17 @@ def build_state(settings: GatewaySettings | None = None) -> GatewayState:
 
         from trace_core.repositories.redis_features import RedisOnlineFeatureStore
 
+        def _client(url: str) -> Any:
+            return redis_module.Redis.from_url(
+                url,
+                decode_responses=True,
+                socket_timeout=REDIS_TIMEOUT_S,
+                socket_connect_timeout=REDIS_TIMEOUT_S,
+                retry=Retry(NoBackoff(), 0),
+                retry_on_timeout=False,
+                max_connections=REDIS_MAX_CONNECTIONS,
+            )
+
         # Retries DISABLED, deliberately and with a measurement behind it.
         # redis-py applies a default retry policy with exponential backoff, so
         # `socket_timeout` bounds one ATTEMPT rather than one call: a chaos run
@@ -169,25 +229,16 @@ def build_state(settings: GatewaySettings | None = None) -> GatewayState:
         # timeout, and 0.053 s with retries off. On a path with a 100 ms budget a
         # retry is not resilience -- the caller has already given up, and the
         # retry is load the gateway adds to an outage (ADR-0035).
-        redis_client = redis_module.Redis.from_url(
-            resolved.redis_url,
-            decode_responses=True,
-            socket_timeout=REDIS_TIMEOUT_S,
-            socket_connect_timeout=REDIS_TIMEOUT_S,
-            retry=Retry(NoBackoff(), 0),
-            retry_on_timeout=False,
-            # One connection per request thread, plus headroom for the readiness
-            # probe and the breaker's own probe. redis-py's default is
-            # effectively unbounded, which under a stalled Redis answers a
-            # backlog by opening sockets until the file-descriptor limit decides
-            # the outcome -- the bound belongs where the concurrency bound is.
-            max_connections=REDIS_MAX_CONNECTIONS,
-        )
+        # Two instances with opposite contracts (ADR-0044). Redis eviction
+        # policy is instance-wide, so the only way for feature state to be
+        # `noeviction` while the replay cache is `allkeys-lru` is two servers.
+        redis_client = _client(resolved.redis_url)
+        cache_client = _client(resolved.redis_cache_url)
         feature_store = RedisOnlineFeatureStore(redis_client)
         limiter = RedisRateLimiter(
-            redis_client, limit=resolved.rate_limit, window_s=resolved.rate_limit_window_s
+            cache_client, limit=resolved.rate_limit, window_s=resolved.rate_limit_window_s
         )
-        idempotency = RedisIdempotencyCache(redis_client)
+        idempotency = RedisIdempotencyCache(cache_client)
     except ModuleNotFoundError:
         # Not fatal: a Redis-less gateway is the documented degraded mode, and
         # every response it returns says so.
@@ -208,7 +259,8 @@ def build_state(settings: GatewaySettings | None = None) -> GatewayState:
     except ModuleNotFoundError:  # pragma: no cover - the db extra is required
         log.error("postgres_pool_unavailable", detail="triage cannot be recorded")
 
-    breaker = CircuitBreaker("redis")
+    breaker = CircuitBreaker("redis-features")
+    cache_breaker = CircuitBreaker("redis-cache")
     return GatewayState(
         settings=resolved,
         verifier=verifier,
@@ -225,8 +277,11 @@ def build_state(settings: GatewaySettings | None = None) -> GatewayState:
         idempotency=idempotency,
         triage=triage,
         redis=redis_client,
+        cache_redis=cache_client,
         pool=pool,
         breaker=breaker,
+        cache_breaker=cache_breaker,
+        feature_store=feature_store,
     )
 
 
@@ -241,26 +296,44 @@ def create_app(state: GatewayState | None = None) -> FastAPI:
         resolved = state or build_state()
         app.state.gateway = resolved
 
-        # Redis's own memory and eviction counters, published as gauges.
-        # Registered here rather than in `build_state` because it needs the
-        # meter provider that `configure_telemetry` above just installed.
-        def _store_info() -> dict[str, int]:
-            """Never raises. A failed callback fails the whole /metrics scrape,
-            which would hide every other metric to report one."""
-            client = resolved.redis
-            if client is None:
-                return {}
+        # Establish the feature store's completeness epoch at start-up (NX, so
+        # a store that has been running for a day is not re-dated by a gateway
+        # restart). Until the store has warmed for the widest declared lookback
+        # every decision carries `history_incomplete`; readiness reports when
+        # that clears (ADR-0044).
+        store = resolved.feature_store
+        if store is not None and hasattr(store, "establish_epoch"):
             try:
-                info = client.info("memory") | client.info("stats")
-            except Exception:
-                return {}
-            return {
-                key: int(info[key])
-                for key in ("used_memory", "evicted_keys")
-                if isinstance(info.get(key), int | str)
-            }
+                since = store.establish_epoch()
+                log.info("feature_store_epoch", complete_since=since.isoformat())
+            except Exception as exc:
+                log.warning("feature_store_epoch_unavailable", error=type(exc).__name__)
 
-        register_online_store_gauges(SERVICE_NAME, _store_info)
+        # Each Redis instance's own memory and eviction counters, as gauges
+        # labelled by store. Registered here rather than in `build_state`
+        # because it needs the meter provider `configure_telemetry` installed.
+        def _store_info(client: Any) -> Callable[[], dict[str, int]]:
+            def read() -> dict[str, int]:
+                """Never raises. A failed callback fails the whole /metrics
+                scrape, which would hide every other metric to report one."""
+                if client is None:
+                    return {}
+                try:
+                    info = client.info("memory") | client.info("stats")
+                except Exception:
+                    return {}
+                return {
+                    key: int(info[key])
+                    for key in ("used_memory", "evicted_keys")
+                    if isinstance(info.get(key), int | str)
+                }
+
+            return read
+
+        register_online_store_gauges(
+            SERVICE_NAME,
+            {"features": _store_info(resolved.redis), "cache": _store_info(resolved.cache_redis)},
+        )
         if resolved.pool is not None:
             try:
                 resolved.pool.open(wait=True, timeout=10)
@@ -559,7 +632,10 @@ def _register_routes(app: FastAPI) -> None:
 
         degraded_reasons: list[str] = []
         limit_decision = None
-        redis_usable = state.breaker is None or state.breaker.allows()
+        # The limiter and the replay cache live on the cache instance, so it is
+        # the CACHE breaker that decides whether to ask them (ADR-0044). The
+        # feature store has its own breaker, consulted inside the pipeline.
+        redis_usable = state.cache_breaker is None or state.cache_breaker.allows()
         if state.limiter is not None and not redis_usable:
             # The circuit is open: skip rather than pay the timeout to re-learn
             # what it already knows. Fails OPEN and is counted, per CLAUDE.md §3.7.

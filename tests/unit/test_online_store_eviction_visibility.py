@@ -52,7 +52,7 @@ def test_registration_tolerates_a_store_that_cannot_answer() -> None:
         raise RuntimeError("redis is unreachable")
 
     # Registration itself must not invoke the callback, and must not raise.
-    register_online_store_gauges("trace_core.test.unreachable", _explodes)
+    register_online_store_gauges("trace_core.test.unreachable", {"features": _explodes})
     assert calls == [], (
         "the callback ran at registration time. It must only run when the meter "
         "collects, or a store that is down at start-up would prevent the gateway "

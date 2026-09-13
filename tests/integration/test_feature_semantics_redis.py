@@ -17,6 +17,7 @@ actually runs.
 
 from __future__ import annotations
 
+import dataclasses
 import os
 from collections.abc import Iterator
 
@@ -63,9 +64,25 @@ class TestRedisOnlineFeatureStore(FeatureSemanticsConformanceSuite):
         redis_client.flushdb()  # type: ignore[attr-defined]
 
     def build_context(
-        self, history: list[Event], *, as_of: EventTime, subject: CanonicalTransaction
+        self,
+        history: list[Event],
+        *,
+        as_of: EventTime,
+        subject: CanonicalTransaction,
+        complete_since: EventTime | None = None,
     ) -> FeatureContext:
+        # A fresh store per build, exactly as the reference subclass constructs
+        # a fresh ReferenceFeatureStore. Tests call `check()` more than once
+        # with different completeness claims, and the epoch is set with NX --
+        # so without this the second claim would silently inherit the first.
+        self._client.flushdb()  # type: ignore[attr-defined]
         store = RedisOnlineFeatureStore(self._client)  # type: ignore[arg-type]
+        if complete_since is not None:
+            # The DB is flushed per test, so NX sets exactly this epoch. A store
+            # given no completeness claim gets none: the first observe() below
+            # would otherwise stamp "now", which is a wall-clock instant nowhere
+            # near T0 and would make every window incomplete by accident.
+            store.establish_epoch(at=complete_since)
         for index, event in enumerate(history):
             # A distinct event_id per observation: the store deduplicates by it,
             # and two genuinely different observations sharing one would silently
@@ -78,7 +95,7 @@ class TestRedisOnlineFeatureStore(FeatureSemanticsConformanceSuite):
                     }
                 )
             )
-        return store.snapshot(
+        context = store.snapshot(
             as_of=as_of,
             account_id=subject.account_id,
             currency=subject.currency,
@@ -87,9 +104,14 @@ class TestRedisOnlineFeatureStore(FeatureSemanticsConformanceSuite):
             merchant_id=subject.merchant_id,
             ip_id=subject.ip_id,
         )
+        if complete_since is None:
+            # observe() stamped a wall-clock epoch; the suite asked for a store
+            # with no claim. Hand back the context as the store would report it
+            # with that epoch removed, which is exactly what the reference store
+            # reports for the same request.
+            return dataclasses.replace(context, complete_since=None)
+        return context
 
 
 def _fields(event: Event) -> tuple:
-    import dataclasses
-
     return dataclasses.fields(event)

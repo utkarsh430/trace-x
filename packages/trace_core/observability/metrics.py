@@ -16,7 +16,7 @@ a pack that has quietly gone blind looks exactly like a quiet day in
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from typing import Final
 
 from opentelemetry.metrics import CallbackOptions, Counter, Histogram, Observation
@@ -214,30 +214,39 @@ def observe_reading(values: dict[str, int], key: str) -> list[Observation]:
     return [Observation(values[key])]
 
 
-def register_online_store_gauges(meter_name: str, info: Callable[[], dict[str, int]]) -> None:
-    """Publish Redis's own memory and eviction counters as observable gauges.
+def register_online_store_gauges(
+    meter_name: str, stores: Mapping[str, Callable[[], dict[str, int]]]
+) -> None:
+    """Publish each Redis instance's memory and eviction counters as gauges.
 
-    Read through a callback rather than recorded on the hot path: these are
-    properties of the store, not of a request, and issuing an `INFO` per scored
-    transaction would spend hot-path budget asking a question whose answer
-    changes on a timescale of seconds.
+    One series per store, distinguished by the `store` attribute, because the
+    two instances have opposite contracts (ADR-0044): `features` runs
+    `noeviction` and its eviction counter must read ZERO forever -- any rise is
+    a configuration fault, not load -- while `cache` runs `allkeys-lru` and is
+    expected to evict under load. A single unlabelled series would hide the
+    one that matters inside the one that is normal.
 
-    `info` returns the two values already extracted, so this module never learns
-    what a Redis client is (CLAUDE.md §3.4 — domain code depends on protocols,
-    not drivers) and the caller decides how to fail. A callback that raises would
-    take the whole `/metrics` scrape down with it, so the caller is expected to
-    swallow and return an empty mapping instead; an absent gauge is a visible
-    gap, while a failed scrape hides every other metric too.
+    Read through callbacks rather than recorded on the hot path: these are
+    properties of the store, not of a request, and an `INFO` per scored
+    transaction would spend hot-path budget on a question whose answer changes
+    on a timescale of seconds. A callback that raises would take the whole
+    `/metrics` scrape down with it, so each is expected to swallow and return
+    an empty mapping; an absent reading is a visible gap, a failed scrape hides
+    every other metric too.
     """
     meter = get_meter(meter_name)
 
     def _evicted(options: CallbackOptions) -> Iterable[Observation]:
         del options
-        return observe_reading(info(), "evicted_keys")
+        for name, info in stores.items():
+            for observation in observe_reading(info(), "evicted_keys"):
+                yield Observation(observation.value, {"store": name})
 
     def _memory(options: CallbackOptions) -> Iterable[Observation]:
         del options
-        return observe_reading(info(), "used_memory")
+        for name, info in stores.items():
+            for observation in observe_reading(info(), "used_memory"):
+                yield Observation(observation.value, {"store": name})
 
     meter.create_observable_gauge(
         ONLINE_STORE_EVICTED_KEYS,

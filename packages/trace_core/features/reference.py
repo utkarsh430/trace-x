@@ -124,6 +124,16 @@ class ReferenceFeatureStore:
     """Accumulates events and answers feature questions by scanning them."""
 
     events: list[Event] = field(default_factory=list)
+    complete_since: EventTime | None = None
+    """When this store began recording, on the event-time axis.
+
+    None -- the default -- means the store does not claim completeness for any
+    period, and every absent window reads as `INSUFFICIENT_HISTORY`, which is
+    the pre-ADR-0044 behaviour and what the existing conformance suite pins.
+    Set it, and the store vouches for every window that began after it: an
+    absent window is then a measured zero. The Redis store reads the same value
+    from its epoch key, so the two can be handed identical histories and
+    identical epochs and asked to agree."""
 
     def observe(self, event: Event) -> None:
         self.events.append(event)
@@ -297,10 +307,14 @@ class ReferenceFeatureStore:
             ) is not None:
                 previous[(Entity.ACCOUNT, account_id, stream)] = observation
 
+        from trace_core.features.state_plan import PLAN
+
         return FeatureContext(
             as_of=as_of,
             source=FeatureSource.ONLINE_ONLY,
             windows=windows,
             profiles=profiles,
             previous=previous,
+            complete_since=self.complete_since,
+            distinct_dimensions={e: PLAN.distinct_dimensions(e) for e in Entity},
         )

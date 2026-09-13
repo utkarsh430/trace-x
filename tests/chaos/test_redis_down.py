@@ -39,7 +39,7 @@ import pytest
 from fastapi.testclient import TestClient
 from services.gateway.app import GatewayState, create_app
 from services.gateway.config import GatewaySettings
-from services.gateway.pipeline import REASON_REDIS, ScoringPipeline
+from services.gateway.pipeline import REASON_RATE_LIMIT, REASON_REDIS, ScoringPipeline
 
 from trace_core.features.definitions import ONLINE_FEATURES
 from trace_core.observability.metrics import HotPathMetrics
@@ -56,6 +56,7 @@ pytestmark = [pytest.mark.chaos, pytest.mark.integration]
 SECRET = "s" * MIN_SECRET_LENGTH
 AUTH = {"Authorization": f"Bearer psp-one.{SECRET}"}
 CONTAINER = os.environ.get("TRACEX_REDIS_CONTAINER", "tracex-redis-1")
+CACHE_CONTAINER = os.environ.get("TRACEX_REDIS_CACHE_CONTAINER", "tracex-redis-cache-1")
 
 # Short enough that a paused Redis costs the request its 20 ms budget and no
 # more (config.REDIS_TIMEOUT_S), long enough that an ordinary round trip on a
@@ -105,6 +106,21 @@ def paused_redis() -> Iterator[Any]:
         retry_on_timeout=False,
     )
     client.flushdb()
+    # A store that has been recording for longer than any feature looks back.
+    # The fixture flushes the DB, so without this the baseline decision would
+    # correctly carry `history_incomplete` -- and this suite is about the
+    # OUTAGE degradation, which has to be distinguishable from warm-up
+    # (ADR-0044). Set on the event-time axis, as the gateway would have.
+    import datetime as dt
+
+    from trace_core.domain.time import event_time
+    from trace_core.features.state_plan import PLAN
+
+    RedisOnlineFeatureStore(client).establish_epoch(
+        at=event_time(
+            dt.datetime.now(dt.UTC) - dt.timedelta(seconds=PLAN.widest_lookback_s + 3_600)
+        )
+    )
     try:
         yield client
     finally:
@@ -121,8 +137,30 @@ def paused_redis() -> Iterator[Any]:
             print(f"cleanup flushdb failed after unpause: {type(exc).__name__}")
 
 
+def _cache_client() -> Any:
+    """The disposable-cache instance, built like the feature client."""
+    import redis
+    from redis.backoff import NoBackoff
+    from redis.retry import Retry
+
+    return redis.Redis(
+        host=os.environ.get("REDIS_CACHE_HOST", "localhost"),
+        port=int(os.environ.get("REDIS_CACHE_PORT", "6390")),
+        decode_responses=True,
+        socket_timeout=SOCKET_TIMEOUT_S,
+        socket_connect_timeout=SOCKET_TIMEOUT_S,
+        retry=Retry(NoBackoff(), 0),
+        retry_on_timeout=False,
+    )
+
+
 def _client(redis_client: Any) -> TestClient:
-    breaker = CircuitBreaker("redis")
+    """The gateway with the REAL topology: features here, cache on its own
+    instance with its own breaker (ADR-0044). Pausing one must not look like
+    the other."""
+    breaker = CircuitBreaker("redis-features")
+    cache_breaker = CircuitBreaker("redis-cache")
+    cache = _cache_client()
     state = GatewayState(
         settings=GatewaySettings.from_environment({}),
         verifier=ServiceTokenVerifier({"psp-one": SECRET}),
@@ -134,10 +172,13 @@ def _client(redis_client: Any) -> TestClient:
             breaker=breaker,
         ),
         metrics=HotPathMetrics(),
-        limiter=RedisRateLimiter(redis_client, limit=10_000, window_s=60),
-        idempotency=RedisIdempotencyCache(redis_client),
+        limiter=RedisRateLimiter(cache, limit=10_000, window_s=60),
+        idempotency=RedisIdempotencyCache(cache),
         redis=redis_client,
+        cache_redis=cache,
         breaker=breaker,
+        cache_breaker=cache_breaker,
+        feature_store=RedisOnlineFeatureStore(redis_client),
     )
     return TestClient(create_app(state))
 
@@ -189,9 +230,14 @@ def test_the_gateway_answers_while_redis_is_paused(paused_redis: Any) -> None:
         f"§18 requires rules-only degradation, never a 5xx."
     )
     assert degraded.headers["X-Trace-Degraded"] == "true"
-    assert REASON_REDIS in degraded.json()["degraded_reasons"], (
+    reasons = degraded.json()["degraded_reasons"]
+    assert REASON_REDIS in reasons, (
         "the decision did not name the reason it was degraded; an untagged "
         "fail-open is indistinguishable from a healthy decision (CLAUDE.md §3.7)"
+    )
+    assert REASON_RATE_LIMIT not in reasons, (
+        "the limiter lives on the cache instance, which was not paused. Reporting it "
+        "degraded here means the two instances are not actually separate (ADR-0044)."
     )
 
 
@@ -288,3 +334,81 @@ def test_readiness_survives_a_redis_outage(paused_redis: Any) -> None:
     assert health.status_code == 200, "liveness must not depend on Redis"
     assert "redis" in readiness.json()["checks"]
     assert "degraded" in readiness.json()["checks"]["redis"]
+
+
+# --- the OTHER instance: losing it must not change a decision ----------------------
+
+
+@pytest.fixture
+def paused_cache(paused_redis: Any) -> Iterator[Any]:
+    """The cache container, pausable, with the feature store healthy and warm."""
+    if (
+        _docker("inspect", "--format", "{{.State.Running}}", CACHE_CONTAINER).stdout.strip()
+        != "true"
+    ):
+        pytest.skip(
+            f"SKIPPED (NOT PASSED): container {CACHE_CONTAINER!r} is not running, so the "
+            f"cache instance cannot be lost and its disposability is NOT exercised."
+        )
+    try:
+        yield paused_redis
+    finally:
+        _docker("unpause", CACHE_CONTAINER)
+
+
+def test_losing_the_cache_instance_changes_no_decision(paused_cache: Any) -> None:
+    """ADR-0044's classification, exercised: the cache holds nothing a decision
+    depends on. Pause it and the SAME transaction gets the SAME band, score and
+    fired rules -- only the limiter and the replay cache report themselves
+    unavailable, and the feature store is not blamed for it."""
+    body = _body()
+    with _client(paused_cache) as client:
+        before = client.post("/v1/transactions", json=body, headers=_headers()).json()
+        assert _docker("pause", CACHE_CONTAINER).returncode == 0, "could not pause the cache"
+        after = client.post(
+            "/v1/transactions",
+            json={**body, "transaction_id": "tx_after_cache_loss"},
+            headers=_headers(),
+        ).json()
+        readiness = client.get("/readyz").json()["checks"]
+
+    for field_name in ("risk_band", "score", "decision"):
+        assert after[field_name] == before[field_name], (
+            f"{field_name} changed when the CACHE was lost: {before[field_name]} -> "
+            f"{after[field_name]}. Nothing in the cache may influence a decision."
+        )
+    assert [r["rule_id"] for r in after["reasons"]] == [r["rule_id"] for r in before["reasons"]]
+    reasons = set(after["degraded_reasons"])
+    assert REASON_RATE_LIMIT in reasons, "the limiter is on the cache and must say it failed open"
+    assert REASON_REDIS not in reasons, "the feature store was healthy; it must not be blamed"
+    assert readiness["redis"] == "ok" and "degraded" in readiness["redis_cache"]
+
+
+# --- a healthy but EMPTY feature store must not look warm ----------------------------
+
+
+def test_an_emptied_feature_store_says_its_history_is_incomplete(paused_redis: Any) -> None:
+    """Restart recovery, exercised: FLUSHALL is what a restart with AOF off
+    leaves behind. The store is healthy, reachable and empty, and the next
+    decision must say `history_incomplete` -- never `redis_unavailable`, and
+    never a clean answer. The first write re-establishes an epoch, at now."""
+    with _client(paused_redis) as client:
+        warm = _post(client)
+        assert warm.headers["X-Trace-Degraded"] == "false", "fixture: the store should be warm"
+
+        paused_redis.flushall()
+        cold = _post(client)
+        readiness = client.get("/readyz").json()["checks"]
+
+    assert cold.status_code == 200
+    assert cold.headers["X-Trace-Degraded"] == "true"
+    reasons = set(cold.json()["degraded_reasons"])
+    assert "history_incomplete" in reasons, (
+        "an empty store produced a decision that did not admit its history was gone. "
+        "This is the silent restart failure ADR-0044 exists to prevent."
+    )
+    assert REASON_REDIS not in reasons, "empty is not unavailable; the store answered"
+    assert "warming" in readiness["feature_history"] or "empty" in readiness["feature_history"]
+    assert paused_redis.get(RedisOnlineFeatureStore(paused_redis).epoch_key) is not None, (
+        "the write after the flush did not re-establish an epoch"
+    )

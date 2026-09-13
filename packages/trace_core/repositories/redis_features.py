@@ -37,11 +37,15 @@ fail-safe direction, and it is why this module never returns a default.
 
 from __future__ import annotations
 
+import contextlib
+import datetime as dt
 import statistics
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
+from redis.exceptions import OutOfMemoryError
+
 from trace_core.domain.enums import AuthorizationOutcome, FeatureSource
+from trace_core.domain.errors import FeatureWriteFailedError
 from trace_core.domain.time import EventTime, from_millis, to_millis
 from trace_core.features.context import (
     MIN_OBSERVATIONS_FOR_ROBUST_Z,
@@ -52,13 +56,13 @@ from trace_core.features.context import (
 )
 from trace_core.features.reference import HABITUAL_MIN_VISITS, Event
 from trace_core.features.semantics import (
-    WINDOWS,
     CardinalityStorage,
     Dimension,
     Entity,
     Stream,
     Window,
 )
+from trace_core.features.state_plan import PLAN
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from redis import Redis
@@ -80,10 +84,16 @@ sample is why `amount_zscore_vs_account` is declared APPROXIMATE: the feature's
 MEANING is identical to the offline version, only the estimator differs, and that
 difference is what `feature_parity_drift` measures rather than hides."""
 
-MAX_WINDOW_S: Final = max(w.seconds for w in WINDOWS)
-RETENTION_S: Final = MAX_WINDOW_S + 3_600
-"""Keys live one hour beyond the widest window, so a late arrival still lands in
-a window that has not been trimmed out from under it."""
+BUCKET_TRIM_SWEEP: Final = 3
+"""How many just-expired minute buckets each write deletes.
+
+The bucket hash has one field set per active minute and nothing else removes
+them: the key's TTL is refreshed by every write, so a continuously active
+merchant accumulated five fields per minute for as long as it stayed active --
+unbounded growth, discovered by the memory model. Each write now deletes the
+buckets that fell out of retention in the last few minutes. Three is enough to
+keep a steadily active entity trimmed; a bursty one leaves orphans that the
+key's own TTL clears once it goes quiet."""
 
 
 def _key(*parts: str) -> str:
@@ -129,6 +139,33 @@ class RedisOnlineFeatureStore:
     def _previous_key(self, entity: Entity, entity_id: str, stream: Stream) -> str:
         return _key(self._ns, "l", entity.value, entity_id, stream.value)
 
+    @property
+    def epoch_key(self) -> str:
+        """When this store began recording continuously, in event-time ms.
+
+        One key, no TTL, set with `NX` by every write and read by every
+        snapshot. Its absence means the store is empty -- never written, or
+        restarted and wiped -- and its presence is what lets an absent feature
+        key mean "the entity did nothing" instead of "we do not know". A write
+        that the store REFUSES deletes it, because an unrecorded observation is
+        a hole and every window spanning the hole is no longer complete."""
+        return _key(self._ns, "epoch")
+
+    def establish_epoch(self, *, at: EventTime | None = None) -> EventTime:
+        """Record when continuous recording began, if not already recorded.
+
+        `NX`: an existing epoch is never moved forward, since that would claim
+        completeness for a period the store did not watch. Returns the epoch in
+        force. The gateway calls this at start-up so a store that has been
+        running for a day is not re-dated by a gateway restart; every write also
+        issues it, so a Redis restart mid-run re-establishes an epoch at the
+        first write after it rather than at the next gateway restart.
+        """
+        moment = at if at is not None else EventTime(dt.datetime.now(dt.UTC))
+        self._redis.set(self.epoch_key, to_millis(moment), nx=True)
+        stored = self._redis.get(self.epoch_key)
+        return EventTime(from_millis(int(_text(stored)))) if stored is not None else moment
+
     # -- writes -------------------------------------------------------------
 
     def observe(self, event: Event) -> None:
@@ -137,45 +174,76 @@ class RedisOnlineFeatureStore:
         Everything is issued in one pipeline: a partial write would leave the
         counters and the distinct sets disagreeing, and nothing downstream could
         tell that had happened.
+
+        **Only what a released feature reads is written** (ADR-0044). Which
+        entity/stream pairs get a velocity set, which entities get buckets and
+        which get a previous-observation hash all come from `PLAN`, and each key
+        keeps exactly the retention its widest reader needs. A feature that is
+        not released has no claim on this store; a feature released later
+        declares what it needs and warms up (the backfill contract).
+
+        Raises `FeatureWriteFailedError` if the store refuses -- under
+        `noeviction`, the only way memory pressure can present. The epoch is
+        deleted first, because an observation that was not recorded is a hole
+        in the history.
         """
         occurred_ms = to_millis(event.occurred_at)
         pipe = self._redis.pipeline(transaction=False)
         dedup = event.dedup_key
+
+        # NX: never moves an existing epoch. Cheap, and it is what re-establishes
+        # completeness at the first write after a Redis restart.
+        pipe.set(self.epoch_key, to_millis(EventTime(dt.datetime.now(dt.UTC))), nx=True)
 
         for entity in Entity:
             entity_id = event.entity_id(entity)
             if entity_id is None:
                 continue
 
-            # Velocity: one member per observation, so a repeat of the SAME
-            # observation updates in place rather than double-counting.
-            vkey = self._velocity_key(entity, entity_id, event.stream)
-            pipe.zadd(vkey, {dedup: occurred_ms})
-            pipe.zremrangebyscore(vkey, "-inf", occurred_ms - RETENTION_S * 1000)
-            pipe.expire(vkey, RETENTION_S)
+            if (entity, event.stream) in PLAN.velocity:
+                retention = PLAN.velocity_retention(entity, event.stream).seconds
+                vkey = self._velocity_key(entity, entity_id, event.stream)
+                # One member per observation, so a repeat of the SAME observation
+                # updates in place rather than double-counting.
+                pipe.zadd(vkey, {dedup: occurred_ms})
+                pipe.zremrangebyscore(vkey, "-inf", occurred_ms - retention * 1000)
+                pipe.expire(vkey, retention)
 
             if event.stream is Stream.TRANSACTION:
-                self._observe_amounts(pipe, entity, entity_id, event, occurred_ms)
+                if entity in PLAN.buckets:
+                    self._observe_amounts(pipe, entity, entity_id, event, occurred_ms)
                 self._observe_distinct(pipe, entity, entity_id, event, occurred_ms)
 
-            # Previous observation, for the pairwise features. `GT`-guarded via a
-            # read-modify-write would need a transaction; instead the stored
-            # timestamp is compared on read, so an out-of-order write is harmless.
-            lkey = self._previous_key(entity, entity_id, event.stream)
-            pipe.hset(
-                lkey,
-                mapping={
-                    "occurred_ms": occurred_ms,
-                    "latitude": "" if event.latitude is None else event.latitude,
-                    "longitude": "" if event.longitude is None else event.longitude,
-                    "card_present": int(event.card_present),
-                },
-            )
-            pipe.expire(lkey, RETENTION_S)
+            if (entity, event.stream) in PLAN.previous:
+                retention = PLAN.previous_retention(entity, event.stream).seconds
+                lkey = self._previous_key(entity, entity_id, event.stream)
+                # `GT`-guarded via a read-modify-write would need a transaction;
+                # instead the stored timestamp is compared on read, so an
+                # out-of-order write is harmless.
+                pipe.hset(
+                    lkey,
+                    mapping={
+                        "occurred_ms": occurred_ms,
+                        "latitude": "" if event.latitude is None else event.latitude,
+                        "longitude": "" if event.longitude is None else event.longitude,
+                        "card_present": int(event.card_present),
+                    },
+                )
+                pipe.expire(lkey, retention)
 
-        if event.stream is Stream.TRANSACTION:
+        if event.stream is Stream.TRANSACTION and Entity.ACCOUNT in PLAN.profiles:
             self._observe_profile(pipe, event, occurred_ms)
-        pipe.execute()
+
+        try:
+            pipe.execute()
+        except OutOfMemoryError as exc:
+            # The store is up and answering; it is full. Not an outage, and the
+            # breaker must not treat it as one. The epoch goes first: whatever
+            # this pipeline did or did not manage to write, the history now has
+            # a hole in it, and no window spanning the hole is complete.
+            with contextlib.suppress(Exception):
+                self._redis.delete(self.epoch_key)
+            raise FeatureWriteFailedError(str(exc)) from exc
 
     def _observe_amounts(
         self, pipe: Any, entity: Entity, entity_id: str, event: Event, occurred_ms: int
@@ -186,6 +254,7 @@ class RedisOnlineFeatureStore:
         loses precision at exactly the scale where uniform-amount laundering
         lives, and money is integer minor units anyway (CLAUDE.md §6).
         """
+        retention = PLAN.bucket_retention(entity).seconds
         bucket = occurred_ms // MINUTE_MS
         key = self._bucket_key(entity, entity_id, event.stream, event.currency)
         amount = event.amount_minor
@@ -196,7 +265,17 @@ class RedisOnlineFeatureStore:
             pipe.hincrby(key, f"{bucket}:k", 1)
             if event.authorization_outcome is AuthorizationOutcome.DECLINED:
                 pipe.hincrby(key, f"{bucket}:d", 1)
-        pipe.expire(key, RETENTION_S)
+        # Trim the buckets that just fell out of retention. Without this the
+        # hash grew one field set per active minute for as long as the entity
+        # stayed active, because every write refreshed the key's TTL.
+        oldest_kept = (occurred_ms - retention * 1000) // MINUTE_MS
+        stale = [
+            f"{b}:{kind}"
+            for b in range(oldest_kept - BUCKET_TRIM_SWEEP, oldest_kept)
+            for kind in ("c", "s", "q", "k", "d")
+        ]
+        pipe.hdel(key, *stale)
+        pipe.expire(key, retention)
 
     def _observe_distinct(
         self, pipe: Any, entity: Entity, entity_id: str, event: Event, occurred_ms: int
@@ -205,23 +284,26 @@ class RedisOnlineFeatureStore:
             value = event.dimension_value(dimension)
             if value is None:
                 continue
-            storage = _STORAGE.get((entity, dimension))
+            storage = PLAN.storage(entity, dimension)
             if storage is None:
                 continue
             if storage is CardinalityStorage.EXACT:
+                retention = PLAN.exact_distinct_retention(entity, dimension).seconds
                 key = self._exact_distinct_key(entity, entity_id, dimension)
                 # GT: a late arrival must not move a value's timestamp BACKWARDS,
                 # which would drop it out of a window it genuinely belongs to.
                 pipe.zadd(key, {value: occurred_ms}, gt=True)
-                pipe.zremrangebyscore(key, "-inf", occurred_ms - RETENTION_S * 1000)
-                pipe.expire(key, RETENTION_S)
+                pipe.zremrangebyscore(key, "-inf", occurred_ms - retention * 1000)
+                pipe.expire(key, retention)
             else:
+                retention = PLAN.approx_distinct_retention(entity, dimension).seconds
                 bucket = occurred_ms // HLL_BUCKET_MS
                 key = self._hll_key(entity, entity_id, dimension, bucket)
                 pipe.pfadd(key, value)
-                pipe.expire(key, RETENTION_S)
+                pipe.expire(key, retention)
 
     def _observe_profile(self, pipe: Any, event: Event, occurred_ms: int) -> None:
+        retention = PLAN.profile_retention(Entity.ACCOUNT).seconds
         key = self._profile_key(Entity.ACCOUNT, event.account_id, event.currency)
         pipe.hsetnx(key, "first_seen_ms", occurred_ms)
         pipe.hincrby(key, "observations", 1)
@@ -233,14 +315,14 @@ class RedisOnlineFeatureStore:
             pipe.hincrby(key, f"d:{event.device_id}", 1)
         if event.latitude is not None and event.longitude is not None:
             pipe.hset(key, mapping={"lat": event.latitude, "lon": event.longitude})
-        pipe.expire(key, RETENTION_S * 30)
+        pipe.expire(key, retention)
 
         # A bounded sample of recent amounts, for the robust z-score. Capped, so
         # memory per account is O(1) -- and declared APPROXIMATE because of it.
         akey = self._amounts_key(Entity.ACCOUNT, event.account_id, event.currency)
         pipe.zadd(akey, {f"{occurred_ms}:{event.dedup_key}:{abs(event.amount_minor)}": occurred_ms})
         pipe.zremrangebyrank(akey, 0, -(PROFILE_SAMPLE_SIZE + 1))
-        pipe.expire(akey, RETENTION_S * 30)
+        pipe.expire(akey, retention)
 
     # -- reads --------------------------------------------------------------
 
@@ -267,50 +349,52 @@ class RedisOnlineFeatureStore:
         pipe = self._redis.pipeline(transaction=False)
         plan: list[tuple[str, Any]] = []
 
+        # The epoch first, in the same round trip: a snapshot that could not
+        # say whether the store was complete would have to assume it was not.
+        pipe.get(self.epoch_key)
+        plan.append(("epoch", None))
+
         for entity, entity_id in ids.items():
             if entity_id is None:
                 continue
             for stream in Stream:
-                # Only the windows a declared feature actually reads. The cross
-                # product over every stream and every window was 60 ZCOUNTs and
-                # 15 HGETALLs per request against the 10 and 2 that are read;
-                # see `_ReadPlan` for the measurement and for why this prunes on
-                # any WindowedAggregate rather than on COUNT alone.
-                windows = _PLAN.count_windows.get((entity, stream), ())
+                # Only what a declared feature reads (ADR-0038, now from PLAN).
+                windows = PLAN.velocity.get((entity, stream), ())
                 if windows:
                     vkey = self._velocity_key(entity, entity_id, stream)
                     for window in windows:
                         lower = as_of_ms - window.seconds * 1000
                         pipe.zcount(vkey, f"({lower}", as_of_ms)
                         plan.append(("count", (entity, entity_id, stream, window)))
-                if (entity, stream) in _PLAN.previous:
+                if (entity, stream) in PLAN.previous:
                     pipe.hgetall(self._previous_key(entity, entity_id, stream))
                     plan.append(("previous", (entity, entity_id, stream)))
 
-            if entity in _PLAN.bucket_entities:
+            if entity in PLAN.buckets:
                 pipe.hgetall(self._bucket_key(entity, entity_id, Stream.TRANSACTION, currency))
                 plan.append(("buckets", (entity, entity_id, currency)))
 
             for dimension in Dimension:
-                storage = _STORAGE.get((entity, dimension))
+                storage = PLAN.storage(entity, dimension)
                 if storage is None:
                     continue
                 if storage is CardinalityStorage.EXACT:
                     key = self._exact_distinct_key(entity, entity_id, dimension)
-                    for window in _WINDOWS_FOR.get((entity, dimension), ()):
+                    for window in PLAN.exact_distinct[(entity, dimension)]:
                         lower = as_of_ms - window.seconds * 1000
                         pipe.zcount(key, f"({lower}", as_of_ms)
                         plan.append(("distinct", (entity, entity_id, dimension, window)))
                 else:
-                    for window in _WINDOWS_FOR.get((entity, dimension), ()):
+                    for window in PLAN.approx_distinct[(entity, dimension)]:
                         keys = self._hll_bucket_keys(entity, entity_id, dimension, as_of_ms, window)
                         pipe.pfcount(*keys)
                         plan.append(("distinct", (entity, entity_id, dimension, window)))
 
-        pipe.hgetall(self._profile_key(Entity.ACCOUNT, account_id, currency))
-        plan.append(("profile", (account_id, currency)))
-        pipe.zrange(self._amounts_key(Entity.ACCOUNT, account_id, currency), 0, -1)
-        plan.append(("amounts", (account_id, currency)))
+        if Entity.ACCOUNT in PLAN.profiles:
+            pipe.hgetall(self._profile_key(Entity.ACCOUNT, account_id, currency))
+            plan.append(("profile", (account_id, currency)))
+            pipe.zrange(self._amounts_key(Entity.ACCOUNT, account_id, currency), 0, -1)
+            plan.append(("amounts", (account_id, currency)))
 
         return self._assemble(
             plan, pipe.execute(), as_of=as_of, as_of_ms=as_of_ms, account_id=account_id
@@ -347,9 +431,13 @@ class RedisOnlineFeatureStore:
         profiles: dict[tuple[Entity, str], Profile] = {}
         raw_profile: dict[str, str] = {}
         amounts: list[int] = []
+        complete_since: EventTime | None = None
 
         for (kind, target), response in zip(plan, responses, strict=True):
             match kind:
+                case "epoch":
+                    if response is not None:
+                        complete_since = EventTime(from_millis(int(_text(response))))
                 case "count":
                     entity, entity_id, stream, window = target
                     if response:
@@ -394,6 +482,8 @@ class RedisOnlineFeatureStore:
             windows=windows,
             profiles=profiles,
             previous=previous,
+            complete_since=complete_since,
+            distinct_dimensions={e: PLAN.distinct_dimensions(e) for e in Entity},
         )
 
     def _merge_bucket_aggregates(
@@ -409,7 +499,7 @@ class RedisOnlineFeatureStore:
         boundary is what makes the parity comparison an equality.
         """
         for (entity, entity_id), fields in buckets.items():
-            for window in _PLAN.count_windows.get((entity, Stream.TRANSACTION), ()):
+            for window in PLAN.buckets.get(entity, ()):
                 lower = (as_of_ms - window.seconds * 1000) // MINUTE_MS
                 upper = as_of_ms // MINUTE_MS
                 totals = {"c": 0, "s": 0, "q": 0, "d": 0, "k": 0}
@@ -438,9 +528,12 @@ class RedisOnlineFeatureStore:
     ) -> None:
         for (entity, entity_id, label), values in distinct.items():
             key = (entity, entity_id, Stream.TRANSACTION, label)
-            existing = windows.get(key)
-            if existing is None:
-                continue
+            # An entity with only distinct-count features has no velocity set
+            # and so no state yet; the distinct values are the whole state. Its
+            # `count` is then a placeholder nothing reads -- by construction:
+            # a COUNT declaration for that entity would put a velocity set in
+            # the plan, and the count would be real.
+            existing = windows.get(key, WindowState())
             windows[key] = WindowState(
                 count=existing.count,
                 amount_sum_minor=existing.amount_sum_minor,
@@ -449,124 +542,6 @@ class RedisOnlineFeatureStore:
                 outcome_known_count=existing.outcome_known_count,
                 distinct=values,
             )
-
-
-# Which (entity, dimension) pairs are counted, how, and over which windows.
-# Derived from the registered feature set rather than restated, so a feature
-# added without a storage class fails at import rather than reading as zero.
-@dataclass(frozen=True, slots=True)
-class _ReadPlan:
-    """Exactly which Redis reads the declared feature set requires.
-
-    **The point is what is NOT in here.** `snapshot` used to issue the full cross
-    product -- every entity x every stream x every window -- and then discard
-    most of it during assembly. Measured on the 500 TPS load profile that was
-    **60 velocity `ZCOUNT`s of which 10 are read, 15 previous-observation
-    `HGETALL`s of which 2 are read, and 5 amount-bucket `HGETALL`s of which 2
-    are read**: 66 of 163 commands per request fetched, transmitted, parsed and
-    decoded for nothing. The parsing is what made it expensive -- a profile of
-    the hot path put ~2.7 ms of the ~3.0 ms CPU per request inside redis-py's
-    RESP reader, and a map reply costs far more to parse than an integer one.
-
-    This is not new machinery. `_plan_from_registry` already derived the
-    distinct-count storage plan from the declarations, which is why the distinct
-    counts were the one read kind that was *not* wasteful; this extends the same
-    derivation to the other three. ADR-0032 made each feature declare its
-    entity, stream, window and aggregation precisely so that the store can be
-    driven from the declaration rather than guess -- reading less is that
-    declaration being used for its stated purpose.
-
-    Derived once at import, never per request, and never from runtime
-    observation: a plan that changed with traffic would make two replicas read
-    different things and a recorded parity measurement unattributable.
-    """
-
-    storage: dict[tuple[Entity, Dimension], CardinalityStorage]
-    distinct_windows: dict[tuple[Entity, Dimension], tuple[Window, ...]]
-    count_windows: dict[tuple[Entity, Stream], tuple[Window, ...]]
-    """Windows whose `WindowState` any feature reads, per entity and stream.
-
-    Keyed on ANY `WindowedAggregate`, not only `COUNT`. A window read solely for
-    `AMOUNT_SUM` still needs its `ZCOUNT` issued, because `_merge_bucket_aggregates`
-    keeps an existing exact count and otherwise falls back to the minute-bucket
-    sum -- which is rounded to the minute and therefore a different number.
-    Pruning on `COUNT` alone would silently swap an exact count for an
-    approximate one, which is the kind of optimisation that does not show up as
-    a failure until a parity run months later.
-    """
-    previous: frozenset[tuple[Entity, Stream]]
-    bucket_entities: frozenset[Entity]
-    profile_entities: frozenset[Entity]
-
-
-def _plan_from_registry() -> _ReadPlan:
-    from trace_core.features.definitions import ONLINE_FEATURES
-    from trace_core.features.semantics import (
-        Aggregation,
-        PairwiseWithPrevious,
-        ProfileAttribute,
-        WindowedAggregate,
-    )
-
-    bucket_derived = frozenset(
-        {Aggregation.AMOUNT_SUM, Aggregation.DECLINED_RATIO, Aggregation.AMOUNT_CV}
-    )
-    """Aggregations answered from the minute-bucket hash rather than a counter.
-
-    Named positively rather than as "not COUNT and not DISTINCT_COUNT": a new
-    aggregation should have to say which side it is on, and a definition by
-    exclusion would silently adopt it into the bucket path.
-    """
-
-    storage: dict[tuple[Entity, Dimension], CardinalityStorage] = {}
-    distinct_windows: dict[tuple[Entity, Dimension], list[Window]] = {}
-    count_windows: dict[tuple[Entity, Stream], list[Window]] = {}
-    previous: set[tuple[Entity, Stream]] = set()
-    bucket_entities: set[Entity] = set()
-    profile_entities: set[Entity] = set()
-
-    for spec in ONLINE_FEATURES:
-        semantics = spec.semantics
-        if isinstance(semantics, PairwiseWithPrevious):
-            previous.add((semantics.entity, semantics.stream))
-            continue
-        if isinstance(semantics, ProfileAttribute):
-            profile_entities.add(semantics.entity)
-            continue
-        if not isinstance(semantics, WindowedAggregate):
-            continue
-
-        windows = count_windows.setdefault((semantics.entity, semantics.stream), [])
-        if semantics.window not in windows:
-            windows.append(semantics.window)
-        if semantics.aggregation in bucket_derived:
-            bucket_entities.add(semantics.entity)
-        if semantics.aggregation is not Aggregation.DISTINCT_COUNT:
-            continue
-
-        assert semantics.dimension is not None and semantics.storage is not None
-        key = (semantics.entity, semantics.dimension)
-        if key in storage and storage[key] is not semantics.storage:
-            raise ValueError(
-                f"{key} is declared both EXACT and APPROXIMATE by different features; "
-                f"one physical representation cannot serve both"
-            )
-        storage[key] = semantics.storage
-        distinct_windows.setdefault(key, []).append(semantics.window)
-
-    return _ReadPlan(
-        storage=storage,
-        distinct_windows={k: tuple(v) for k, v in distinct_windows.items()},
-        count_windows={k: tuple(v) for k, v in count_windows.items()},
-        previous=frozenset(previous),
-        bucket_entities=frozenset(bucket_entities),
-        profile_entities=frozenset(profile_entities),
-    )
-
-
-_PLAN: Final = _plan_from_registry()
-_STORAGE: Final = _PLAN.storage
-_WINDOWS_FOR: Final = _PLAN.distinct_windows
 
 
 def _text(value: Any) -> str:
@@ -625,4 +600,4 @@ def _habitual(fields: dict[str, str], prefix: str) -> frozenset[str]:
     )
 
 
-__all__ = ["HLL_BUCKET_MS", "PROFILE_SAMPLE_SIZE", "RETENTION_S", "RedisOnlineFeatureStore"]
+__all__ = ["BUCKET_TRIM_SWEEP", "HLL_BUCKET_MS", "PROFILE_SAMPLE_SIZE", "RedisOnlineFeatureStore"]

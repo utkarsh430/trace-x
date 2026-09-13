@@ -53,9 +53,27 @@ services:
     image: redis:7-alpine
     profiles: ["core"]
     <<: *restart
-    # Online feature store only — derived state, authoritative for nothing (ADR-0003).
-    # allkeys-lru is correct here precisely because eviction is recoverable:
-    # Spark Gold reconciles the store, and a cold Redis degrades to rules-only.
+    # The FEATURE store: correctness-relevant online state, and nothing else
+    # (ADR-0044). The replay cache and rate-limit windows live in `redis-cache`
+    # below, because eviction policy is per instance and these two classes need
+    # opposite policies.
+    #
+    # `noeviction`, and this is the correctness decision of Phase 2. Under
+    # `allkeys-lru` a full store discarded feature keys, and an evicted feature
+    # key reads back empty -- indistinguishable from an account with no history
+    # -- so the rules abstained and transactions that should have been CRITICAL
+    # were approved with degraded=false. A passing acceptance run did exactly
+    # that: 346,067 keys evicted, every latency target met, nothing flagged.
+    # With `noeviction` a full store REFUSES the write instead, the gateway
+    # surfaces it as `feature_write_failed` and deletes its completeness epoch,
+    # and every decision from then on says its history is incomplete. Loud is
+    # the only acceptable failure mode for state that decides fraud.
+    #
+    # The memory limit follows from the memory model in
+    # benchmarks/features/memory_model.py, not from a guess and not from the
+    # first ten minutes of a run; see ADR-0044 for the derivation and the
+    # steady-state figure it does NOT fit.
+    #
     # AOF OFF, and this is a latency decision with a measurement behind it.
     # ADR-0003 makes Redis authoritative for NOTHING: it holds derived state,
     # rebuildable from Delta, and Phase 3's Gold reconciliation overwrites it.
@@ -67,20 +85,15 @@ services:
     #   appendonly yes -> 5,151 Redis timeouts, 51 dropped iterations, p99 32.66 ms
     #   appendonly no  ->     0 timeouts,        0 dropped iterations, p99 12.43 ms
     #
-    # The dropped iterations are what matter: they fail the harness's
-    # `no_dropped_iterations` integrity condition, so the run cannot be recorded
-    # at all. Losing the keyspace on restart is the accepted cost, and it is the
-    # same cold start the hot path is already designed to survive
-    # (ARCHITECTURE §18: Redis loss degrades to rules-only).
-    #
-    # It also removes a failure mode found the hard way: an AOF larger than the
-    # container's memory limit makes Redis crash-loop on start, unable to load
-    # what it persisted.
+    # A restart therefore empties the store. That is not silent either: the
+    # epoch is gone with it, the first write re-establishes one, and decisions
+    # carry `history_incomplete` until the store has warmed for the widest
+    # declared lookback.
     command: >
       redis-server
       --appendonly no
-      --maxmemory 512mb
-      --maxmemory-policy allkeys-lru
+      --maxmemory 704mb
+      --maxmemory-policy noeviction
       --save ""
     ports:
       - "${REDIS_PORT:-6389}:6379"
@@ -94,7 +107,66 @@ services:
     deploy:
       resources:
         limits:
-          memory: 640M
+          # 704 MiB of data (benchmarks/features/memory_model.py: the ten-minute
+          # representative working set projects to ~557 MiB; 1.25x headroom,
+          # rounded up to 64 MiB) plus ~18% for Redis's allocator, client
+          # buffers and the process itself. A container limit below maxmemory
+          # would let the kernel kill Redis before Redis could refuse a write,
+          # which is the silent failure `noeviction` exists to replace with a
+          # loud one.
+          #
+          # 1.25x rather than more: ARCHITECTURE §14 budgets the whole `core`
+          # profile at 2.7 GB and `api`, `worker` and `ui` have not yet drawn
+          # against it. The headroom is validated, not assumed -- the acceptance
+          # run records the store's actual end-of-run memory under its run_id,
+          # and if that crowds this limit the budget conflict is surfaced rather
+          # than the limit quietly raised.
+          memory: 832M
+
+  # ---------------------------------------------------------- cache ------
+  # A SECOND Redis, for state whose loss costs nothing (ADR-0044).
+  #
+  # Redis eviction policy is instance-wide, so one instance cannot protect the
+  # feature state and still evict the replay cache. Measured on the
+  # representative 500 TPS profile, the replay cache was 37% of a shared
+  # keyspace at 1,579 bytes per entry, and under allkeys-lru it was FEATURE
+  # state that got evicted to make room for it -- an evicted feature key reads
+  # back empty, which looks exactly like a new account, so the rules abstained
+  # and transactions that should have been CRITICAL were approved with
+  # degraded=false. Two instances is what lets each class have the policy its
+  # semantics allow: `redis` (features) refuses writes when full and says so;
+  # this one evicts freely, because everything in it is either a latency
+  # optimisation over an authority that lives in Postgres (idempotent replay;
+  # `cases.trigger_transaction_id` is the real guarantee) or fails open by
+  # design (rate-limit windows, CLAUDE.md §3.7).
+  #
+  # Small on purpose. At 500 TPS this holds roughly two and a half minutes of
+  # replay entries before LRU starts recycling them; a retry outside that
+  # window is re-scored and returns the existing case_id from Postgres rather
+  # than the cached body. That is the documented limit of the replay
+  # guarantee, not a defect in it, and it is the same limit the shared
+  # instance had while also destroying feature state to reach it.
+  redis-cache:
+    image: redis:7-alpine
+    profiles: ["core"]
+    <<: *restart
+    command: >
+      redis-server
+      --appendonly no
+      --maxmemory 128mb
+      --maxmemory-policy allkeys-lru
+      --save ""
+    ports:
+      - "${REDIS_CACHE_PORT:-6390}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    deploy:
+      resources:
+        limits:
+          memory: 160M
 
   gateway:
     # Built from THIS repository, not pulled: the image is the hot path, and a
@@ -120,6 +192,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+      redis-cache:
+        condition: service_started
     environment:
       # Service identity (docs/SECURITY.md §3, Plane B). `:?` rather than a
       # default: the gateway refuses to start without a token, so the choice is
@@ -143,6 +217,11 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_DB: ${REDIS_DB:-0}
+      # The disposable-cache instance (ADR-0044): replay cache and rate-limit
+      # windows. Loss of anything in it must not change a decision.
+      REDIS_CACHE_HOST: redis-cache
+      REDIS_CACHE_PORT: 6379
+      REDIS_CACHE_DB: ${REDIS_CACHE_DB:-0}
       TRACE_ENV: ${TRACE_ENV:-local}
       TRACE_LOG_LEVEL: ${TRACE_LOG_LEVEL:-INFO}
       TRACE_LOG_FORMAT: ${TRACE_LOG_FORMAT:-json}

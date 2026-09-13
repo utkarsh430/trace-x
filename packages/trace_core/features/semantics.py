@@ -180,6 +180,28 @@ ONE_DAY: Final = Window(86_400, "24h")
 
 WINDOWS: Final[tuple[Window, ...]] = (ONE_MINUTE, FIVE_MINUTES, ONE_HOUR, ONE_DAY)
 
+LATE_ARRIVAL_MARGIN_S: Final = 3_600
+"""How long state is kept beyond the widest window that reads it.
+
+A late-arriving event (up to `MAX_BACKDATE_S` is accepted) must still land in
+a window that has not been trimmed out from under it. One hour is the existing
+implementation's margin, stated here so retention is DERIVED from the widest
+declared window plus this, per storage primitive -- rather than one number
+applied to everything, which is what kept five-minute card velocity for
+twenty-five hours."""
+
+PROFILE_ACTIVITY_HORIZON: Final = Window(30 * 86_400, "30d")
+"""How far back an entity's accumulated profile is trusted to reach.
+
+A profile has no window: tenure, habitual merchants and known devices
+accumulate for as long as the entity is active. But the online store cannot
+keep them forever, and more importantly it cannot know what happened before it
+began recording. This is the horizon it commits to: an entity inactive for
+longer loses its profile and is treated as unknown (not new), and a store
+younger than this cannot assert that an entity is new -- because an entity
+older than the store's own age would look identical. Thirty days is the
+existing profile TTL, now declared rather than implied."""
+
 
 @dataclass(frozen=True, slots=True)
 class WindowedAggregate:
@@ -224,6 +246,12 @@ class ProfileAttribute:
 
     entity: Entity
     metric: ProfileMetric
+    horizon: Window = PROFILE_ACTIVITY_HORIZON
+    """How far back the profile must be complete for a NEGATIVE answer to be
+    trusted. "This device is known" is sound the moment it is observed;
+    "this device is NOT known" and "this account is N days old" are only sound
+    if the store has watched at least this long, because an older device or
+    account would look exactly the same to a younger store."""
 
     @property
     def is_approximate(self) -> bool:
@@ -243,6 +271,15 @@ class PairwiseWithPrevious:
     entity: Entity
     metric: PairwiseMetric
     stream: Stream = Stream.TRANSACTION
+    lookback: Window = ONE_DAY
+    """How far back a "previous observation" is looked for.
+
+    One day, and it loses nothing the rules can use: `hours_since_identity_change`
+    is compared against 24 h, and an implied speed over a gap longer than a day
+    can never exceed 1,000 km/h, because half the Earth's circumference is about
+    20,000 km. It was already the effective bound -- the previous-observation
+    key expired after the global retention -- and is now stated where the
+    retention is derived from it."""
 
     @property
     def is_approximate(self) -> bool:
@@ -267,3 +304,22 @@ class RowLocal:
 
 
 Semantics = WindowedAggregate | ProfileAttribute | PairwiseWithPrevious | RowLocal
+
+
+def required_lookback_s(
+    semantics: WindowedAggregate | ProfileAttribute | PairwiseWithPrevious | RowLocal,
+) -> int:
+    """How far before `as_of` the store must have been recording for this
+    feature's answer to be complete.
+
+    The number every completeness decision is made from, so it is defined once
+    beside the declarations it reads rather than re-derived by each store.
+    `RowLocal` reads no state and is complete by construction.
+    """
+    if isinstance(semantics, WindowedAggregate):
+        return semantics.window.seconds
+    if isinstance(semantics, ProfileAttribute):
+        return semantics.horizon.seconds
+    if isinstance(semantics, PairwiseWithPrevious):
+        return semantics.lookback.seconds
+    return 0

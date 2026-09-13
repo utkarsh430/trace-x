@@ -38,6 +38,8 @@ Run: `make load-gateway` (needs `make up` and a running gateway).
 from __future__ import annotations
 
 import argparse
+import contextlib
+import dataclasses
 import datetime as dt
 import json
 import os
@@ -272,6 +274,40 @@ def _http_json(
             f"the gateway at {url} is not reachable ({exc}). Start it with `make up` "
             f"before measuring it."
         ) from exc
+
+
+def probe_store_metrics(base_url: str) -> dict[str, int]:
+    """Read the two Redis instances' memory and eviction gauges from /metrics.
+
+    Taken from the GATEWAY's exposition rather than from Redis directly, so the
+    figures recorded are the ones an operator would see and the ones the alerts
+    are wired to. Returns -1 for anything absent; the caller's verdict treats
+    -1 as a failure, never as zero.
+    """
+    readings = {
+        "features_memory_bytes": -1,
+        "features_evicted_keys": -1,
+        "cache_memory_bytes": -1,
+        "cache_evicted_keys": -1,
+    }
+    try:
+        request = urllib.request.Request(f"{base_url}/metrics")  # noqa: S310
+        with urllib.request.urlopen(request, timeout=5) as response:  # noqa: S310 # nosec B310
+            text = response.read().decode()
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return readings
+    for line in text.splitlines():
+        for metric, suffix in (
+            ("online_store_memory_bytes", "memory_bytes"),
+            ("online_store_evicted_keys_total", "evicted_keys"),
+        ):
+            if not line.startswith(metric):
+                continue
+            for store in ("features", "cache"):
+                if f'store="{store}"' in line:
+                    with contextlib.suppress(ValueError):
+                        readings[f"{store}_{suffix}"] = int(float(line.rsplit(" ", 1)[1]))
+    return readings
 
 
 def probe_gateway(base_url: str, token: str) -> GatewayIdentity:
@@ -614,10 +650,22 @@ class Measured:
     http_5xx: int
     unparseable_responses: int
     degraded_responses: int
+    degraded_unexpected: int
+    """Degraded for any reason other than `history_incomplete`. The acceptance
+    condition is on this figure: a warming store is expected on a cold run and
+    is reported separately; an unavailable store or a refused write is not."""
+    history_incomplete: int
     band_low: int
     band_medium: int
     band_high: int
     band_critical: int
+    features_memory_bytes: int = -1
+    """`online_store_memory_bytes{store="features"}` read from /metrics after the
+    run. -1 means it could not be read, which fails the eviction verdict rather
+    than passing it: an unread counter is not a zero (CLAUDE.md §13)."""
+    features_evicted_keys: int = -1
+    cache_memory_bytes: int = -1
+    cache_evicted_keys: int = -1
 
 
 def extract(summary: dict[str, Any]) -> Measured:
@@ -654,6 +702,8 @@ def extract(summary: dict[str, Any]) -> Measured:
         http_5xx=counter(summary, "gateway_http_5xx"),
         unparseable_responses=counter(summary, "gateway_unparseable_responses"),
         degraded_responses=counter(summary, "gateway_degraded_responses"),
+        degraded_unexpected=counter(summary, "gateway_degraded_unexpected"),
+        history_incomplete=counter(summary, "gateway_history_incomplete"),
         band_low=counter(summary, "gateway_band_low"),
         band_medium=counter(summary, "gateway_band_medium"),
         band_high=counter(summary, "gateway_band_high"),
@@ -726,6 +776,29 @@ def evaluate(
                 f"{target_tps} TPS offered. The latency below describes the rate ACHIEVED, and "
                 f"must never be quoted as latency at {target_tps} TPS"
             ),
+        ),
+        Verdict(
+            "no_feature_state_evictions",
+            TARGET,
+            measured.features_evicted_keys == 0,
+            (
+                f"the feature store evicted {measured.features_evicted_keys} keys. Under "
+                f"`noeviction` that must be zero; any rise means feature state was discarded "
+                f"and decisions after it were made on history that looks complete and is not "
+                f"(ADR-0044)"
+                if measured.features_evicted_keys >= 0
+                else "the feature store's eviction counter could not be read from /metrics; an "
+                "unread counter is not a zero"
+            ),
+        ),
+        Verdict(
+            "no_unexpected_degradation",
+            TARGET,
+            measured.degraded_unexpected == 0,
+            f"{measured.degraded_unexpected} decisions were degraded for a reason other than the "
+            f"store warming (unavailable store, refused write, unavailable limiter). "
+            f"{measured.history_incomplete} carried `history_incomplete`, which a cold store "
+            f"reports by design until it has recorded for the widest declared lookback",
         ),
         Verdict(
             "no_dropped_iterations",
@@ -976,6 +1049,16 @@ def render_report(record: LoadTestRunRecord, measured: Measured, verdicts: list[
         f"| 429 | {measured.http_429:,} |",
         f"| 5xx | {measured.http_5xx:,} |",
         f"| degraded decisions | {measured.degraded_responses:,} |",
+        f"| … of which `history_incomplete` (store warming; expected on a cold run) | "
+        f"{measured.history_incomplete:,} |",
+        f"| … degraded for any OTHER reason | {measured.degraded_unexpected:,} |",
+        f"| feature store memory at end (`store=features`) | "
+        f"{measured.features_memory_bytes / 1_048_576:,.1f} MiB |",
+        f"| feature store keys evicted | {measured.features_evicted_keys:,} |",
+        f"| cache store memory at end (`store=cache`) | "
+        f"{measured.cache_memory_bytes / 1_048_576:,.1f} MiB |",
+        f"| cache store keys evicted (permitted; nothing in it decides) | "
+        f"{measured.cache_evicted_keys:,} |",
         "",
         f"## Decision mix — `run_id: {rid}`",
         "",
@@ -1093,6 +1176,14 @@ def main(argv: list[str] | None = None) -> int:
         finished = dt.datetime.now(dt.UTC)
 
         measured = extract(load_summary(out_dir))
+
+        # The two stores' own gauges, from the gateway's exposition, AFTER the run:
+
+        # the eviction counter is the acceptance evidence that no feature state was
+
+        # discarded, and the memory figure is what the model is validated against.
+
+        measured = dataclasses.replace(measured, **probe_store_metrics(args.base_url))
         verdicts = evaluate(measured, target_tps=args.target_tps, profile=args.profile)
         _print_verdicts(verdicts)
 

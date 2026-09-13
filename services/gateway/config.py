@@ -58,6 +58,12 @@ class GatewaySettings:
     """Resolved gateway configuration."""
 
     redis_url: str
+    """The FEATURE store: correctness-relevant online state. `noeviction`;
+    a write it refuses is surfaced, never absorbed (ADR-0044)."""
+    redis_cache_url: str
+    """The DISPOSABLE store: replay cache and rate-limit windows. `allkeys-lru`;
+    nothing in it may change a decision, so evicting it is safe by
+    construction (ADR-0044)."""
     postgres_dsn: str
     rate_limit: int
     rate_limit_window_s: int
@@ -71,8 +77,12 @@ class GatewaySettings:
         host = env.get("REDIS_HOST", "localhost")
         port = env.get("REDIS_PORT", "6389")
         db = env.get("REDIS_DB", "0")
+        cache_host = env.get("REDIS_CACHE_HOST", "localhost")
+        cache_port = env.get("REDIS_CACHE_PORT", "6390")
+        cache_db = env.get("REDIS_CACHE_DB", "0")
         return cls(
             redis_url=f"redis://{host}:{port}/{db}",
+            redis_cache_url=f"redis://{cache_host}:{cache_port}/{cache_db}",
             postgres_dsn=(
                 "postgresql://{user}:{password}@{host}:{port}/{db}".format(
                     user=env.get("TRACE_APP_DB_USER", "trace_app"),

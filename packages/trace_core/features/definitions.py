@@ -38,6 +38,7 @@ from trace_core.domain.geo import GeoPoint, haversine_km, implied_speed_kmh
 from trace_core.features.context import (
     INSUFFICIENT_HISTORY,
     MIN_OBSERVATIONS_FOR_ROBUST_Z,
+    Completeness,
     FeatureContext,
     InsufficientHistory,
     Observation,
@@ -339,37 +340,52 @@ _register_window(
 # ------------------------------------------------------- profile (16-20) ---
 
 
-def _robust_z(tx: CanonicalTransaction, ctx: FeatureContext) -> float | InsufficientHistory:
-    profile = _profile(tx, ctx, Entity.ACCOUNT)
-    if profile is None or profile.observation_count < MIN_OBSERVATIONS_FOR_ROBUST_Z:
-        return INSUFFICIENT_HISTORY
-    if profile.amount_median_minor is None or profile.amount_mad_minor is None:
-        return INSUFFICIENT_HISTORY
-    scale = MAD_TO_SIGMA * profile.amount_mad_minor
-    deviation = abs(tx.amount_minor) - profile.amount_median_minor
-    if scale <= 0:
-        # An account that has always spent exactly the same amount. Any
-        # departure is maximally anomalous; an identical amount is not anomalous
-        # at all. Returning 0/0 or infinity would be worse than either.
-        return 0.0 if deviation == 0 else ROBUST_Z_CAP
-    return max(-ROBUST_Z_CAP, min(ROBUST_Z_CAP, deviation / scale))
+def _robust_z(spec: ProfileAttribute) -> Compute:
+    del spec  # the estimator reads the profile as it is; no horizon gate
+
+    def compute(tx: CanonicalTransaction, ctx: FeatureContext) -> float | InsufficientHistory:
+        profile = _profile(tx, ctx, Entity.ACCOUNT)
+        if profile is None or profile.observation_count < MIN_OBSERVATIONS_FOR_ROBUST_Z:
+            return INSUFFICIENT_HISTORY
+        if profile.amount_median_minor is None or profile.amount_mad_minor is None:
+            return INSUFFICIENT_HISTORY
+        scale = MAD_TO_SIGMA * profile.amount_mad_minor
+        deviation = abs(tx.amount_minor) - profile.amount_median_minor
+        if scale <= 0:
+            # An account that has always spent exactly the same amount. Any
+            # departure is maximally anomalous; an identical amount is not anomalous
+            # at all. Returning 0/0 or infinity would be worse than either.
+            return 0.0 if deviation == 0 else ROBUST_Z_CAP
+        return max(-ROBUST_Z_CAP, min(ROBUST_Z_CAP, deviation / scale))
+
+    return compute
 
 
-def _tenure_days(tx: CanonicalTransaction, ctx: FeatureContext) -> float | InsufficientHistory:
-    profile = _profile(tx, ctx, Entity.ACCOUNT)
-    if profile is None or profile.first_seen_at is None:
-        return INSUFFICIENT_HISTORY
-    return max(0.0, (ctx.as_of - profile.first_seen_at).total_seconds() / 86_400.0)
+def _tenure_days(spec: ProfileAttribute) -> Compute:
+    def compute(tx: CanonicalTransaction, ctx: FeatureContext) -> float | InsufficientHistory:
+        profile = _profile(tx, ctx, Entity.ACCOUNT)
+        if profile is None or profile.first_seen_at is None:
+            return INSUFFICIENT_HISTORY
+        # "First seen N days ago" is only tenure if the store has been watching
+        # for at least its horizon: to a store that started last week, an
+        # account opened last year and one opened last week look identical, and
+        # reporting the second's age for the first is how a restart turns every
+        # regular customer into a fresh account for the tenure rules.
+        if ctx.completeness(spec.horizon.seconds) is not Completeness.COMPLETE:
+            return INSUFFICIENT_HISTORY
+        return max(0.0, (ctx.as_of - profile.first_seen_at).total_seconds() / 86_400.0)
+
+    return compute
 
 
-def _membership(metric: ProfileMetric) -> Compute:
+def _membership(spec: ProfileAttribute) -> Compute:
     def compute(tx: CanonicalTransaction, ctx: FeatureContext) -> float | InsufficientHistory:
         profile = _profile(tx, ctx, Entity.ACCOUNT)
         if profile is None:
             return INSUFFICIENT_HISTORY
-        if metric is ProfileMetric.MERCHANT_IS_HABITUAL:
+        if spec.metric is ProfileMetric.MERCHANT_IS_HABITUAL:
             known, subject = profile.habitual_merchants, tx.merchant_id
-        elif metric is ProfileMetric.MCC_IS_HABITUAL:
+        elif spec.metric is ProfileMetric.MCC_IS_HABITUAL:
             known, subject = profile.habitual_mccs, tx.merchant_mcc
         else:
             known, subject = profile.known_devices, tx.device_id
@@ -378,23 +394,38 @@ def _membership(metric: ProfileMetric) -> Compute:
             # not "this is unfamiliar". Reporting 0.0 would make every new
             # account's first transaction look like a novel device.
             return INSUFFICIENT_HISTORY
-        return float(subject is not None and subject in known)
+        if subject is not None and subject in known:
+            # A positive is sound as soon as it is observed: the store saw this
+            # account use this device, whatever it did not see before.
+            return 1.0
+        # A NEGATIVE is a claim about everything the account has ever done, and
+        # a store that started recording last week has not seen everything. It
+        # may only say "unknown device" once it has watched for its horizon;
+        # before that the honest answer is that it cannot tell. This is the
+        # asymmetry that keeps a Redis restart from making every returning
+        # customer look like an account takeover in progress.
+        if ctx.completeness(spec.horizon.seconds) is not Completeness.COMPLETE:
+            return INSUFFICIENT_HISTORY
+        return 0.0
 
     return compute
 
 
-def _distance_from_home(
-    tx: CanonicalTransaction, ctx: FeatureContext
-) -> float | InsufficientHistory:
-    profile = _profile(tx, ctx, Entity.ACCOUNT)
-    if profile is None or profile.home_latitude is None or profile.home_longitude is None:
-        return INSUFFICIENT_HISTORY
-    if tx.latitude is None or tx.longitude is None:
-        return INSUFFICIENT_HISTORY
-    return haversine_km(
-        GeoPoint(profile.home_latitude, profile.home_longitude),
-        GeoPoint(tx.latitude, tx.longitude),
-    )
+def _distance_from_home(spec: ProfileAttribute) -> Compute:
+    del spec  # home is a location the store observed; no horizon gate
+
+    def compute(tx: CanonicalTransaction, ctx: FeatureContext) -> float | InsufficientHistory:
+        profile = _profile(tx, ctx, Entity.ACCOUNT)
+        if profile is None or profile.home_latitude is None or profile.home_longitude is None:
+            return INSUFFICIENT_HISTORY
+        if tx.latitude is None or tx.longitude is None:
+            return INSUFFICIENT_HISTORY
+        return haversine_km(
+            GeoPoint(profile.home_latitude, profile.home_longitude),
+            GeoPoint(tx.latitude, tx.longitude),
+        )
+
+    return compute
 
 
 _PROFILES: Final = (
@@ -422,7 +453,7 @@ _PROFILES: Final = (
         "1.0 if this merchant is one the account uses habitually.",
         ProfileMetric.MERCHANT_IS_HABITUAL,
         frozenset({F.ACCOUNT_ID, F.MERCHANT_ID}),
-        _membership(ProfileMetric.MERCHANT_IS_HABITUAL),
+        _membership,
         False,
     ),
     (
@@ -430,7 +461,7 @@ _PROFILES: Final = (
         "1.0 if this merchant category is one the account uses habitually.",
         ProfileMetric.MCC_IS_HABITUAL,
         frozenset({F.ACCOUNT_ID, F.MERCHANT_MCC}),
-        _membership(ProfileMetric.MCC_IS_HABITUAL),
+        _membership,
         False,
     ),
     (
@@ -439,7 +470,7 @@ _PROFILES: Final = (
         "is the first half of an account takeover.",
         ProfileMetric.DEVICE_IS_KNOWN,
         frozenset({F.ACCOUNT_ID, F.DEVICE_ID}),
-        _membership(ProfileMetric.DEVICE_IS_KNOWN),
+        _membership,
         False,
     ),
     (
@@ -453,13 +484,18 @@ _PROFILES: Final = (
 )
 
 for _fid, _desc, _metric, _required, _compute, _riskier in _PROFILES:
+    _semantics = ProfileAttribute(Entity.ACCOUNT, _metric)
     ONLINE_FEATURES.register(
         FeatureSpec(
             feature_id=_fid,
             description=_desc,
             required_fields=_required,
-            semantics=ProfileAttribute(Entity.ACCOUNT, _metric),
-            compute=_compute,
+            semantics=_semantics,
+            # Every profile compute is built from its spec. Tenure and the three
+            # membership features read the declared horizon -- a negative ("not
+            # a known device", "N days old") is only sound once the store has
+            # watched that long. The others ignore it, uniformly shaped.
+            compute=_compute(_semantics),
             higher_is_riskier=_riskier,
         )
     )

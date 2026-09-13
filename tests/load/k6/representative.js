@@ -62,6 +62,13 @@ const http4xx = new Counter('gateway_http_4xx');
 const http429 = new Counter('gateway_http_429');
 const http2xx = new Counter('gateway_http_2xx');
 const degraded = new Counter('gateway_degraded_responses');
+// Degraded for a reason OTHER than the store still warming. A cold store is
+// expected to say `history_incomplete` on every decision until it has recorded
+// for the widest declared lookback (ADR-0044), and a ten-minute run cannot warm
+// a thirty-day horizon -- so that reason is counted separately and the
+// acceptance verdict is on THIS counter, which must be zero.
+const degradedUnexpected = new Counter('gateway_degraded_unexpected');
+const historyIncomplete = new Counter('gateway_history_incomplete');
 const unparseable = new Counter('gateway_unparseable_responses');
 const bandLow = new Counter('gateway_band_low');
 const bandMedium = new Counter('gateway_band_medium');
@@ -366,6 +373,9 @@ export default function () {
   }
   unparseable.add(status === 200 && decision === null ? 1 : 0);
   degraded.add(decision && decision.degraded ? 1 : 0);
+  const reasons = decision && Array.isArray(decision.degraded_reasons) ? decision.degraded_reasons : [];
+  historyIncomplete.add(reasons.includes('history_incomplete') ? 1 : 0);
+  degradedUnexpected.add(reasons.some((r) => r !== 'history_incomplete') ? 1 : 0);
   bandLow.add(decision && decision.risk_band === 'LOW' ? 1 : 0);
   bandMedium.add(decision && decision.risk_band === 'MEDIUM' ? 1 : 0);
   bandHigh.add(decision && decision.risk_band === 'HIGH' ? 1 : 0);

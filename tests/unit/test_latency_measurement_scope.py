@@ -73,6 +73,7 @@ class _SlowStore:
 def _client() -> TestClient:
     settings = GatewaySettings(
         redis_url="redis://localhost:1/0",
+        redis_cache_url="redis://localhost:1/1",
         postgres_dsn="postgresql://nobody@localhost:1/none",
         rate_limit=10_000_000,
         rate_limit_window_s=60,

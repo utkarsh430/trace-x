@@ -20,6 +20,7 @@ from typing import Any
 import pytest
 from services.gateway.pipeline import (
     REASON_CLOCK_SKEW,
+    REASON_HISTORY_INCOMPLETE,
     REASON_REDIS,
     ScoringPipeline,
     absent_feature_reasons,
@@ -158,14 +159,28 @@ def test_a_very_old_timestamp_is_accepted_and_flagged() -> None:
 # --- the happy path ------------------------------------------------------------
 
 
-def test_a_cold_store_scores_low_with_everything_absent() -> None:
+def test_a_cold_store_scores_low_and_says_its_history_is_incomplete() -> None:
     """No history is not "no risk", but it is also not a refusal: the decision is
-    made, reports that its inputs were absent, and approves."""
+    made, reports that its inputs were absent, and approves.
+
+    It is also not a clean decision, and this test used to assert that it was
+    ("a cold store is not a degraded store"). A store that has not been
+    recording for as long as its features look back cannot tell a new account
+    from one it has simply not seen yet, and a decision made on that store must
+    say so -- otherwise a Redis restart produces a day of confident LOW answers
+    on accounts whose history was wiped (ADR-0044). What it must NOT say is
+    that the store was unavailable: it answered, it just has not warmed.
+    """
     outcome = _pipeline(_ReferenceBackedStore()).score(_request(), now=NOW)
     assert outcome.decision.decision == "APPROVE"
     assert outcome.decision.risk_band is RiskBand.LOW
     assert outcome.decision.insufficient_history_features
-    assert not outcome.decision.degraded, "a cold store is not a degraded store"
+    assert outcome.decision.degraded
+    assert REASON_HISTORY_INCOMPLETE in outcome.decision.degraded_reasons
+    assert REASON_REDIS not in outcome.decision.degraded_reasons, (
+        "the store answered; unwarmed is not unavailable, and conflating them "
+        "would send an operator to look for an outage"
+    )
 
 
 def test_accumulated_history_produces_a_firing_rule() -> None:
@@ -241,7 +256,12 @@ def test_extra_degradation_reasons_are_carried_through() -> None:
     outcome = _pipeline(_BrokenStore()).score(
         _request(), now=NOW, extra_degraded=("rate_limit_unavailable",)
     )
-    assert set(outcome.decision.degraded_reasons) == {REASON_REDIS, "rate_limit_unavailable"}
+    reasons = set(outcome.decision.degraded_reasons)
+    assert {REASON_REDIS, "rate_limit_unavailable"} <= reasons
+    # A store that could not be read yields an empty context with no
+    # completeness claim, which is by definition unwarmed: the third reason is
+    # not a duplicate of the first, it is what the first implies for history.
+    assert REASON_HISTORY_INCOMPLETE in reasons
 
 
 def test_degradation_reasons_are_deduplicated() -> None:

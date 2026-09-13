@@ -29,12 +29,37 @@ report a confident "not fraud".
 
 from __future__ import annotations
 
+import datetime as dt
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Final
 
 from trace_core.domain.enums import FeatureSource
 from trace_core.domain.time import EventTime
-from trace_core.features.semantics import Dimension, Entity, Stream
+from trace_core.features.semantics import WINDOWS, Dimension, Entity, Stream
+
+_WINDOW_SECONDS: Final[dict[str, int]] = {w.label: w.seconds for w in WINDOWS}
+
+
+class Completeness(StrEnum):
+    """Whether the store can vouch for everything inside a lookback.
+
+    The third answer a feature read can give, and the one that separates "this
+    entity has done nothing" from "we do not know what this entity did". A
+    missing key means the former only if the store has been recording for the
+    whole period it is being asked about; otherwise it means nothing at all.
+    """
+
+    COMPLETE = "COMPLETE"
+    """The store has recorded continuously since before the lookback began, so
+    an absent key is a measured zero: the entity genuinely did nothing."""
+    INCOMPLETE = "INCOMPLETE"
+    """The store began recording inside the lookback. What it holds is a lower
+    bound, and an absent key is not evidence of anything."""
+    UNKNOWN = "UNKNOWN"
+    """The store did not say when it began. Treated exactly as INCOMPLETE; it
+    exists as a distinct value so that a store which never learned to report
+    its epoch is visible as such rather than silently trusted."""
 
 
 class InsufficientHistory:
@@ -130,8 +155,18 @@ class FeatureContext:
     """Every value the online store returned for one transaction.
 
     Keyed by `(entity, entity_id, stream, window_label)` and
-    `(entity, entity_id)`: a missing key means the store had nothing, which the
-    feature turns into `INSUFFICIENT_HISTORY` -- never into a zero.
+    `(entity, entity_id)`. A missing key means one of two things, and the
+    context is what tells them apart: if the store has been recording for the
+    whole window (`complete_since` is old enough), the entity genuinely did
+    nothing and the window is a measured zero; if it has not, the store cannot
+    know, and the feature reports `INSUFFICIENT_HISTORY` -- never a zero.
+
+    **Why the distinction lives here and not in each store.** Both the reference
+    implementation and Redis build this same object, so the rule "absent means
+    zero only when complete" is written once and the conformance suite proves
+    both stores produce the same answer. A store that forgot to report its epoch
+    gets `Completeness.UNKNOWN`, which is treated as incomplete: the failure mode
+    of a missing epoch is over-caution, never a fabricated zero.
     """
 
     as_of: EventTime
@@ -141,13 +176,49 @@ class FeatureContext:
     windows: dict[tuple[Entity, str, Stream, str], WindowState] = field(default_factory=dict)
     profiles: dict[tuple[Entity, str], Profile] = field(default_factory=dict)
     previous: dict[tuple[Entity, str, Stream], Observation] = field(default_factory=dict)
+    complete_since: EventTime | None = None
+    """When the store began recording continuously, or None if it did not say.
+
+    Compared against the START of each lookback: a window is complete if it
+    began after the store did. Wall-clock at store start, interpreted on the
+    event-time axis -- the honest approximation, since an event that arrives
+    after the store started is recorded whatever its event time says, and one
+    that happened before is gone."""
+    distinct_dimensions: dict[Entity, tuple[Dimension, ...]] = field(default_factory=dict)
+    """Which dimensions the released features count per entity, so that a
+    complete-and-empty window can say "zero distinct merchants" rather than
+    leave the dimension absent -- which `_distinct` would correctly read as
+    "not declared" and refuse to answer."""
+
+    def completeness(self, lookback_s: int) -> Completeness:
+        """Can the store vouch for the whole of `(as_of - lookback_s, as_of]`?"""
+        if self.complete_since is None:
+            return Completeness.UNKNOWN
+        began = self.as_of - dt.timedelta(seconds=lookback_s)
+        return (
+            Completeness.COMPLETE
+            if began.timestamp() >= self.complete_since.timestamp()
+            else Completeness.INCOMPLETE
+        )
 
     def window(
         self, entity: Entity, entity_id: str | None, stream: Stream, window_label: str
     ) -> WindowState | None:
+        """The window's state; a measured zero if absent from a complete store.
+
+        The zero carries the declared distinct dimensions at 0, because a
+        window with no observations has zero distinct anything -- and because
+        `_distinct` must be able to tell that from a dimension nobody declared.
+        """
         if entity_id is None:
             return None
-        return self.windows.get((entity, entity_id, stream, window_label))
+        state = self.windows.get((entity, entity_id, stream, window_label))
+        if state is not None:
+            return state
+        seconds = _WINDOW_SECONDS.get(window_label)
+        if seconds is None or self.completeness(seconds) is not Completeness.COMPLETE:
+            return None
+        return WindowState(distinct=dict.fromkeys(self.distinct_dimensions.get(entity, ()), 0))
 
     def profile(self, entity: Entity, entity_id: str | None) -> Profile | None:
         if entity_id is None:

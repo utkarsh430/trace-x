@@ -38,11 +38,14 @@ from trace_core.contracts.api.transaction import (
 )
 from trace_core.contracts.canonical import CanonicalField, CanonicalTransaction
 from trace_core.domain.enums import FeatureSource
+from trace_core.domain.errors import FeatureWriteFailedError
 from trace_core.domain.time import EventTime, event_time, utc_now
 from trace_core.features import FeatureContext, FeatureState, FeatureValue
+from trace_core.features.context import Completeness
 from trace_core.features.definitions import ONLINE_FEATURES
 from trace_core.features.reference import Event
 from trace_core.features.semantics import Stream
+from trace_core.features.state_plan import PLAN
 from trace_core.repositories.circuit_breaker import CircuitBreaker
 from trace_core.rules.engine import Evaluation, evaluate_pack
 from trace_core.rules.pack import CompiledPack
@@ -61,6 +64,17 @@ them resolves with time (ADR-0022, ADR-0032).
 REASON_REDIS: Final = "redis_unavailable"
 REASON_RATE_LIMIT: Final = "rate_limit_unavailable"
 REASON_CLOCK_SKEW: Final = "occurred_at_backdated"
+REASON_WRITE_FAILED: Final = "feature_write_failed"
+"""The store is up and full. Under `noeviction` this is the only way memory
+pressure can present (ADR-0044), and it is counted rather than hidden. The
+breaker is NOT tripped: reads still work, and blinding scoring to punish a
+refused write would be the wrong direction."""
+REASON_HISTORY_INCOMPLETE: Final = "history_incomplete"
+"""At least one feature was INSUFFICIENT_HISTORY because the store has not been
+recording for as long as that feature looks back -- not because the entity is
+new. A fresh or restarted store carries this on every decision until it has
+warmed for the widest declared lookback; the decision says so rather than
+presenting a warm-looking answer from a cold store (ADR-0044)."""
 
 
 class TriageUnavailableError(RuntimeError):
@@ -204,6 +218,13 @@ class ScoringPipeline:
             return REASON_REDIS
         try:
             self.feature_store.observe(_as_event(canonical))
+        except FeatureWriteFailedError:
+            # Reachable and full. The store answered; it refused. Not an outage,
+            # so the breaker stays closed -- opening it would stop reads that
+            # still work in order to react to a write that did not.
+            if self.breaker is not None:
+                self.breaker.record_success()
+            return REASON_WRITE_FAILED
         except Exception:
             if self.breaker is not None:
                 self.breaker.record_failure()
@@ -235,6 +256,8 @@ class ScoringPipeline:
             reasons.append(read_reason)
 
         features = ONLINE_FEATURES.evaluate_all(canonical, context)
+        if history_incomplete(features, context):
+            reasons.append(REASON_HISTORY_INCOMPLETE)
         evaluation = evaluate_pack(self.pack, canonical, features)
         decision = build_decision(
             transaction_id=request.transaction_id,
@@ -280,6 +303,25 @@ def _as_event(canonical: CanonicalTransaction) -> Event:
         authorization_outcome=canonical.authorization_outcome,
         event_id=canonical.transaction_id,
     )
+
+
+def history_incomplete(features: dict[str, FeatureValue], context: FeatureContext) -> bool:
+    """Was any absence caused by the store's youth rather than the entity's?
+
+    A feature is INSUFFICIENT_HISTORY for one of two reasons: the entity has
+    too little history (a new account, four observations where eight are
+    needed), or the store has not been recording for as long as the feature
+    looks back. Only the second is a property of the deployment rather than of
+    the transaction, and only the second is worth flagging on the decision --
+    the first is the ordinary condition every genuinely new entity is in.
+    """
+    for feature_id, value in features.items():
+        if value.state is not FeatureState.INSUFFICIENT_HISTORY:
+            continue
+        lookback = PLAN.lookback_s.get(feature_id, 0)
+        if lookback and context.completeness(lookback) is not Completeness.COMPLETE:
+            return True
+    return False
 
 
 def absent_feature_reasons(features: dict[str, FeatureValue]) -> dict[str, str]:
