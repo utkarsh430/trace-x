@@ -165,3 +165,29 @@ def test_request_latency_strictly_exceeds_scoring_latency() -> None:
         f"({scoring:.6f}s). What the caller is told and what is graphed must be the same "
         f"measurement, or one of them is wrong and nobody can tell which."
     )
+
+
+def test_the_latency_histograms_have_buckets_that_can_show_a_tail() -> None:
+    """The declared second-scale boundaries must reach the exposition.
+
+    Without an explicit advisory the SDK uses its default boundaries -- 5, 10,
+    25 ... 10,000 -- which are millisecond-scale. Recording seconds against them
+    puts every request in the first bucket, and a run with a client p99 of
+    1.46 s showed all 298,413 requests under `le="5.0"`. The budget is 100 ms;
+    a histogram that cannot distinguish 10 ms from 4 s cannot say whether the
+    budget was met.
+    """
+    with _client() as client:
+        client.post(
+            "/v1/transactions",
+            json=_transaction(),
+            headers={"Authorization": f"Bearer {TOKEN}", "X-Idempotency-Key": "scope-buckets"},
+        )
+        exposition = client.get("/metrics").text
+    for name in (TX_SCORE_LATENCY, REQUEST_LATENCY):
+        buckets = [line for line in exposition.splitlines() if line.startswith(f"{name}_bucket")]
+        assert any('le="0.1"' in b for b in buckets), (
+            f"{name} has no 100 ms bucket; its boundaries are not the declared second-scale set. "
+            f"Buckets seen: {[b.split('le=')[1].split(',')[0] for b in buckets][:6]}"
+        )
+        assert any('le="0.01"' in b for b in buckets), f"{name} has no 10 ms bucket"

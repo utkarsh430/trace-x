@@ -166,7 +166,13 @@ services:
     deploy:
       resources:
         limits:
-          memory: 160M
+          # 128 MiB of data plus Redis's own overhead. Measured at the end of a
+          # 500 TPS run with the cache at its cap: RSS 150.75 MiB against 128 MiB
+          # of data (fragmentation 1.18 under continuous LRU eviction), and the
+          # cgroup recorded 52 `memory.max` events at a 160 MiB limit -- each
+          # one a direct-reclaim stall inside the cache process. 192 MiB leaves
+          # the allocator room to fragment without the kernel getting involved.
+          memory: 192M
 
   gateway:
     # Built from THIS repository, not pulled: the image is the hot path, and a
@@ -232,6 +238,17 @@ services:
     # says the hot path receives none of them.
     ports:
       - "${TRACE_GATEWAY_PORT:-8010}:8010"
+    logging:
+      # One structured line per request at 500 TPS is ~75 MB per ten-minute
+      # run. Unrotated, that grows without bound on a laptop and every write
+      # goes through the daemon's json-file writer, which is on the path of the
+      # synchronous stdout write the gateway makes per request. Rotation bounds
+      # both. It does not make the write asynchronous; see ADR-0044's note on
+      # stall amplification for why that matters.
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     healthcheck:
       # LIVENESS, deliberately -- /healthz touches no dependency. Two distinct
       # reasons not to point this at /readyz:

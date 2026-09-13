@@ -149,20 +149,30 @@ class HotPathMetrics:
 
     def __init__(self, meter_name: str = "trace_core.gateway") -> None:
         meter = get_meter(meter_name)
+        # The bucket boundaries are declared HERE, on the instrument, because
+        # without them the SDK applies its default set -- 5, 10, 25 ... 10,000,
+        # sized for milliseconds -- to values recorded in SECONDS, and every
+        # request lands in the first bucket. That happened: a run with a client
+        # p99 of 1.46 s showed all 298,413 requests under `le="5.0"` and no
+        # server-side tail could be read from /metrics at all. A histogram that
+        # cannot show its own tail is not observability, it is a sum and a count.
         self.latency: Histogram = meter.create_histogram(
             TX_SCORE_LATENCY,
             unit="s",
             description="Scoring only: features, rules, banding. Excludes triage and later I/O.",
+            explicit_bucket_boundaries_advisory=list(LATENCY_BUCKETS_S),
         )
         self.request_latency: Histogram = meter.create_histogram(
             REQUEST_LATENCY,
             unit="s",
             description="Whole server-side request, including triage and the observe-write.",
+            explicit_bucket_boundaries_advisory=list(LATENCY_BUCKETS_S),
         )
         self.feature_read_latency: Histogram = meter.create_histogram(
             FEATURE_READ_LATENCY,
             unit="s",
             description="Time spent reading the online feature store, within the scoring budget.",
+            explicit_bucket_boundaries_advisory=list(LATENCY_BUCKETS_S),
         )
         self.scored: Counter = meter.create_counter(
             TX_SCORED_TOTAL, description="Transactions scored, by risk band."

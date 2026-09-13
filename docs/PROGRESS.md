@@ -67,6 +67,20 @@ leaving 621 MiB for `api`, `worker` and `ui`, none of which exist yet.
 that shortens it. Before ADR-0044 the same restart produced a day of confident wrong scores and thirty
 days of false new-device alarms, none flagged.
 
+**A host stall is amplified ~15× by the single event loop, and the gate has little slack to absorb
+one.** An acceptance run at the noeviction topology met every correctness verdict (0 feature-state
+evictions, 0 unexpected degradations) and every target but the tail: 1,589 dropped iterations and a
+tail an order of magnitude over budget, so the harness refused it and its latencies are not quoted
+here (no `run_id`, CLAUDE.md §13). Its scoring core stayed sub-millisecond and its whole-request mean
+was about a millisecond; the feature store's own slowlog held one entry — an `HINCRBY` taking 33.6 ms at the exact second the stall began,
+which for a trivial command in single-threaded Redis means the VM itself was descheduled. Everything
+froze together, so nothing timed out; k6's in-flight count went from 2 to 790 in twelve seconds, and
+the backlog took ~18 s to drain because the loop's capacity (~1/1.7 ms ≈ 590 rps) sits only ~15%
+above the 500 TPS offered. `recovery ≈ backlog ÷ (capacity − offered)`. Two defects found on the way
+are fixed (histogram buckets that could not show a tail; a cache container limit tighter than its
+allocator's RSS) and the run was repeated once — once, with the external cause named, not until it
+passed.
+
 **Gate reproducibility is not established.** Recorded previously and still true: one run at the same
 configuration dropped 4 iterations of 300,001 and was refused; the next dropped none.
 
