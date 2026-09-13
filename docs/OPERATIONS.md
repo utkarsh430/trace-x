@@ -89,46 +89,70 @@ unbounded in-process cache, both present exactly this way. If the limit genuinel
 `docs/ARCHITECTURE.md` §14 budgets the whole `core` profile, so raising one service means lowering
 another — `tests/unit/test_compose_profiles.py` fails when the sum stops fitting.
 
-### Redis unavailable
-**Detect:** health probe, 20 ms timeouts, `degraded_mode_total{reason="redis"}` climbing.
+### Feature-store Redis unavailable
+**Detect:** health probe (`redis: degraded`), 20 ms timeouts, the feature breaker open,
+`degraded_mode_total{reason="redis_unavailable"}` climbing. The cache instance is separate and is
+not blamed (ADR-0044).
 **Behaviour:** hot path falls back to rules-only; responses carry `X-Trace-Degraded: true`.
 **Action:** confirm the fallback is active (not 5xx). Restore Redis. **Do not** backfill counters by
 hand — let the Spark reconciliation job rebuild them, then confirm `feature_parity_drift` settles.
 **Do not** treat the degraded window's decisions as normal-quality; they are flagged for review.
 
-### Redis full — eviction is quietly lowering scores
+### Feature store full — writes refused, loudly
 
-**This presents as an availability problem and is a capacity problem.** Under memory pressure Redis
-slows, the 20 ms socket timeout fires, and the breaker reports the store unavailable — so the first
-symptom looks identical to a Redis outage and the wrong playbook gets opened.
+**This is a capacity condition, not an outage, and the gateway treats it that way.** The feature
+store runs `noeviction` (ADR-0044): when it is full it REFUSES the write instead of discarding
+someone else's history. The decision is still made, it is marked degraded with reason
+`feature_write_failed`, and the store's completeness epoch is withdrawn — so every decision after it
+also says `history_incomplete`, because an observation that was not recorded is a hole in the
+history and no window spanning the hole is complete.
 
-**Detect:** `online_store_memory_bytes` approaching `maxmemory`; `online_store_evicted_keys_total`
-rising at all. It should be **flat at zero** in normal operation — any sustained rise means feature
-state is being discarded. `degraded_mode_total{reason="redis_unavailable"}` climbing alongside it is
-the confirmation, not the cause.
+**Detect:** `degraded_mode_total{reason="feature_write_failed"}` rising;
+`online_store_memory_bytes{store="features"}` at `maxmemory`; `/readyz` still ready.
+`online_store_evicted_keys_total{store="features"}` must read **zero forever** — any rise at all is a
+configuration fault (the policy is not `noeviction`), not load.
 
-**Why it matters more than it looks.** An evicted feature key reads back empty, and an empty read is
-what an account with no history looks like. The feature resolves to `INSUFFICIENT_HISTORY`, the rules
-over it abstain, the score falls, and a transaction that should have been CRITICAL is approved with
-`degraded=false`. **Nothing in that decision says anything was lost.** The gauge is the only signal
-that separates "this account is new" from "we lost what we knew about it".
+**Why it is designed this way.** Under `allkeys-lru` a full store discarded feature keys, and an
+evicted key reads back empty — indistinguishable from an account with no history — so the rules
+abstained and transactions that should have been CRITICAL were approved with `degraded=false`. A
+passing acceptance run did exactly that and looked perfectly healthy. Loud is the only acceptable
+failure for state that decides fraud.
 
-**The three state classes share one eviction pool, and LRU cannot tell them apart** (ADR-0041):
+**Action:** do not restart Redis — that empties the store, which costs a warm-up (below). Reduce
+offered rate if it is a spike; provision memory if it is not. The memory model
+(`benchmarks/features/memory_model.py`, `benchmarks/features/MEMORY.md`) says what the store needs for
+a given rate and retention. Keys expire on their declared retention, so a full store recovers on its
+own once the rate drops; the epoch is re-established by the first successful write and warm-up begins
+from there.
 
-| class | keys | loss costs | authoritative elsewhere |
-|---|---|---|---|
-| feature state | `f:*` | **a wrong decision** | Delta, from Phase 3 |
-| replay cache | `idem` | a retry is re-scored, never duplicated | **Postgres** |
-| rate-limit windows | `rl` | a token briefly over budget; fails open | no |
+### Feature store empty or warming — after a restart or `FLUSHALL`
 
-Measured: the replay cache was **37% of the keyspace** (1,596 bytes/key) while feature state is
-**970 bytes per request**. The cheapest class to lose was the largest consumer.
+**Detect:** `/readyz` reports `feature_history: warming since …; complete for every feature at …`
+(or `empty: no epoch`); `degraded_mode_total{reason="history_incomplete"}` on every decision.
 
-**Action:** do not restart Redis — that discards the whole keyspace, which is the outcome being
-avoided. Reduce offered rate if it is a spike, or provision memory; feature state is rebuildable by
-the Phase 3 reconciliation job but does not rebuild itself. Treat decisions made during any eviction
-window as reduced-confidence even though they are not flagged degraded, because that is exactly the
-case the flag misses.
+**Behaviour:** the store is healthy and reachable and does not know the past. Windowed features
+resolve as soon as their window has fully elapsed since the epoch (up to 24 h); profile features need
+the declared 30-day horizon, so **the tenure, habitual-merchant and new-device rules cannot fire for
+thirty days after a restart.** Before ADR-0044 the same restart produced thirty days of false
+new-device alarms and a day of confident wrong scores, and neither was flagged; now it is a visible
+detection gap instead of a silent one.
+
+**Action:** nothing restores history locally until Phase 3's reconciliation exists. Treat decisions
+in the warming window as reduced-confidence *by the flag they carry*. If a restart was avoidable, it
+was expensive; the store is deliberately not persisted (AOF off, ADR-0042) because persistence cost
+the latency budget and could not be reloaded within the container's memory anyway.
+
+### Cache Redis unavailable
+
+**Detect:** `/readyz` `redis_cache: degraded`; `degraded_mode_total{reason="rate_limit_unavailable"}`
+and `{reason="idempotency_cache_unavailable"}`.
+
+**Behaviour:** **no decision changes.** The limiter fails open and counts it; replay lookups are
+skipped and a retry is re-scored, returning the existing `case_id` from Postgres — never a duplicate
+case (ADR-0007). The feature store is not blamed: `redis` stays `ok` and `redis_unavailable` does not
+appear.
+
+**Action:** restore it at leisure. Nothing in it is authoritative and nothing in it is missed.
 
 ### Postgres unavailable
 **Detect:** connection errors; gateway 503; workers stop consuming.

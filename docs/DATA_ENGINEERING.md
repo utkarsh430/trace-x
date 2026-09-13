@@ -96,6 +96,26 @@ ADR-0002. The risk is silent divergence, so it is measured rather than trusted:
 When the `streaming` profile is off, responses carry `X-Feature-Source: ONLINE_ONLY` so degradation is
 visible rather than silent.
 
+### The backfill contract (ADR-0044)
+
+The online store holds **only** the state the released features declare — `trace_core.features.state_plan`
+derives what is written, for which entities, and with what retention from every `FeatureSpec.semantics`.
+Nothing is retained for a feature that has not been released, so a feature released later must not
+pretend its history exists:
+
+```
+new feature → required state declared in FeatureSpec.semantics
+            → PLAN derives its primitives and retention
+            → backfill (Phase 3: durable replay from Bronze/Silver into the store) or warm-up
+            → INSUFFICIENT_HISTORY, decisions carry history_incomplete, until the lookback is complete
+            → /readyz reports "complete since …" → feature enabled
+```
+
+The store records a **completeness epoch**; a window that began before it is incomplete and reads as
+`INSUFFICIENT_HISTORY`, one that began after it is complete and an absent key is a measured zero. The
+Gold → Redis reconciliation job is what makes backfill possible: it is the only path by which a store
+younger than a feature's lookback can become complete without waiting the lookback out.
+
 ---
 
 ## 5. SourceAdapter contract (ADR-0022)

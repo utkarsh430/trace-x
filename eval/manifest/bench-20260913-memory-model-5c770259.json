@@ -1,0 +1,536 @@
+{
+  "dirty_worktree": false,
+  "env_lock_digest": "sha256:0900af2ac3031c138047ba8b3207ec3fdb28f7fa1a14d16d9aabca076a71bc95",
+  "finished_at": "2026-09-13T01:07:08.264708+00:00",
+  "git_commit_sha": "5c770259c44008e57fc19e58ecd23c7dd5d74d28",
+  "measured": {
+    "configured_feature_maxmemory_mib": 704,
+    "fits": {
+      "amounts": {
+        "base_bytes": 72,
+        "per_member_bytes": 48.0,
+        "points": [
+          [
+            1,
+            120
+          ],
+          [
+            128,
+            6216
+          ]
+        ],
+        "primitive": "amounts"
+      },
+      "buckets": {
+        "base_bytes": 0,
+        "per_member_bytes": 318.65546218487395,
+        "points": [
+          [
+            1,
+            160
+          ],
+          [
+            120,
+            38080
+          ]
+        ],
+        "primitive": "buckets"
+      },
+      "exact_distinct": {
+        "base_bytes": 76,
+        "per_member_bytes": 27.870967741935484,
+        "points": [
+          [
+            1,
+            104
+          ],
+          [
+            32,
+            968
+          ]
+        ],
+        "primitive": "exact_distinct"
+      },
+      "hll": {
+        "base_bytes": 112,
+        "per_member_bytes": 0.0,
+        "points": [
+          [
+            1,
+            112
+          ],
+          [
+            2,
+            112
+          ],
+          [
+            4,
+            112
+          ],
+          [
+            8,
+            112
+          ],
+          [
+            16,
+            160
+          ],
+          [
+            32,
+            256
+          ],
+          [
+            64,
+            448
+          ],
+          [
+            128,
+            448
+          ],
+          [
+            256,
+            832
+          ],
+          [
+            512,
+            1344
+          ],
+          [
+            1024,
+            2624
+          ],
+          [
+            5000,
+            14400
+          ]
+        ],
+        "primitive": "hll"
+      },
+      "previous": {
+        "base_bytes": 160,
+        "per_member_bytes": 0.0,
+        "points": [
+          [
+            1,
+            160
+          ]
+        ],
+        "primitive": "previous"
+      },
+      "profile": {
+        "base_bytes": 145,
+        "per_member_bytes": 46.54545454545455,
+        "points": [
+          [
+            1,
+            192
+          ],
+          [
+            12,
+            704
+          ]
+        ],
+        "primitive": "profile"
+      },
+      "velocity": {
+        "base_bytes": 64,
+        "per_member_bytes": 56.12698412698413,
+        "points": [
+          [
+            1,
+            120
+          ],
+          [
+            64,
+            3656
+          ]
+        ],
+        "primitive": "velocity"
+      }
+    },
+    "headroom_factor": 1.25,
+    "local_minutes_at_target_tps": 12.846336320223799,
+    "population": {
+      "ACCOUNT": 669767,
+      "CARD": 669767,
+      "DEVICE": 803720,
+      "IP": 334884,
+      "MERCHANT": 50233
+    },
+    "steady_state_bytes": 27725166192.605404,
+    "steady_state_lines": [
+      {
+        "basis": "measured fit x plan retention",
+        "bytes_per_key": 3835.034233866831,
+        "keys": 669767.0,
+        "members_per_key": 67.18754432511605,
+        "primitive": "velocity",
+        "retention_s": 90000,
+        "scope": "ACCOUNT/TRANSACTION",
+        "total_bytes": 2568579373.714286
+      },
+      {
+        "basis": "measured fit x plan retention",
+        "bytes_per_key": 236.81179527416006,
+        "keys": 633334.1938493499,
+        "members_per_key": 3.0789431850316977,
+        "primitive": "velocity",
+        "retention_s": 3900,
+        "scope": "CARD/TRANSACTION",
+        "total_bytes": 149981007.45397744
+      },
+      {
+        "basis": "measured fit x plan retention",
+        "bytes_per_key": 50343.98100281261,
+        "keys": 50233.0,
+        "members_per_key": 895.8254533872156,
+        "primitive": "velocity",
+        "retention_s": 90000,
+        "scope": "MERCHANT/TRANSACTION",
+        "total_bytes": 2528929197.714286
+      },
+      {
+        "basis": "measured fit x plan retention",
+        "bytes_per_key": 120.25756301819794,
+        "keys": 3106.77212439671,
+        "members_per_key": 1.0023264904260378,
+        "primitive": "velocity",
+        "retention_s": 7200,
+        "scope": "ACCOUNT/IDENTITY_FAILED_LOGIN",
+        "total_bytes": 373612.844532818
+      },
+      {
+        "basis": "measured fit x plan retention; trimmed per write",
+        "bytes_per_key": 1720.7428311545602,
+        "keys": 666665.3744510101,
+        "members_per_key": 5.400010466967106,
+        "primitive": "buckets",
+        "retention_s": 7200,
+        "scope": "ACCOUNT",
+        "total_bytes": 1147159663.8655462
+      },
+      {
+        "basis": "measured fit x plan retention; trimmed per write",
+        "bytes_per_key": 285459.6738860774,
+        "keys": 50233.0,
+        "members_per_key": 895.8254533872156,
+        "primitive": "buckets",
+        "retention_s": 90000,
+        "scope": "MERCHANT",
+        "total_bytes": 14339495798.319326
+      },
+      {
+        "basis": "measured fit x plan retention; members capped by ADR-0034 bound",
+        "bytes_per_key": 226.50351753095418,
+        "keys": 666665.3744510101,
+        "members_per_key": 5.400010466967106,
+        "primitive": "exact_distinct",
+        "retention_s": 7200,
+        "scope": "ACCOUNT.MERCHANT",
+        "total_bytes": 151002052.32924452
+      },
+      {
+        "basis": "measured fit x plan retention; members capped by ADR-0034 bound",
+        "bytes_per_key": 161.81312618927055,
+        "keys": 633334.1938493499,
+        "members_per_key": 3.0789431850316977,
+        "primitive": "exact_distinct",
+        "retention_s": 3900,
+        "scope": "ACCOUNT.MCC",
+        "total_bytes": 102481785.82932478
+      },
+      {
+        "basis": "measured fit x plan retention; members capped by ADR-0034 bound",
+        "bytes_per_key": 131.74193548387098,
+        "keys": 669767.0,
+        "members_per_key": 2.0,
+        "primitive": "exact_distinct",
+        "retention_s": 90000,
+        "scope": "ACCOUNT.DEVICE",
+        "total_bytes": 88236400.90322581
+      },
+      {
+        "basis": "measured fit x plan retention; members capped by ADR-0034 bound",
+        "bytes_per_key": 117.80645161290323,
+        "keys": 669767.0,
+        "members_per_key": 1.5,
+        "primitive": "exact_distinct",
+        "retention_s": 90000,
+        "scope": "ACCOUNT.COUNTRY",
+        "total_bytes": 78902873.67741936
+      },
+      {
+        "basis": "measured fit x plan retention; members capped by ADR-0034 bound",
+        "bytes_per_key": 1636.4856770854237,
+        "keys": 803720.0,
+        "members_per_key": 55.98964813616682,
+        "primitive": "exact_distinct",
+        "retention_s": 90000,
+        "scope": "DEVICE.ACCOUNT",
+        "total_bytes": 1315276268.3870966
+      },
+      {
+        "basis": "measured sketch size x active 5-min buckets",
+        "bytes_per_key": 112.0,
+        "keys": 3600000.0,
+        "members_per_key": 1,
+        "primitive": "hll",
+        "retention_s": 7200,
+        "scope": "IP.ACCOUNT",
+        "total_bytes": 403200000.0
+      },
+      {
+        "basis": "measured sketch size x active 5-min buckets",
+        "bytes_per_key": 112.0,
+        "keys": 1205592.0,
+        "members_per_key": 1,
+        "primitive": "hll",
+        "retention_s": 7200,
+        "scope": "MERCHANT.ACCOUNT",
+        "total_bytes": 135026304.0
+      },
+      {
+        "basis": "measured x plan retention",
+        "bytes_per_key": 160.0,
+        "keys": 669767.0,
+        "members_per_key": 1,
+        "primitive": "previous",
+        "retention_s": 90000,
+        "scope": "ACCOUNT/TRANSACTION",
+        "total_bytes": 107162720.0
+      },
+      {
+        "basis": "measured x plan retention",
+        "bytes_per_key": 160.0,
+        "keys": 37815.49104462493,
+        "members_per_key": 1,
+        "primitive": "previous",
+        "retention_s": 90000,
+        "scope": "ACCOUNT/IDENTITY_CHANGE",
+        "total_bytes": 6050478.567139989
+      },
+      {
+        "basis": "measured fit x plan horizon",
+        "bytes_per_key": 657.0,
+        "keys": 669767.0,
+        "members_per_key": 11,
+        "primitive": "profile",
+        "retention_s": 2592000,
+        "scope": "ACCOUNT",
+        "total_bytes": 440036919.0
+      },
+      {
+        "basis": "measured fit; sample capped at 128",
+        "bytes_per_key": 6216.0,
+        "keys": 669767.0,
+        "members_per_key": 128,
+        "primitive": "amounts",
+        "retention_s": 2592000,
+        "scope": "ACCOUNT",
+        "total_bytes": 4163271672.0
+      },
+      {
+        "basis": "one key",
+        "bytes_per_key": 64,
+        "keys": 1,
+        "members_per_key": 1,
+        "primitive": "epoch",
+        "retention_s": 0,
+        "scope": "store",
+        "total_bytes": 64
+      }
+    ],
+    "target_tps": 500,
+    "ten_minute_bytes": 574636601.1279547,
+    "ten_minute_lines": [
+      {
+        "basis": "measured fit x plan retention",
+        "bytes_per_key": 133.63236987992804,
+        "keys": 241814.1916917425,
+        "members_per_key": 1.2406219746706637,
+        "primitive": "velocity",
+        "retention_s": 90000,
+        "scope": "ACCOUNT/TRANSACTION",
+        "total_bytes": 32314203.506366756
+      },
+      {
+        "basis": "measured fit x plan retention",
+        "bytes_per_key": 133.63236987992804,
+        "keys": 241814.1916917425,
+        "members_per_key": 1.2406219746706637,
+        "primitive": "velocity",
+        "retention_s": 3900,
+        "scope": "CARD/TRANSACTION",
+        "total_bytes": 32314203.506366756
+      },
+      {
+        "basis": "measured fit x plan retention",
+        "bytes_per_key": 400.0563821070539,
+        "keys": 50104.97087578389,
+        "members_per_key": 5.987429884825904,
+        "primitive": "velocity",
+        "retention_s": 90000,
+        "scope": "MERCHANT/TRANSACTION",
+        "total_bytes": 20044813.374145407
+      },
+      {
+        "basis": "measured fit x plan retention",
+        "bytes_per_key": 120.13785797782893,
+        "keys": 259.4497350915074,
+        "members_per_key": 1.000193736595934,
+        "primitive": "velocity",
+        "retention_s": 7200,
+        "scope": "ACCOUNT/IDENTITY_FAILED_LOGIN",
+        "total_bytes": 31169.735426808857
+      },
+      {
+        "basis": "measured fit x plan retention; trimmed per write",
+        "bytes_per_key": 395.3309687353913,
+        "keys": 241814.1916917425,
+        "members_per_key": 1.2406219746706637,
+        "primitive": "buckets",
+        "retention_s": 7200,
+        "scope": "ACCOUNT",
+        "total_bytes": 95596638.65546218
+      },
+      {
+        "basis": "measured fit x plan retention; trimmed per write",
+        "bytes_per_key": 1907.927237248725,
+        "keys": 50104.97087578389,
+        "members_per_key": 5.987429884825904,
+        "primitive": "buckets",
+        "retention_s": 90000,
+        "scope": "MERCHANT",
+        "total_bytes": 95596638.65546219
+      },
+      {
+        "basis": "measured fit x plan retention; members capped by ADR-0034 bound",
+        "bytes_per_key": 110.57733503598237,
+        "keys": 241814.1916917425,
+        "members_per_key": 1.2406219746706637,
+        "primitive": "exact_distinct",
+        "retention_s": 7200,
+        "scope": "ACCOUNT.MERCHANT",
+        "total_bytes": 26739168.89115308
+      },
+      {
+        "basis": "measured fit x plan retention; members capped by ADR-0034 bound",
+        "bytes_per_key": 110.57733503598237,
+        "keys": 241814.1916917425,
+        "members_per_key": 1.2406219746706637,
+        "primitive": "exact_distinct",
+        "retention_s": 3900,
+        "scope": "ACCOUNT.MCC",
+        "total_bytes": 26739168.89115308
+      },
+      {
+        "basis": "measured fit x plan retention; members capped by ADR-0034 bound",
+        "bytes_per_key": 110.57733503598237,
+        "keys": 241814.1916917425,
+        "members_per_key": 1.2406219746706637,
+        "primitive": "exact_distinct",
+        "retention_s": 90000,
+        "scope": "ACCOUNT.DEVICE",
+        "total_bytes": 26739168.89115308
+      },
+      {
+        "basis": "measured fit x plan retention; members capped by ADR-0034 bound",
+        "bytes_per_key": 110.57733503598237,
+        "keys": 241814.1916917425,
+        "members_per_key": 1.2406219746706637,
+        "primitive": "exact_distinct",
+        "retention_s": 90000,
+        "scope": "ACCOUNT.COUNTRY",
+        "total_bytes": 26739168.89115308
+      },
+      {
+        "basis": "measured fit x plan retention; members capped by ADR-0034 bound",
+        "bytes_per_key": 109.39543418408361,
+        "keys": 250372.2597673447,
+        "members_per_key": 1.1982158098455926,
+        "primitive": "exact_distinct",
+        "retention_s": 90000,
+        "scope": "DEVICE.ACCOUNT",
+        "total_bytes": 27389582.06489884
+      },
+      {
+        "basis": "measured sketch size x active 5-min buckets",
+        "bytes_per_key": 112.0,
+        "keys": 300000.0,
+        "members_per_key": 1,
+        "primitive": "hll",
+        "retention_s": 7200,
+        "scope": "IP.ACCOUNT",
+        "total_bytes": 33600000.0
+      },
+      {
+        "basis": "measured sketch size x active 5-min buckets",
+        "bytes_per_key": 112.0,
+        "keys": 100209.94175156778,
+        "members_per_key": 1,
+        "primitive": "hll",
+        "retention_s": 7200,
+        "scope": "MERCHANT.ACCOUNT",
+        "total_bytes": 11223513.476175591
+      },
+      {
+        "basis": "measured x plan retention",
+        "bytes_per_key": 160.0,
+        "keys": 241814.1916917425,
+        "members_per_key": 1,
+        "primitive": "previous",
+        "retention_s": 90000,
+        "scope": "ACCOUNT/TRANSACTION",
+        "total_bytes": 38690270.6706788
+      },
+      {
+        "basis": "measured x plan retention",
+        "bytes_per_key": 160.0,
+        "keys": 259.4497350915074,
+        "members_per_key": 1,
+        "primitive": "previous",
+        "retention_s": 90000,
+        "scope": "ACCOUNT/IDENTITY_CHANGE",
+        "total_bytes": 41511.957614641186
+      },
+      {
+        "basis": "measured fit x plan horizon",
+        "bytes_per_key": 202.74531373012545,
+        "keys": 241814.1916917425,
+        "members_per_key": 1.2406219746706637,
+        "primitive": "profile",
+        "retention_s": 2592000,
+        "scope": "ACCOUNT",
+        "total_bytes": 49026694.15893903
+      },
+      {
+        "basis": "measured fit; sample capped at 128",
+        "bytes_per_key": 131.54985478419187,
+        "keys": 241814.1916917425,
+        "members_per_key": 1.2406219746706637,
+        "primitive": "amounts",
+        "retention_s": 2592000,
+        "scope": "ACCOUNT",
+        "total_bytes": 31810621.801805463
+      },
+      {
+        "basis": "one key",
+        "bytes_per_key": 64,
+        "keys": 1,
+        "members_per_key": 1,
+        "primitive": "epoch",
+        "retention_s": 0,
+        "scope": "store",
+        "total_bytes": 64
+      }
+    ]
+  },
+  "python_version": "3.12.9",
+  "record_type": "BENCHMARK",
+  "run_id": "bench-20260913-memory-model-5c770259",
+  "started_at": "2026-09-13T01:07:08.216654+00:00",
+  "subject": "online-feature-store-memory-model",
+  "tool": "redis",
+  "tool_version": "7.4.11",
+  "track": "SYNTHETIC"
+}

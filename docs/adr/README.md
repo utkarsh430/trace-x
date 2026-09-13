@@ -49,12 +49,13 @@ been thought through.
 | [0035](0035-gateway-degradation-and-fail-safe-direction.md) | Where "scoring fails open" ends — gateway degradation, per dependency | 2 | Accepted |
 | [0036](0036-pinned-container-tooling.md) | Non-Python tooling pinned as container images, by tag and digest | 2 | Accepted |
 | [0037](0037-openapi-breaking-change-gate.md) | The API breaking-change gate is `oasdiff`, not a bespoke rule engine | 2 | Accepted |
-| [0038](0038-hot-path-cpu-budget.md) | The hot path is CPU-bound; the online snapshot reads only what the features declare | 2 | Accepted |
+| [0038](0038-hot-path-cpu-budget.md) | The hot path is CPU-bound; the online snapshot reads only what the features declare | 2 | Accepted; §3 superseded by 0039, write-path choice superseded by 0044 |
 | [0039](0039-event-loop-over-threadpool.md) | The hot path stays on the event loop; the workload, not the scheduler, is the bottleneck | 2 | Accepted |
 | [0040](0040-two-workload-profiles.md) | Two workload profiles: a representative acceptance gate and an adversarial saturation benchmark | 2 | Accepted |
 | [0041](0041-online-store-memory-and-eviction.md) | Online-store memory classes: a best-effort cache must not evict correctness-relevant state | 2 | Superseded by 0042 |
 | [0042](0042-online-store-memory-corrected.md) | Online-store memory corrected: AOF was the latency cause, eviction is the correctness cause | 2 | Accepted |
 | [0043](0043-small-threadpool-measured.md) | The small-threadpool middle ground is measured, and it is worse | 2 | Accepted |
+| [0044](0044-online-store-correctness-topology.md) | Feature state cannot silently evict: two Redis instances, a declaration-driven write plan, and a completeness epoch | 2 | Accepted |
 
 ## Notes on status
 

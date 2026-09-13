@@ -87,6 +87,13 @@ Phase 2 added three more:
   ADR-0037). It has a **self-test with both halves**: a breaking fixture pair that must be rejected
   and a compatible pair that must be accepted. A checker that rejects everything is bypassed within a
   week, and then nothing is checked at all.
+- **online-store correctness** — `tests/integration/test_online_store_capacity.py` starts a real
+  Redis with a 2 MB limit and `noeviction`, fills it, and asserts the store refuses rather than evicts
+  (`evicted_keys` stays 0), the refusal is typed, and the breaker stays closed;
+  `tests/chaos/test_redis_down.py` pauses the **cache** instance and asserts no decision changes, and
+  `FLUSHALL`s the feature store and asserts `history_incomplete`; the conformance suite carries
+  `complete_since` explicitly, so "an unseen device is not known" is asserted on a store that has
+  watched for its horizon and "cannot tell" on one that has not (ADR-0044).
 - **feature-semantics conformance** — `tests/conformance/feature_semantics_suite.py`, run unmodified
   against the naive reference implementation and against Redis, and against Spark from Phase 3. It is
   how online/offline parity is proven without anyone redefining a feature (ADR-0032).

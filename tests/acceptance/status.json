@@ -4,7 +4,7 @@
   "current_phase": "2",
   "current_phase_name": "Hot Path: Gateway, Rules, Online Features",
   "updated_at": "2026-09-12",
-  "last_verified_commit": "cf81083",
+  "last_verified_commit": "5c77025",
   "legend": {
     "NOT_STARTED": "No implementation exists.",
     "IN_PROGRESS": "Implementation started; acceptance evidence incomplete.",
@@ -192,7 +192,7 @@
       "evidence": {
         "command": "pytest tests/unit/test_online_features.py",
         "verified_at": "2026-09-12",
-        "result": "pytest tests/conformance + tests/integration/test_feature_semantics_redis.py: the SAME feature-semantics suite runs unmodified against the naive reference implementation and against Redis, which is what makes online/offline parity a measurement rather than a claim (ADR-0032). 26 features with declarative semantics; hybrid EXACT/APPROXIMATE distinct storage declared per feature (ADR-0034, bench-20260912-cardinality-41059ab1). The snapshot reads only what the declared feature set requires (ADR-0038): 163 to 97 Redis commands per request, feature read 2.970 to 0.304 ms, conformance unchanged."
+        "result": "pytest tests/conformance + tests/integration/test_feature_semantics_redis.py: the SAME feature-semantics suite runs unmodified against the naive reference implementation and against Redis, now with completeness declared per test (ADR-0044): an unseen device is 'not known' on a store that has watched for its horizon and 'cannot tell' on one that started an hour ago; an unseen account on a complete store has measured-zero velocity; an empty store is never silently zero. 26 features with declarative semantics; hybrid EXACT/APPROXIMATE distinct storage (ADR-0034). The store writes only what the released features declare, with per-primitive retention derived from the declarations (state_plan.py; tests/unit/test_state_plan.py). Feature state cannot silently evict: the feature store is noeviction and separate from the disposable cache; tests/integration/test_online_store_capacity.py fills a real 2 MB noeviction Redis and proves evicted_keys stays 0, the refusal is typed, and the breaker stays closed. Memory model run_id bench-20260913-memory-model-5c770259: ten-minute working set 548 MiB, limit 704 MiB; steady state 25.82 GiB recorded as an open limitation, not tuned away."
       }
     },
     {
@@ -214,7 +214,7 @@
       "evidence": {
         "command": "pytest -m chaos tests/chaos/test_redis_down.py",
         "verified_at": "2026-09-12",
-        "result": "pytest -m chaos tests/chaos/test_redis_down.py: 6 passed. The suite PAUSES a real Redis container under a live gateway (docker pause, not stop, so connections hang and time out rather than being refused) and asserts the hot path degrades to rules-only, returns 200 with degraded=true and X-Trace-Degraded, never 5xx, and recovers without a restart. Its first run found a real 21.8 s request against a configured 20 ms timeout, caused by redis-py's default retry backoff; fixed with retries disabled plus a circuit breaker (ADR-0035). Postgres loss is deliberately NOT degraded: triage failure is 503 and readiness fails so a load balancer drains the instance."
+        "result": "pytest -m chaos tests/chaos/test_redis_down.py: 8 passed against real containers. Pausing the FEATURE store: rules-only, 200 with degraded=true reason redis_unavailable, never 5xx, recovers without restart, and the cache-hosted limiter is NOT blamed. Pausing the CACHE instance: the same transaction gets the same band, score and fired rules -- nothing in the cache decides -- with rate_limit_unavailable reported and redis left 'ok' (ADR-0044). FLUSHALL of the feature store (what a restart with AOF off leaves): the next decision carries history_incomplete, never redis_unavailable and never a clean answer, readiness reports 'warming', and the first write re-establishes the epoch. A full feature store refuses the write and surfaces feature_write_failed without opening the breaker (tests/integration/test_online_store_capacity.py). Postgres loss remains deliberately NOT degraded: 503 and readiness fails (ADR-0035)."
       }
     },
     {

@@ -19,7 +19,7 @@ Gate: `docs/ROADMAP.md` § Phase 2.
 **All five Phase 2 capabilities PASS. All three exit conditions are met with recorded evidence.**
 Phase 0 and Phase 1 remain complete; nothing in either was weakened.
 
-`make verify` is **11/11 green**. **1,323 tests pass** across unit, contract, conformance,
+`make verify` is **11/11 green**. **1,355 tests pass** across unit, contract, conformance,
 integration and chaos, the integration and chaos layers against real PostgreSQL and Redis
 containers.
 
@@ -34,33 +34,47 @@ technique — in that order of impact. See ADR-0040 and ADR-0042.
 
 **Phase 3 has not begun and must not begin without explicit user approval.**
 
+### The correctness blocker, resolved (ADR-0044)
+
+The exposure recorded here previously — a passing acceptance run had evicted 346,067 feature keys
+while looking perfectly healthy — is closed, and it was closed as a correctness fix rather than a
+memory tune:
+
+* **Feature state cannot silently evict.** Two Redis instances: `redis` (feature state, `noeviction`,
+  refuses when full and says `feature_write_failed`) and `redis-cache` (replay cache + rate-limit
+  windows, `allkeys-lru`, nothing in it decides). Proven on a real 2 MB `noeviction` container and
+  by pausing the cache under a live gateway with no change to any decision.
+* **The store holds what the released features declare, and nothing else.** `state_plan.py` derives
+  writes and per-primitive retention from the declarations; the ten-minute working set fell from a
+  measured 1.32 GB to a projected 548 MiB (`run_id: bench-20260913-memory-model-5c770259`).
+* **A missing key means zero only when the store would know.** A completeness epoch separates a new
+  account (measured zero) from an unwarmed or wiped store (`INSUFFICIENT_HISTORY` and
+  `history_incomplete` on the decision). A `FLUSHALL` can no longer produce a clean answer.
+
 ### What is NOT resolved
 
-**A correctness exposure remains open and is the reason this phase should not be called finished
-without a decision.** Redis runs `allkeys-lru` at 512 MB; the representative workload needs
-**1.32 GB** for a ten-minute run, so it evicts. An evicted feature key reads back **empty**, which is
-indistinguishable from an account with no history — the rules abstain, the score falls, and a
-transaction that should have been CRITICAL is approved with `degraded=false`. **The passing gate run
-evicted 346,067 keys and looked perfectly healthy from outside: every latency target met, nothing
-flagged.** ADR-0042 has the measurements; `docs/OPERATIONS.md` has the runbook; the
-`online_store_evicted_keys_total` and `online_store_memory_bytes` gauges are the only signal that
-distinguishes it from a genuinely new account.
+**The steady-state memory requirement does not fit a laptop, and no feature was changed to make it.**
+The model projects **25.82 GiB** for 500 TPS at the declared retention; the local feature store is
+704 MiB and holds **~13 minutes** of 500 TPS before it refuses writes — loudly. ADR-0044 §5 names the
+five structures responsible and the feature-semantics decision each would take. That decision is not
+made.
 
-Closing it means either raising the `docs/ARCHITECTURE.md` §14 memory budget — which `api`, `worker`
-and `ui` have not yet drawn against — or reversing ADR-0038's deliberate choice to leave the write
-path un-pruned. Both trade against the local-first requirement in CLAUDE.md §12, so both are
-product-level decisions rather than implementation ones.
+**The `core` budget is tight.** 2,144 MiB of `docs/ARCHITECTURE.md` §14's 2.7 GB is allocated,
+leaving 621 MiB for `api`, `worker` and `ui`, none of which exist yet.
 
-**Gate reproducibility is not established.** The run immediately before the recorded one, at the same
-configuration, dropped **4** iterations of 300,001 and was refused. This one dropped none. The
-difference is not understood and is recorded as debt rather than smoothed over: a gate that passes on
-one run and fails the next by a margin of four has not yet earned the word "reproducible".
+**A restart costs a warm-up that is now visible.** Windowed features need 24 h, profile features
+30 d; the new-device and tenure rules cannot fire meanwhile. Phase 3's reconciliation is the only thing
+that shortens it. Before ADR-0044 the same restart produced a day of confident wrong scores and thirty
+days of false new-device alarms, none flagged.
+
+**Gate reproducibility is not established.** Recorded previously and still true: one run at the same
+configuration dropped 4 iterations of 300,001 and was refused; the next dropped none.
 
 ## COLD-START CHECKLIST (read this first in a new session)
 
 ```bash
 make setup      # venv + dev/db/obs/gen extras
-make up         # postgres, redis, gateway
+make up         # postgres, redis (features), redis-cache, gateway
 make verify     # expect: 11 passed, 0 failed  -> VERIFY OK
 ```
 
@@ -69,9 +83,9 @@ Docker is needed for the integration and chaos suites, for `make seed`, and for 
 
 | Question a cold session will ask | Answer |
 |---|---|
-| What phase are we in? | Phase 2 **complete on its stated exit conditions**, with one open correctness exposure (see above). Phase 3 not started. |
-| What do I do next? | Decide the online-store memory question (ADR-0042), then await approval for Phase 3. |
-| What exists now? | Everything from Phases 0–1, plus: `trace-gateway` with auth, rate limiting, idempotency, RFC 9457 problems and triage; the Redis online feature store with 26 declared features and hybrid distinct-count storage; 18 declarative rules with Kleene semantics and fail-safe hot reload; noisy-OR scoring and banding; the transactional outbox; two workload profiles and a three-stream replay harness. |
+| What phase are we in? | Phase 2 **complete on its stated exit conditions**; the correctness blocker is resolved (ADR-0044), with the steady-state capacity limitation recorded. Phase 3 not started. |
+| What do I do next? | Await approval for Phase 3; the steady-state memory decision (ADR-0044 §5) is the one open product-level question. |
+| What exists now? | Everything from Phases 0–1, plus: `trace-gateway` with auth, rate limiting, idempotency, RFC 9457 problems and triage; two Redis instances — a `noeviction` feature store with a completeness epoch and a declaration-driven write plan, and a disposable cache — holding 26 declared features with hybrid distinct-count storage; 18 declarative rules with Kleene semantics and fail-safe hot reload; noisy-OR scoring and banding; the transactional outbox; two workload profiles and a three-stream replay harness. |
 | Which benchmark is the gate? | `benchmarks/gateway/REPORT.md` (representative profile). `benchmarks/gateway/ADVERSARIAL.md` is **not** a gate — it characterises saturation at 97% triage. |
 | What must I never do? | `CLAUDE.md` §17, and §11 (ground-truth isolation) above all. |
 | Where do I record results? | This file and `tests/acceptance/status.json` (which refuses `PASS` without evidence). |
