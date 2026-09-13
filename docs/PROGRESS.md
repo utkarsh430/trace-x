@@ -23,7 +23,8 @@ planning surfaced recorded under *What Phase 3 planning found in Phase 2's artef
 **Planning is complete and approved, and Step 0 (toolchain and dependency contract, ADR-0045) is
 complete locally** — `make verify`, the real-JVM stream tests on macOS, a hashed install in a Linux
 container, and a Linux build of the gateway image from its hashed runtime lock. Its first GitHub CI run
-(including the new `test-stream` job) is still pending. Wave B (Steps 1, 2, 3 and E) is next. One
+(including the new `test-stream` job) is still pending. Wave B (Steps 1, 2, 3 and E) is under way; see
+*WORK IN PROGRESS*. One
 Phase 3 capability is PASS: `P3.pin-failfast`. The plan was built by six specialist reviews whose load-bearing claims were
 checked against the code, by experiment in a throwaway container, or against cited upstream
 documentation — claims resting only on documentation are re-verified by the step that depends on
@@ -68,6 +69,20 @@ exit condition; each is owned by a Phase 3 step.
   store when run locally; the profile-leakage conformance test cannot fail (identical amounts saturate
   the z-score); `requirements.lock` is installed by nothing; the ADR-0015 gate unlocks on any non-empty
   file; and the generator's Kafka sink drops unsent messages at close. Owned by Steps 0, 1, 2, 8 and 14.
+* **The served feature values excluded the scored transaction, contrary to ADR-0032.** The gateway
+  read features before recording the transaction. The user decided (2026-09-13) to honour ADR-0032,
+  with self-inclusion declared per feature and the thresholds left unchanged; ADR-0046 §2. Owned by
+  Step 1, which re-runs the load gate, the manual replay and rule validation on the new values.
+* **`authorization_outcome` is post-decision information carried by a pre-decision contract**
+  (ADR-0046 §7). Step 1 keeps a transaction's own outcome out of its own features; how earlier
+  outcomes may be used is an open architecture decision (U7).
+* **`eval-v1` has label proxies in its transaction rows**, found by the Step E generator work and by
+  ADR-0046 §7: no legitimate transaction uses a non-home device (fraudulent ones often do), planted
+  high-value and unusual-location transactions carry whole-second timestamps, and `DECLINED` occurs
+  only in fraud. Rules reading device novelty or the declined ratio therefore look better on Track A
+  than the signal justifies. The approved plan's B10 ("`eval-v2` without label proxies") requires
+  `eval-v2` to remove them under its own gate; `eval-v1` stays immutable. Shared envelope ids on
+  `eval-v1`'s scenario side events also mean Silver must never deduplicate on `idempotency_key` (Step 6).
 
 ### Phase 2 (complete)
 
@@ -367,11 +382,70 @@ both reports.
 
 ## WORK IN PROGRESS
 
-None in flight. Wave B (Steps 1, 2, 3 and E) is next.
+* **Step 1 — feature semantics (lead): first half done locally, not committed.** The critic
+  approved it with changes. Every finding has been addressed, and a second critic pass is due before
+  the commit.
+  * **Declared in `trace_core.features`** (ADR-0046, Proposed):
+    * per-feature self-inclusion, and the two evaluation modes;
+    * per-stream identities and the declared order;
+    * a redelivery read as its first delivery;
+    * the sign of a zero-MAD z-score;
+    * per-feature parity comparators;
+    * post-decision fields, and the identity-event streams.
+  * **Tests:**
+    * the reference implements both modes and passes the hand-derived literal fixtures;
+    * a mutation self-test holds 58 mutants across the reference, its shared arithmetic and the
+      definitions, and counts only failed feature expectations. Its reach is the reference;
+      the Redis store and Spark are held to the fixtures, not the mutants;
+    * property tests check that the two modes agree, including on histories built to reach
+      lifetime gaps, robust z-scores and overflowing home samples. They cannot catch a rule broken
+      identically in both modes.
+  * **Gateway:** identity events feed only their declared streams, and their ids are minted by the
+    gateway rather than taken from `X-Request-Id`.
+  * **Completeness guard:** a lost observation opens a durable hole ledger entry (migration 0004).
+    The guard is implemented and tested against PostgreSQL, but not yet wired into the gateway.
+    Clearing covers only holes recorded before the withdrawal, and `trace_app` cannot rewrite a
+    hole. Identity and device events more than 24 h ahead are now refused, so the resume margin
+    covers every recorded stream.
+  * **Run guard:** `SERVED_FEATURES_CONFORM` is false, so the load harness and the gateway replay
+    refuse to produce a record; `FEATURE_SET_VERSION` 2.0.0 is not yet what the gateway serves.
+  * **Not done yet:**
+    * the Redis store's conformance (34 strict expected failures below);
+    * the gateway's atomic score-time read and the guard's wiring;
+    * `X-Idempotency-Key` identities for identity events, a precondition of serving the new
+      semantics: until then a retried identity event counts again;
+    * the Phase 2 load gate, manual replay and rule re-validation on the new values.
+* **Step 2 — Kafka platform (Kafka agent).** Implemented in its worktree. The critic approved it
+  with changes; the blocker is that the fault overlay's "paced" replay publishes as fast as it can,
+  so clean records arrive late. The agent is fixing the findings.
+* **Step 3 — Delta spike and lake conventions (Delta agent).** Implemented in its worktree. The
+  critic approved it with changes. The blockers:
+  * `failOnDataLoss=false` loses rows in a query that is already running;
+  * the scan metric reports selected file sizes, not bytes read.
+
+  The agent is fixing the findings. The snake_case naming of lake tables needs a user decision (U9).
+* **Step E — `eval-v2` (generator agent).** Stages 1 and 1b are complete in its worktree:
+  * legitimate identity and device activity, and legitimate declines;
+  * sub-second planted timestamps and legitimate new-device spend;
+  * two label-proxy criteria declared before any gated run. The `eval-v1` negative control fails them
+    for the proxy reason, and gate-off output is byte-identical.
+
+  Stage 1c is removing three more planted-row markers. Stage 2, generation and freeze, waits for the
+  critic's review and for U7.
 
 ## CURRENTLY FAILING TESTS
 
-**None.** One test is deliberately `xfail`: the generation-throughput budget, discussed above.
+**None unexpected.** Deliberate expected failures:
+
+* The generation-throughput budget, discussed above.
+* **34 strict `xfail`s in `tests/integration/test_feature_semantics_redis.py`.** These are the
+  ADR-0046 literal fixtures the Phase 2 Redis store does not satisfy.
+  * Each is recorded with the exact set of features it diverges on. A different set, whether a new
+    divergence or a partial fix, fails the test.
+  * Each is tagged as a store defect or as an artefact of the harness emulating a score-time read on
+    a store that has none.
+  * They run in CI's `test-integration` job, not in `make verify`.
+  * Owned by Step 1's online-store work.
 
 ---
 
@@ -416,6 +490,8 @@ None in flight. Wave B (Steps 1, 2, 3 and E) is next.
 | U4 | Whether the Skeptic agent pays for its cost | Phase 9 Arm F — `UNUSUAL_LOCATION_DEVICE` was built deliberately ambiguous to give this ablation something real to measure |
 | U5 | LightGBM vs XGBoost on measured PR-AUC | Phase 4 |
 | U6 | Whether Phase 13 (Go gateway) is worth doing | Phase 13 entry |
+| **U7** | How authorization outcomes reach features. The scored transaction's own outcome is post-decision and is excluded (ADR-0046 §7). Earlier transactions' outcomes are still taken from their scoring requests. Recommended: an authorization-result event dated when the outcome is known | User decision (new event contract) |
+| **U9** | Lake table and streaming-query identifiers in snake_case, which Unity Catalog SQL needs unquoted, versus CLAUDE.md §6's kebab-case file paths. A rule interpretation, so it needs user approval | User decision, before Step 3 lands |
 
 ---
 

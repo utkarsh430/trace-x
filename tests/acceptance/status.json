@@ -311,12 +311,13 @@
       "id": "P3.semantics-hardening",
       "phase": "3",
       "name": "Declared feature semantics pass literal fixtures on every implementation; Phase 2 gates re-met",
-      "status": "NOT_STARTED",
+      "status": "IN_PROGRESS",
       "evidence": {
         "command": "pytest -m 'conformance or property' && make load-gateway",
         "verified_at": null,
         "result": null
-      }
+      },
+      "notes": "ADR-0046 semantics are declared, implemented by the reference and pinned by literal fixtures in both evaluation modes. A mutation self-test covers the reference, and property tests cover the two modes. Not yet committed. Open: Redis store conformance (34 strict xfails with exact divergence sets), the gateway's atomic score-time read and completeness-guard wiring, identity-event idempotency keys, and the Phase 2 load gate, manual replay and rule re-validation on feature set 2.0.0. No run may be recorded until then: SERVED_FEATURES_CONFORM is false and the run producers refuse. Disclosure: declined_ratio_1h still reads earlier transactions' request-supplied authorization outcomes (ADR-0046 §7, U7)."
     },
     {
       "id": "P3.redis-hydration",

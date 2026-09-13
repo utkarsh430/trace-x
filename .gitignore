@@ -52,3 +52,5 @@ out/
 .idea/
 *.swp
 .claude/settings.local.json
+# Parallel agents' isolated git worktrees: other branches' checkouts, never this tree's content.
+.claude/worktrees/

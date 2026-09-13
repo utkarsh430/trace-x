@@ -59,8 +59,8 @@ from trace_core.contracts.api.transaction import TransactionRequest
 from trace_core.contracts.envelope import ZERO_TRACE_ID
 from trace_core.domain.time import event_time
 from trace_core.features.definitions import ONLINE_FEATURES
-from trace_core.features.reference import Event
-from trace_core.features.semantics import Stream
+from trace_core.features.observation import Event
+from trace_core.features.semantics import Stream, identity_stream
 from trace_core.observability.logging import configure_logging
 from trace_core.observability.metrics import HotPathMetrics, register_online_store_gauges
 from trace_core.observability.telemetry import configure_telemetry, current_trace_id
@@ -714,23 +714,26 @@ def _register_routes(app: FastAPI) -> None:
         "/v1/events/identity",
         status_code=202,
         summary="Ingest an identity event",
+        response_model=AcceptedResponse,
         dependencies=[Depends(_authenticate)],
         responses={status: _PROBLEM_RESPONSES[status] for status in (400, 401, 422)},
     )
     async def ingest_identity(
         request: Request,
         body: IdentityEventRequest,
-    ) -> AcceptedResponse:
+    ) -> Any:
         # Sync: `_ingest` writes to Redis. See `score_transaction`.
+        if (problem := _future_skew_problem(request, body.occurred_at)) is not None:
+            return problem
         return _ingest(
             request,
             account_id=body.account_id,
             occurred_at=body.occurred_at,
-            stream=(
-                Stream.IDENTITY_FAILED_LOGIN
-                if body.identity_event_type.value == "LOGIN_FAILED"
-                else Stream.IDENTITY_CHANGE
-            ),
+            # Which stream a type feeds is declared beside the features (ADR-0046 §4), where
+            # the offline implementation reads the same table. A successful login or an
+            # enrolled second factor feeds none: counting them as identity changes reset
+            # `hours_since_identity_change` on ordinary account activity.
+            stream=identity_stream(body.identity_event_type.value),
             device_id=body.device_id,
             ip_id=body.ip_id,
         )
@@ -739,23 +742,40 @@ def _register_routes(app: FastAPI) -> None:
         "/v1/events/device",
         status_code=202,
         summary="Ingest a device event",
+        response_model=AcceptedResponse,
         dependencies=[Depends(_authenticate)],
         responses={status: _PROBLEM_RESPONSES[status] for status in (400, 401, 422)},
     )
     async def ingest_device(
         request: Request,
         body: DeviceEventRequest,
-    ) -> AcceptedResponse:
+    ) -> Any:
         # Sync: `_ingest` writes to Redis. See `score_transaction`.
+        if (problem := _future_skew_problem(request, body.occurred_at)) is not None:
+            return problem
         return _ingest(
             request,
             account_id=body.account_id,
             occurred_at=body.occurred_at,
-            stream=Stream.TRANSACTION,
+            stream=None,
             device_id=body.device_id,
             ip_id=body.ip_id,
-            observe=False,
         )
+
+
+def _future_skew_problem(request: Request, occurred_at: dt.datetime) -> Any:
+    """A 422 for an event dated beyond the accepted future clock skew, as for transactions.
+
+    Identity and device events had no future bound. That broke more than hygiene: an event dated
+    days ahead and lost during a feature-store outage lies beyond the 24 h margin by which the
+    completeness guard moves the epoch forward, so a later window could claim completeness over
+    it (ADR-0046 §5). One bound for every recorded stream keeps the margin sufficient.
+    """
+    try:
+        ScoringPipeline.check_clock(occurred_at, now=dt.datetime.now(dt.UTC))
+    except ValueError as exc:
+        return _problem_response(request, ErrorType.INVALID_REQUEST, detail=str(exc))
+    return None
 
 
 def _ingest(
@@ -763,33 +783,37 @@ def _ingest(
     *,
     account_id: str,
     occurred_at: dt.datetime,
-    stream: Stream,
+    stream: Stream | None,
     device_id: str | None = None,
     ip_id: str | None = None,
-    observe: bool = True,
 ) -> AcceptedResponse:
     """202: update online state for later transactions, return nothing to score.
 
-    Best effort. These events sharpen a later decision; failing the caller
-    because the store is unavailable would make an optional signal into a
-    required dependency.
+    `stream` is None for an event no released feature reads -- a successful login, an
+    enrolled second factor, every device event today -- and such an event changes no
+    online state (ADR-0046 §4). Otherwise best effort: these events sharpen a later
+    decision, and failing the caller because the store is unavailable would make an
+    optional signal into a required dependency.
     """
     state = _gateway(request)
     request_id = _request_id(request)
-    event = Event(
-        stream=stream,
-        occurred_at=event_time(occurred_at),
-        account_id=account_id,
-        device_id=device_id,
-        ip_id=ip_id,
-        event_id=request_id,
-    )
-    if observe and state.pipeline.feature_store is not None:
+    # Minted here, never taken from the caller: `X-Request-Id` is a correlation header the
+    # caller chooses, and two distinct events sent under one would count once (ADR-0046 §1).
+    event_id = f"idev_{uuid.uuid4().hex}"
+    if stream is not None and state.pipeline.feature_store is not None:
+        event = Event(
+            stream=stream,
+            occurred_at=event_time(occurred_at),
+            account_id=account_id,
+            device_id=device_id,
+            ip_id=ip_id,
+            event_id=event_id,
+        )
         try:
             state.pipeline.feature_store.observe(event)
         except Exception:
             state.metrics.degraded.add(1, {"reason": "redis_unavailable"})
-    return AcceptedResponse(accepted=True, event_id=request_id, request_id=request_id)
+    return AcceptedResponse(accepted=True, event_id=event_id, request_id=request_id)
 
 
 def _triage(state: GatewayState, outcome: Any, body: TransactionRequest) -> RiskDecision:

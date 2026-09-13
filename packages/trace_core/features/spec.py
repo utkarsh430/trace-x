@@ -39,21 +39,47 @@ from typing import Final
 
 from trace_core.contracts.canonical import CanonicalField, CanonicalTransaction
 from trace_core.domain.enums import FeatureSource
-from trace_core.domain.errors import FeatureUnavailableError
+from trace_core.domain.errors import FeatureUnavailableError, NonConformantFeatureSetError
 from trace_core.features.context import (
     INSUFFICIENT_HISTORY,
     FeatureContext,
     InsufficientHistory,
 )
-from trace_core.features.semantics import Semantics
+from trace_core.features.semantics import (
+    CurrentObservation,
+    ParityComparison,
+    Semantics,
+    WindowedAggregate,
+)
 
-FEATURE_SET_VERSION: Final = "1.0.0"
+FEATURE_SET_VERSION: Final = "2.0.0"
 """Bumped whenever a feature's MEANING changes.
 
 Recorded on every `RiskDecision` and in every run manifest: a latency or quality
 number produced by a different feature set is not comparable to one produced by
 this one, and a version is how a reader can tell.
 """
+
+SERVED_FEATURES_CONFORM: Final = False
+"""Whether the online path the gateway runs actually serves `FEATURE_SET_VERSION`.
+
+False from ADR-0046's declaration until Phase 3 Step 1 makes the Redis store and the
+gateway's score-time read conform to it. Until then the version names the declared
+meaning, not the values being served, so nothing may produce a run record from the
+gateway: `require_served_conformance` refuses, and the load harness and the gateway
+replay call it before doing anything else. A sentence in PROGRESS is not a control.
+"""
+
+
+def require_served_conformance(purpose: str) -> None:
+    """Refuse `purpose` while the served values do not implement `FEATURE_SET_VERSION`."""
+    if not SERVED_FEATURES_CONFORM:
+        raise NonConformantFeatureSetError(
+            f"{purpose} refused: feature set {FEATURE_SET_VERSION} is declared (ADR-0046) but "
+            f"the online store and the gateway's score-time read do not serve it yet, so any "
+            f"record would carry a version its values were not computed with. This lifts when "
+            f"Phase 3 Step 1 sets SERVED_FEATURES_CONFORM."
+        )
 
 
 class FeatureState(StrEnum):
@@ -91,10 +117,10 @@ class FeatureValue:
     reconciliation job is what makes `RECONCILED` reachable.
     """
     approximate: bool = False
-    """True when the online estimator is inexact by construction -- HyperLogLog
-    distinct counts (~0.81%, ADR-0003) and running robust-z estimates. The
-    parity tolerance for this feature must account for it, and widening a
-    tolerance to make a test pass is prohibited (docs/DATA_ENGINEERING.md §4)."""
+    """True when the online estimator is inexact by construction -- the HyperLogLog
+    distinct counts (ADR-0003, ADR-0034). The robust z-score is exact by declaration since
+    ADR-0046. The parity bound for an approximate feature is frozen in plan §4.3, and
+    widening it to make a test pass is prohibited (docs/DATA_ENGINEERING.md §4)."""
 
     @classmethod
     def of(
@@ -246,6 +272,29 @@ class FeatureSpec:
             approximate=self.approximate,
         )
 
+    @property
+    def current_observation(self) -> CurrentObservation:
+        """Whether the scored transaction is part of what this feature reads (ADR-0046 §2)."""
+        return self.semantics.current_observation
+
+    @property
+    def parity(self) -> ParityComparison:
+        """How implementations' values for this feature are compared (ADR-0046 §5)."""
+        return self.semantics.parity
+
+    @property
+    def currency_scoped(self) -> bool:
+        """Whether this feature's figures are confined to the scored transaction's currency.
+
+        Derived from the declaration rather than chosen per implementation (ADR-0046): a
+        feature that needs `currency` among its required fields sums or compares amounts,
+        which only exist within one currency; every other feature counts observations,
+        and an observation in another currency still happened. Phase 3 planning found the
+        online store keying whole profiles by currency, so a purchase in euros at a
+        merchant the account used weekly in pounds read as a novel merchant.
+        """
+        return CanonicalField.CURRENCY in self.required_fields
+
     def is_computable_on(self, coverage: frozenset[CanonicalField]) -> bool:
         """Whether this feature can run against a source with `coverage`.
 
@@ -269,6 +318,22 @@ class FeatureRegistry:
     def register(self, spec: FeatureSpec) -> FeatureSpec:
         if spec.feature_id in self._specs:
             raise ValueError(f"feature {spec.feature_id!r} is already registered")
+        if isinstance(spec.semantics, WindowedAggregate):
+            shape = spec.semantics
+            for other in self._specs.values():
+                theirs = other.semantics
+                if (
+                    isinstance(theirs, WindowedAggregate)
+                    and (theirs.entity, theirs.stream, theirs.window)
+                    == (shape.entity, shape.stream, shape.window)
+                    and theirs.current_observation is not shape.current_observation
+                ):
+                    raise ValueError(
+                        f"{spec.feature_id!r} and {other.feature_id!r} read the same window "
+                        f"({shape.entity}, {shape.stream}, {shape.window.label}) but disagree "
+                        f"about whether the scored transaction is inside it. One window state "
+                        f"cannot mean both (ADR-0046 §2)."
+                    )
         self._specs[spec.feature_id] = spec
         return spec
 
@@ -311,9 +376,11 @@ class FeatureRegistry:
 __all__ = [
     "FEATURE_SET_VERSION",
     "INSUFFICIENT_HISTORY",
+    "SERVED_FEATURES_CONFORM",
     "Compute",
     "FeatureRegistry",
     "FeatureSpec",
     "FeatureState",
     "FeatureValue",
+    "require_served_conformance",
 ]

@@ -104,8 +104,10 @@ ADR-0002. The risk is silent divergence, so it is measured rather than trusted:
 - **Most features are compared by equality, not tolerance.** ADR-0034 stores distinct counts exactly
   wherever cardinality is bounded by one entity's own behaviour, so five of the seven distinct counts
   have a parity tolerance of *zero*; only the two whose cardinality is bounded by a sharing
-  population, plus the robust z-score, are estimates. A tolerance is a declared property of a named
-  feature, never a global allowance.
+  population are estimates. The robust z-score is exact since ADR-0046 declared its bounded sample to
+  be the definition. How each feature is compared -- equality, a `1e-9` floating-point tolerance, or
+  the per-stratum bound for an estimate -- is declared on the feature (`FeatureSpec.parity`), never a
+  global allowance.
 
 When the `streaming` profile is off, responses carry `X-Feature-Source: ONLINE_ONLY` so degradation is
 visible rather than silent.

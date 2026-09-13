@@ -58,6 +58,9 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
+from trace_core.domain.errors import NonConformantFeatureSetError
+from trace_core.features.spec import require_served_conformance
+
 ROOT: Final = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "packages"))
 sys.path.insert(0, str(ROOT))
@@ -1133,6 +1136,15 @@ def main(argv: list[str] | None = None) -> int:
         "repository, so the run does not dirty the worktree it is recording)",
     )
     args = parser.parse_args(argv)
+
+    # A run record names the feature set its values were computed with. While the online
+    # path does not serve that version, no record may be produced (ADR-0046,
+    # spec.SERVED_FEATURES_CONFORM).
+    try:
+        require_served_conformance("A gateway load-test record")
+    except NonConformantFeatureSetError as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return 2
 
     try:
         image = k6_image()

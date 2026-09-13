@@ -94,3 +94,20 @@ def test_env_contents_are_not_scanned(scanner) -> None:
 def test_requirements_lock_is_excluded(scanner) -> None:
     """1800+ sha256 wheel hashes are high entropy by design and public."""
     assert any("requirements" in pattern for pattern in scanner.EXCLUDE_FILES)
+
+
+def test_a_tracked_file_inside_the_excluded_worktrees_fails_the_scan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The exclusion is sound only while git tracks nothing there."""
+    spec = importlib.util.spec_from_file_location("secret_scan_tracked_guard", SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.check_worktrees_are_not_tracked() == []
+    monkeypatch.setattr(
+        module, "check_worktrees_are_not_tracked", lambda: [".claude/worktrees/x is tracked"]
+    )
+    monkeypatch.setattr(module, "run_scan", lambda: {"results": {}})
+    monkeypatch.setattr(sys, "argv", ["secret_scan.py"])
+    assert module.main() == 1

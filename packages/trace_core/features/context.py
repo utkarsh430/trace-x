@@ -104,12 +104,25 @@ class WindowState:
     Integer arithmetic, so it is exact -- a running float variance loses
     precision at exactly the scale where uniform-amount laundering lives."""
     declined_count: int = 0
+    """Declined observations with a known outcome. Never counts the current observation's
+    outcome, which is not known when it is scored (`observation.POST_DECISION_FIELDS`)."""
     outcome_known_count: int = 0
     """Denominator for DECLINED_RATIO. Distinct from `count` because a source
     may not supply `authorization_outcome` for every row, and dividing by the
     wrong denominator would report a ratio that was never measured."""
     distinct: dict[Dimension, int] = field(default_factory=dict)
-    """Approximate distinct cardinality per dimension (HyperLogLog online)."""
+    """Distinct cardinality per dimension: exact for EXACT storage, the declared
+    edge-inclusive five-minute-bucket estimand for APPROXIMATE storage (ADR-0046 §2)."""
+    aligned_count: int = 0
+    aligned_amount_sum_minor: int = 0
+    aligned_amount_sum_squares: int = 0
+    """Same-currency count, sum and sum of squares over the declared MINUTE-ALIGNED window
+    (ADR-0046 §2): whole minutes strictly between the minute containing `as_of - W` and the
+    minute containing `as_of`, plus the current observation when the feature declares it
+    INCLUDED (it lies in the excluded minute containing `as_of`, so it is added once, by
+    itself). Read only by `AMOUNT_CV`, and kept apart from the exact fields because the two
+    windows differ at both edges -- and because the coefficient of variation must divide
+    same-currency sums by a same-currency count, which the all-currency `count` is not."""
 
 
 @dataclass(frozen=True, slots=True)

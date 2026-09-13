@@ -39,12 +39,11 @@ from trace_core.contracts.api.transaction import (
 from trace_core.contracts.canonical import CanonicalField, CanonicalTransaction
 from trace_core.domain.enums import FeatureSource
 from trace_core.domain.errors import FeatureWriteFailedError
-from trace_core.domain.time import EventTime, event_time, utc_now
+from trace_core.domain.time import event_time, utc_now
 from trace_core.features import FeatureContext, FeatureState, FeatureValue
 from trace_core.features.context import Completeness
 from trace_core.features.definitions import ONLINE_FEATURES
-from trace_core.features.reference import Event
-from trace_core.features.semantics import Stream
+from trace_core.features.observation import transaction_observation
 from trace_core.features.state_plan import PLAN
 from trace_core.repositories.circuit_breaker import CircuitBreaker
 from trace_core.rules.engine import Evaluation, evaluate_pack
@@ -217,7 +216,7 @@ class ScoringPipeline:
         if self.breaker is not None and not self.breaker.allows():
             return REASON_REDIS
         try:
-            self.feature_store.observe(_as_event(canonical))
+            self.feature_store.observe(transaction_observation(canonical))
         except FeatureWriteFailedError:
             # Reachable and full. The store answered; it refused. Not an outage,
             # so the breaker stays closed -- opening it would stop reads that
@@ -281,28 +280,6 @@ class ScoringPipeline:
 
     def opens_investigation(self, decision: RiskDecision) -> bool:
         return self.thresholds.opens_investigation(decision.risk_band)
-
-
-def _as_event(canonical: CanonicalTransaction) -> Event:
-    """The online store's observation shape for a scored transaction."""
-    return Event(
-        stream=Stream.TRANSACTION,
-        occurred_at=EventTime(canonical.occurred_at),
-        account_id=canonical.account_id,
-        currency=canonical.currency,
-        amount_minor=canonical.amount_minor,
-        card_id=canonical.card_id,
-        device_id=canonical.device_id,
-        merchant_id=canonical.merchant_id,
-        ip_id=canonical.ip_id,
-        merchant_mcc=canonical.merchant_mcc,
-        merchant_country=canonical.merchant_country,
-        latitude=canonical.latitude,
-        longitude=canonical.longitude,
-        channel=canonical.channel,
-        authorization_outcome=canonical.authorization_outcome,
-        event_id=canonical.transaction_id,
-    )
 
 
 def history_incomplete(features: dict[str, FeatureValue], context: FeatureContext) -> bool:

@@ -132,7 +132,9 @@ def _declined_ratio(spec: WindowedAggregate) -> Compute:
         state = ctx.window(spec.entity, _entity_id(tx, spec.entity), spec.stream, spec.window.label)
         if state is None or state.outcome_known_count == 0:
             # Zero known outcomes is NOT a zero ratio. Dividing by the wrong
-            # denominator would report a ratio that was never measured.
+            # denominator would report a ratio that was never measured. The scored
+            # transaction's own outcome is never among them: it is decided after
+            # TRACE-X answers (observation.POST_DECISION_FIELDS, ADR-0046 §7).
             return INSUFFICIENT_HISTORY
         return state.declined_count / state.outcome_known_count
 
@@ -142,12 +144,16 @@ def _declined_ratio(spec: WindowedAggregate) -> Compute:
 def _amount_cv(spec: WindowedAggregate) -> Compute:
     def compute(tx: CanonicalTransaction, ctx: FeatureContext) -> float | InsufficientHistory:
         state = ctx.window(spec.entity, _entity_id(tx, spec.entity), spec.stream, spec.window.label)
-        if state is None or state.count < 2:
+        if state is None or state.aligned_count < 2:
             return INSUFFICIENT_HISTORY
-        mean = state.amount_sum_minor / state.count
+        # Same-currency count over same-currency sums, both minute-aligned (ADR-0046 §2).
+        # The previous form divided same-currency sums by the all-currency count, in BOTH
+        # implementations, so a mixed-currency merchant read as uniform or dispersed at
+        # random and implementation parity could not see it.
+        mean = state.aligned_amount_sum_minor / state.aligned_count
         if mean == 0:
             return INSUFFICIENT_HISTORY
-        variance = state.amount_sum_squares / state.count - mean * mean
+        variance = state.aligned_amount_sum_squares / state.aligned_count - mean * mean
         # Floating error can make a genuinely-zero variance very slightly
         # negative; clamping is correct, and a real negative is impossible.
         return math.sqrt(max(variance, 0.0)) / abs(mean)
@@ -353,9 +359,11 @@ def _robust_z(spec: ProfileAttribute) -> Compute:
         deviation = abs(tx.amount_minor) - profile.amount_median_minor
         if scale <= 0:
             # An account that has always spent exactly the same amount. Any
-            # departure is maximally anomalous; an identical amount is not anomalous
-            # at all. Returning 0/0 or infinity would be worse than either.
-            return 0.0 if deviation == 0 else ROBUST_Z_CAP
+            # departure is maximally anomalous IN ITS OWN DIRECTION; an identical amount
+            # is not anomalous at all. Phase 2 returned +50 for a LOWER amount too, so
+            # R015, R009 and R016 read a small payment as a high-value anomaly
+            # (ADR-0046 §3).
+            return 0.0 if deviation == 0 else math.copysign(ROBUST_Z_CAP, deviation)
         return max(-ROBUST_Z_CAP, min(ROBUST_Z_CAP, deviation / scale))
 
     return compute

@@ -70,6 +70,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
+from trace_core.domain.errors import NonConformantFeatureSetError
+from trace_core.features.spec import require_served_conformance
+
 ROOT: Final = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "packages"))
 sys.path.insert(0, str(ROOT))
@@ -481,6 +484,15 @@ def main() -> int:
     parser.add_argument("--base-url", default="http://localhost:8010")
     parser.add_argument("--limit", type=int, default=2000, help="Transactions to score.")
     args = parser.parse_args()
+
+    # A run record names the feature set its values were computed with. While the online
+    # path does not serve that version, no record may be produced (ADR-0046,
+    # spec.SERVED_FEATURES_CONFORM).
+    try:
+        require_served_conformance("A gateway replay report")
+    except NonConformantFeatureSetError as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return 2
 
     events = load_streams(args.dataset_dir, limit=args.limit)
     shifted, delta = shift_to_now(events)

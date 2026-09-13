@@ -187,3 +187,11 @@ class BudgetExhaustedError(TraceXError):
     CLAUDE.md §10.4: this produces INSUFFICIENT_EVIDENCE and a human-queue
     entry. It is a valid recorded outcome, never a hang and never a crash.
     """
+
+
+class NonConformantFeatureSetError(TraceXError):
+    """A run was asked of an online path that does not serve the declared feature set.
+
+    Raised before any work, so a load test or replay can never produce a record whose
+    `feature_set_version` names semantics the values were not computed with.
+    """

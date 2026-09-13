@@ -31,7 +31,8 @@ from trace_core.contracts.canonical import CanonicalField
 from trace_core.domain.enums import RiskBand
 from trace_core.features import FeatureState
 from trace_core.features.definitions import ONLINE_FEATURES
-from trace_core.features.reference import Event, ReferenceFeatureStore
+from trace_core.features.observation import Event
+from trace_core.features.reference import ReferenceFeatureStore
 from trace_core.rules.loader import default_loader
 from trace_core.scoring.banding import load_thresholds
 
