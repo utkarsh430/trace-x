@@ -56,6 +56,7 @@ been thought through.
 | [0042](0042-online-store-memory-corrected.md) | Online-store memory corrected: AOF was the latency cause, eviction is the correctness cause | 2 | Accepted |
 | [0043](0043-small-threadpool-measured.md) | The small-threadpool middle ground is measured, and it is worse | 2 | Accepted |
 | [0044](0044-online-store-correctness-topology.md) | Feature state cannot silently evict: two Redis instances, a declaration-driven write plan, and a completeness epoch | 2 | Accepted |
+| [0045](0045-phase3-toolchain-contract.md) | The Phase 3 toolchain contract: hashed installs, verified JVM jars, and Java 17 enforced by the repository | 3 | Accepted |
 
 ## Notes on status
 

@@ -156,6 +156,18 @@ class FeatureWriteFailedError(TraceXError):
     """
 
 
+class ToolchainMismatchError(TraceXError):
+    """The Phase 3 JVM toolchain does not match its pins, so no Spark session starts.
+
+    Raised by `trace_core.stream.session` BEFORE a JVM is launched, and again if the
+    JVM that did launch reports different versions than the files promised. The
+    alternative is Spark failing much later with `UnsupportedClassVersionError`
+    or a `NoSuchMethodError` from inside a query -- errors that name neither the
+    component nor the fix. The message lists every failed check with its remedy,
+    so one run shows the whole problem rather than its first symptom.
+    """
+
+
 # ------------------------------------------- declared now, used later ------
 # Declared here so the taxonomy is complete and downstream phases extend it
 # rather than inventing a parallel hierarchy.

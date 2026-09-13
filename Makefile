@@ -20,9 +20,18 @@ VPY   := $(if $(wildcard $(VENV)/bin/python),$(VENV)/bin/python,$(PY))
 export VPY
 # `setup` only: it is the target that creates $(VENV), so it cannot resolve.
 VPIP  := $(VENV)/bin/pip
+# The ONE JDK every target runs on, resolved here the way VPY is above: the
+# pinned Temurin when one is installed (scripts/java_home.py confirms the version
+# by running the JDK, not by reading a directory name), otherwise whatever the
+# caller had -- so `make doctor` reports a missing or wrong JDK instead of this
+# line hiding it. Without it, a shell that does not source a profile (tooling, CI
+# steps, another terminal) falls back to the system default, which on this
+# project's reference machine is Java 25 and cannot run Spark 4.0.1.
+JAVA_HOME := $(or $(shell $(PY) scripts/java_home.py 2>/dev/null),$(JAVA_HOME))
+export JAVA_HOME
 COMPOSE := docker compose -f deploy/compose.yml --env-file .env
 
-.PHONY: help doctor toolchain setup up up-streaming up-full down ps logs test-fast test e2e lint typecheck \
+.PHONY: help doctor toolchain stream-jars setup up up-streaming up-full down ps logs test-fast test e2e lint typecheck \
         secrets audit audit-full migrate migrate-down migrate-status lock ci-status codegen \
         verify eval eval-external demo seed fetch-external pull-model bench-layout \
         codegen-openapi contracts-check contracts-self-test load-gateway \
@@ -44,19 +53,22 @@ help: ## Show available commands
 ## Environment
 ## ---------------------------------------------------------------------------
 doctor: ## Preflight: versions, pins, disk, RAM, ports, LLM tier
-	@$(PY) scripts/doctor.py
+	@$(VPY) scripts/doctor.py
 
 toolchain: ## Print the interpreter every target runs: the venv if `make setup` made it, else PATH
 	@echo $(VPY)
 
-setup: ## Create venv and install dev + core dependencies
+stream-jars: ## Fetch and verify the pinned Spark JVM jars (packages/trace_core/stream/jars.lock)
+	@$(VPY) scripts/stream_jars.py fetch
+
+setup: ## Create the venv; install every dependency from the hashed locks; fetch verified Spark jars
 	@test -d $(VENV) || $(PY) -m venv $(VENV)
-	@$(VPIP) install --quiet --upgrade pip setuptools wheel
-	@# Must cover every extra mypy's `files` scope imports (migrations -> db,
-	@# the lazily-imported OTLP exporter -> obs, services/ -> api). Installing
-	@# less means a fresh clone fails `make verify` on mypy. Asserted by
+	@# The same script every CI job runs. The lock covers every extra mypy's
+	@# `files` scope imports (migrations -> db, the lazily-imported OTLP exporter
+	@# -> obs, services/ -> api, trace_core.stream -> stream). Asserted by
 	@# test_toolchain_consistency.
-	@$(VPIP) install --quiet -e ".[dev,db,obs,gen,api]"
+	@bash scripts/install_locked.sh $(VENV)/bin/python
+	@$(VENV)/bin/python scripts/stream_jars.py fetch
 	@test -f .env || (cp .env.example .env && echo "  created .env from template")
 	@echo "setup complete — run 'make doctor' next"
 
@@ -100,10 +112,13 @@ migrate-down: ## Roll back all migrations
 migrate-status: ## Show the current migration revision
 	@set -a; . ./.env; set +a; $(VPY) -m alembic current --verbose
 
-lock: ## Regenerate the hashed dependency lockfile
+lock: ## Regenerate both hashed lockfiles: build backends, then every dependency
+	@$(VPY) -m piptools compile --quiet --generate-hashes --allow-unsafe \
+	  --output-file=requirements-build.lock requirements-build.in
 	@$(VPY) -m piptools compile --quiet --generate-hashes --strip-extras --allow-unsafe \
 	  --output-file=requirements.lock --extra=dev --extra=db --extra=obs --extra=api \
-	  --extra=gen pyproject.toml
+	  --extra=gen --extra=stream pyproject.toml
+	@$(VPY) scripts/runtime_lock.py
 	@echo "requirements.lock updated ($$(shasum -a 256 requirements.lock | cut -c1-16)...)"
 
 ## ---------------------------------------------------------------------------
@@ -137,7 +152,7 @@ audit-full: ## Static security scan including LOW severity findings
 	@$(VPY) -m bandit -c pyproject.toml -r packages scripts eval migrations
 
 test-fast: ## Unit + property + contract + conformance (no external services)
-	@$(VPY) -m pytest -m "not integration and not e2e and not load and not chaos and not external and not cloud and not slow"
+	@$(VPY) -m pytest -m "not integration and not e2e and not load and not chaos and not external and not cloud and not slow and not stream"
 
 test: ## Full local suite except cloud
 	@$(VPY) -m pytest -m "not cloud"

@@ -1,0 +1,73 @@
+{
+  "$comment": "JVM artefacts Spark sessions put on their classpath, pinned by size and SHA-256. Written only by `scripts/stream_jars.py lock`, which cross-checks every digest Maven Central publishes (SHA-1 always; SHA-256 and SHA-512 where published) before recording the SHA-256 it computed. `cross_checked` records which were available. Sessions never resolve jars from Maven at run time (spark.jars.packages is refused).",
+  "jars": [
+    {
+      "coordinate": "io.delta:delta-spark_2.13:4.0.1",
+      "sha256": "a1e76860b19fe1e6b205a4ea7a9099a2f9575d39bb71d49b3e679b299d0efb91",
+      "size": 7731162,
+      "sha1": "3e469898dc4ed083c735ae360beb063adcd12e9d",
+      "cross_checked": [
+        "sha1"
+      ],
+      "locked_at": "2026-09-13",
+      "reason": "Delta Lake for Spark 4.0 and Scala 2.13 (the pin)"
+    },
+    {
+      "coordinate": "io.delta:delta-storage:4.0.1",
+      "sha256": "ecc42c5aaa51c423312d9e4e48aa4a12b34740bf2c37de0e8f279277ec3d12e4",
+      "size": 78832,
+      "sha1": "ebc5384d953c1d70d0ce4ceee42892da74051a81",
+      "cross_checked": [
+        "sha1"
+      ],
+      "locked_at": "2026-09-13",
+      "reason": "delta-spark's LogStore; not bundled by Spark"
+    },
+    {
+      "coordinate": "org.apache.spark:spark-sql-kafka-0-10_2.13:4.0.1",
+      "sha256": "a9c5366a61087e7e7ff903c3dc160e80b33d2ea04d365e0795cc4a58befc3a16",
+      "size": 467591,
+      "sha1": "75ffc494b738b91fc675fe087ac57417ac408a29",
+      "cross_checked": [
+        "sha1"
+      ],
+      "locked_at": "2026-09-13",
+      "reason": "the Structured Streaming Kafka source and sink"
+    },
+    {
+      "coordinate": "org.apache.spark:spark-token-provider-kafka-0-10_2.13:4.0.1",
+      "sha256": "adaf5b803fdffc4d8d95dad73c11d26f991e590d81ce1b31aa429595aa1c4733",
+      "size": 64977,
+      "sha1": "398ca8e587f74a0677f6c0a9ff73b4cbdee1f1e4",
+      "cross_checked": [
+        "sha1"
+      ],
+      "locked_at": "2026-09-13",
+      "reason": "a compile dependency of the Kafka connector"
+    },
+    {
+      "coordinate": "org.apache.kafka:kafka-clients:3.9.1",
+      "sha256": "7568b998572d256f0b7bc0afdc1b7a2588b8b08415c62ce314c864a6851ae9d9",
+      "size": 9215194,
+      "sha1": "86ca079953ed5606257ff298c24666b26da6985b",
+      "cross_checked": [
+        "sha1",
+        "sha256",
+        "sha512"
+      ],
+      "locked_at": "2026-09-13",
+      "reason": "the client Spark 4.0.1 builds against (its pom's kafka.version)"
+    },
+    {
+      "coordinate": "org.apache.commons:commons-pool2:2.12.0",
+      "sha256": "6d3bd18df8410f3e31b031aca582cc109342358a62a2759ebd0c4cdf30d06f8b",
+      "size": 150048,
+      "sha1": "458563f69fbdaebf7daadfe10dc3a22e42a7de50",
+      "cross_checked": [
+        "sha1"
+      ],
+      "locked_at": "2026-09-13",
+      "reason": "the connector's consumer pool; not bundled by Spark 4.0.1"
+    }
+  ]
+}

@@ -63,7 +63,7 @@ else
 fi
 
 if have pytest; then
-  run_gate "test-fast"         "$VPY" -m pytest -m "not integration and not e2e and not load and not chaos and not external and not cloud and not slow" -q
+  run_gate "test-fast"         "$VPY" -m pytest -m "not integration and not e2e and not load and not chaos and not external and not cloud and not slow and not stream" -q
 else
   skip_gate "test-fast" "dev deps not installed — run 'make setup'"
 fi

@@ -1,0 +1,9 @@
+# Build backends, locked by hash like every other dependency.
+#
+# pyspark 4.0.1 is published only as a source archive, so installing it builds a
+# wheel. With build isolation pip would fetch these into a throwaway environment
+# WITHOUT checking hashes, leaving a hole in a contract that hash-checks
+# everything else. scripts/install_locked.sh installs this lock first and then
+# builds with --no-build-isolation. Compiled by `make lock`.
+setuptools>=69
+wheel

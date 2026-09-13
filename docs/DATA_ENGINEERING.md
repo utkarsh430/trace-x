@@ -19,18 +19,29 @@
 | Hadoop | 3.4.x | Mismatch surfaces as an opaque `NoSuchMethodError` |
 | Scala | 2.13 | Spark 4.x baseline |
 
-`make doctor` asserts all six **before any Spark job starts**. Every pin is recorded in every run
-manifest; changing one invalidates prior benchmark comparability and requires a manifest-diff note
+`make doctor` asserts all six, and from Phase 3 each is a **required** check: Java by running the JDK
+Spark's launcher would use, pyspark and Delta from installed package metadata, and Hadoop and Scala from
+the jar names pyspark actually bundles. The Delta and Kafka-connector jars are pinned by SHA-256 and
+verified before a session may use them, and `trace_core.stream.session.build_session` repeats every
+check before a JVM starts, then asks the running JVM for its versions (ADR-0045). Every pin is recorded
+in every run manifest; changing one invalidates prior benchmark comparability and requires a manifest-diff note
 (ADR-0017).
 
 ---
 
 ## 2. Medallion architecture
 
+> **Being superseded in Phase 3.** The approved plan (`docs/PHASE3_PLAN.md` §2–§4) replaces parts of
+> §2–§4 below: Silver keeps every accepted event (late events are tagged and copied to `late_events`,
+> not removed) and is exactly deduplicated by a declared identity; Spark rejects go to a Delta
+> quarantine table; Gold is computed in batch; and reconstruction rebuilds the online store's
+> primitives rather than writing feature values back. Each section is rewritten by the step that
+> implements it, and until then the plan is authoritative where the two differ.
+
 | Tier | Content | Write mode | Guarantees |
 |---|---|---|---|
 | **Bronze** | Raw event plus envelope, untransformed | append | Nothing dropped, nothing altered. The replayable record of what actually arrived |
-| **Silver** | Deduplicated on `event_id`, watermarked, typed, validated, PII-tokenized | append + late routing | Event-time correct. Late events routed, never lost |
+| **Silver** | Deduplicated, typed, validated, `trust_tier` carried | append | Event-time correct. Late events kept and tagged, never lost |
 | **Gold** | Event-time windowed aggregates, entity profiles, training features | upsert | Authoritative feature values. Reconciles the Redis online store |
 
 **Bronze is never rewritten.** A parsing bug is fixed by reprocessing Bronze into Silver, not by editing
@@ -40,7 +51,10 @@ Bronze — that is the entire point of keeping it.
 - Validate against the event JSON Schema; failures route to `<topic>.dlq` with the full envelope.
 - `dropDuplicatesWithinWatermark(["event_id"])` — exactly-once semantics within the watermark.
 - Type coercion to `CanonicalTransaction`, with `field_coverage` propagated from the source adapter.
-- PII tokenization per the field policy; `trust_tier` stamped and thereafter immutable.
+- `trust_tier` stamped and thereafter immutable. **No PII tokenization is performed or claimed:** every
+  current source carries synthetic or already-anonymised identities, and tokenizing them would break joins
+  with the online store's keys. An explicit tokenization and privacy design is required before any source
+  containing real PII is admitted (`docs/PHASE3_PLAN.md` §3, Q9).
 - Late-arrival tagging: events beyond the watermark go to `late_events` **and are counted**.
 
 ### Gold aggregates

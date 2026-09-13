@@ -20,8 +20,11 @@ planning surfaced recorded under *What Phase 3 planning found in Phase 2's artef
 
 ### Phase 3
 
-**Planning is complete and approved; Step 0 (toolchain and dependency contract) is next.** No Phase 3
-capability is PASS yet. The plan was built by six specialist reviews whose load-bearing claims were
+**Planning is complete and approved, and Step 0 (toolchain and dependency contract, ADR-0045) is
+complete locally** — `make verify`, the real-JVM stream tests on macOS, a hashed install in a Linux
+container, and a Linux build of the gateway image from its hashed runtime lock. Its first GitHub CI run
+(including the new `test-stream` job) is still pending. Wave B (Steps 1, 2, 3 and E) is next. One
+Phase 3 capability is PASS: `P3.pin-failfast`. The plan was built by six specialist reviews whose load-bearing claims were
 checked against the code, by experiment in a throwaway container, or against cited upstream
 documentation — claims resting only on documentation are re-verified by the step that depends on
 them. The architecture that
@@ -31,7 +34,9 @@ exactly-deduplicated Silver, batch Gold, declared feature semantics, a split par
 
 **The entry condition "`make doctor` green on the full pin matrix (Java 17)" was met only nominally at
 approval:** the Java check is warning-level, Hadoop and Scala are declared but never asserted, and a
-non-interactive shell runs Java 25. Step 0 remediates it; it was not waived.
+non-interactive shell runs Java 25. Step 0 remediated it rather than waiving it: `make doctor` now fails
+on a wrong Java and on drifted pyspark, Delta, Hadoop, Scala or jars, and a test runs it under a real
+installed Temurin 25 to prove it.
 
 ### What Phase 3 planning found in Phase 2's artefacts
 
@@ -362,7 +367,7 @@ both reports.
 
 ## WORK IN PROGRESS
 
-None committed. Phase 3 Step 0 (toolchain and dependency contract) is next.
+None in flight. Wave B (Steps 1, 2, 3 and E) is next.
 
 ## CURRENTLY FAILING TESTS
 
@@ -390,7 +395,7 @@ None committed. Phase 3 Step 0 (toolchain and dependency contract) is next.
 
 | # | Risk | Status |
 |---|---|---|
-| R2 | Java 25 is the system default; Spark 4.0 needs Temurin 17 | Temurin 17 installed; enforcement in the repository is Phase 3 Step 0 |
+| R2 | Java 25 is the system default; Spark 4.0 needs Temurin 17 | Resolved locally by Phase 3 Step 0 (ADR-0045): the repository selects and enforces Temurin 17. Confirmation on GitHub's runners is pending the first `test-stream` run |
 | R3 | Docker RAM ceiling is tight for the full profile | Open — mitigated by profiles and per-service limits |
 | R4 | No AWS credentials | Open — blocks Phase 12 only |
 | R5 | IEEE-CIS needs Kaggle credentials and a ~1.5 GB download | Open — blocks Phase 4B entry |
@@ -418,11 +423,12 @@ None committed. Phase 3 Step 0 (toolchain and dependency contract) is next.
 
 Phase 3, in the wave order of `docs/PHASE3_PLAN.md` §5:
 
-1. **Step 0 — toolchain and dependency contract** (lead): the `stream` extra in the hashed lock and in
-   every install path; verified JVM jars; Java 17 enforced by the Makefile, `make doctor` and a
-   fail-fast Spark session factory; a CI `test-stream` job that actually executes Spark.
-2. **Wave B, in parallel once Step 0 lands:** Step 1 (feature semantics and online-store correctness),
-   Step 2 (Kafka platform), Step 3 (Delta capability spike and stream runtime), Step E (`eval-v2`).
+1. **Wave B, in parallel:** Step 1 (feature semantics and online-store correctness — lead owns the
+   semantics and the conformance suite, and first settles Q4c's medoid definition and the
+   self-inclusion conflict from evidence), Step 2 (Kafka platform), Step 3 (Delta capability spike and
+   stream runtime), Step E (`eval-v2`).
+2. **Confirm the first `test-stream` CI run on GitHub** executed Spark: it has only been reproduced
+   locally so far (macOS session, and a Linux container for the hashed install).
 
 ---
 

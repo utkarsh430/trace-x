@@ -26,8 +26,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev,db,obs,gen,api]"
+          bash scripts/install_locked.sh python
 
       # Docker is available on ubuntu-latest, so the suite manages its own
       # PostgreSQL container exactly as it does locally -- one code path.

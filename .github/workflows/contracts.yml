@@ -26,8 +26,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev,db,obs,gen,api]"
+          bash scripts/install_locked.sh python
 
       - name: The committed spec must match the models it is generated from
         # docs/API_CONTRACTS.md §1: Pydantic models are the source of truth, and

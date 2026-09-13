@@ -344,11 +344,11 @@
       "id": "P3.pin-failfast",
       "phase": "3",
       "name": "A wrong Java, Spark, Delta, Hadoop, Scala or jar fails fast with an actionable message",
-      "status": "NOT_STARTED",
+      "status": "PASS",
       "evidence": {
-        "command": "pytest tests/unit/test_stream_toolchain.py && pytest -m stream tests/stream/test_session_failfast.py",
-        "verified_at": null,
-        "result": null
+        "command": "pytest tests/unit/test_stream_toolchain.py tests/unit/test_doctor.py tests/unit/test_toolchain_consistency.py && JAVA_HOME=$(python scripts/java_home.py) pytest -m stream tests/stream/test_session.py",
+        "verified_at": "2026-09-13",
+        "result": "Unit, no JVM (fake JDKs are real executables printing a JDK version banner): Java 25 refused with the JAVA_HOME fix, and the PATH fallback checked exactly as Spark's launcher resolves it; an installed pip at another version and an uninstalled distribution refused; Hadoop 3.3 and Scala 2.12 jars refused; one flipped bit in a locked jar refused; PYSPARK_SUBMIT_ARGS, SPARK_CONF_DIR and a foreign SPARK_HOME refused before any JVM; every failure listed in one ToolchainMismatchError; doctor FAILs (required) on Java 25 and on missing jars from Phase 3, refuses an unparseable phase, and exits non-zero when run under Java 25; an all-skipped `-m stream` session exits non-zero with the collection-guard message; every pip install in the Makefile, workflows, Dockerfiles and shell scripts is hash-checked or the project's own --no-deps install; every CI job installs from the lock before its tooling; the lock is complete for Linux x86_64, Linux aarch64 and macOS arm64; the gateway's runtime lock is exactly derived from the main lock. Real JVM on Temurin 17: a Spark 4.0.1 session reports Java 17, Scala 2.13.x and Hadoop 3.4.x from the running JVM; Delta's session extension and the Kafka source provider load from the SHA-256-verified jars; a Delta table round-trips at millisecond UTC event time; the Kafka connector resolves with no spark.jars.packages; an invalid cast raises under ANSI; a real installed Temurin 25 is refused in a fresh interpreter before pyspark.sql is imported; a JVM contradicting a pin is stopped and refused after launch. Linux: a hashed install of both locks in python:3.12-slim passes pip check, and the gateway image builds from its hashed runtime lock with pip check clean and no pyspark or pytest inside. Pending: the first GitHub CI run. ADR-0045."
       }
     },
     {

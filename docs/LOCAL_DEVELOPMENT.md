@@ -20,14 +20,19 @@
 
 ### The Java trap
 
-If `java -version` reports anything other than 17 or 21, Spark **will** fail with an opaque
-`UnsupportedClassVersionError`. On macOS:
+Spark 4.0.1 runs on Java 17 or 21 only, and this project pins **Temurin 17** (ADR-0018). On anything
+else Spark fails with an opaque `UnsupportedClassVersionError`.
+
+**`make` selects it for you** once Temurin 17 is installed: every target resolves `JAVA_HOME` through
+`scripts/java_home.py`, which confirms a JDK's version by running it rather than trusting its directory
+name. Outside `make` — a bare `pytest`, an IDE test runner — select it yourself. On macOS:
 
 ```bash
 export JAVA_HOME=$(/usr/libexec/java_home -v 17)
 ```
 
-Put it in your shell profile. `make doctor` warns until it is correct.
+From Phase 3, `make doctor` **fails** on any other Java, and `trace_core.stream.session.build_session`
+refuses to start a JVM on one, naming the fix (ADR-0045).
 
 ---
 
@@ -35,7 +40,7 @@ Put it in your shell profile. `make doctor` warns until it is correct.
 
 ```bash
 git clone <repo> && cd trace-x
-make setup      # venv + dev dependencies, creates .env from the template
+make setup      # venv, every dependency from the hashed locks, verified Spark jars, .env from the template
 make doctor     # preflight — fix anything it reports before continuing
 make up         # core profile: postgres, redis, gateway, then applies migrations
 make verify     # ★ canonical health check
@@ -47,6 +52,13 @@ cold Docker cache and is then reused. It also needs one service token in `.env` 
 
 `make verify` is the single command that answers "is this repository healthy?". Run it before claiming
 anything works, and after every change.
+
+**Dependencies are installed from hashed lockfiles, never from `pyproject.toml` ranges.**
+`scripts/install_locked.sh` is the only install path, and every CI job runs the same script. The first
+`make setup` builds pyspark from its source archive and downloads the Spark JVM jars pinned in
+`packages/trace_core/stream/jars.lock` into `~/.cache/trace-x/spark-jars` (override with
+`TRACE_SPARK_JARS_DIR`), verifying each by SHA-256; later runs reuse both. After changing a dependency,
+run `make lock` and review the lock diff.
 
 ---
 
@@ -169,7 +181,12 @@ without a `--result`.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `UnsupportedClassVersionError` from Spark | Java 25 (or 21+ mismatch) | `export JAVA_HOME=$(/usr/libexec/java_home -v 17)` |
+| `UnsupportedClassVersionError` from Spark | Java 25 (or 21+ mismatch) | Install Temurin 17; `make` selects it, or `export JAVA_HOME=$(/usr/libexec/java_home -v 17)` |
+| `ToolchainMismatchError` from `build_session` | The JVM, pyspark, Delta, Hadoop, Scala or a jar does not match its pin | The message lists every failed check with its fix; `make doctor` shows the same |
+| `does not match jars.lock` | A cached jar differs from its pinned SHA-256 | Delete it and run `make stream-jars`. Never edit `jars.lock` to match a download |
+| `THESE PACKAGES DO NOT MATCH THE HASHES` during install | The lock and the package index disagree | Do not bypass `--require-hashes`; regenerate deliberately with `make lock` and review the diff |
+| `BindException: Can't assign requested address` from Spark | The host name resolves to an address this machine cannot bind | Build sessions only through `build_session`, which binds local drivers to loopback |
+| `collection guard` failure after `pytest -m stream` | Every stream test was skipped (no Temurin 17, pyspark or verified jars) | `make setup`, select Temurin 17, re-run; a skip is not evidence |
 | `NoSuchMethodError` in Delta | Hadoop/Spark/Delta version drift | `make doctor` — pins must be 4.0.1 / 4.0.1 / 3.4.x |
 | `port is already allocated` | Another project holds the port | Change it in `.env`; `make doctor` lists conflicts |
 | Containers OOM-killed | Docker RAM too low for the profile | Raise Docker RAM, or use fewer profiles |

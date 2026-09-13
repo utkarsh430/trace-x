@@ -58,6 +58,7 @@ unimplemented regardless of how much code exists.
 | **Integration** | `integration` | testcontainers (PG, Redis, Kafka, Neo4j) | Repositories, streaming, tools — **real services, no mocks** | PR |
 | **Streaming recovery** | `integration`, `chaos` | testcontainers + kill | Checkpoint resume, no loss, no double-count | PR |
 | **Feature parity** | `parity` | pytest + Spark | Online (Redis) vs offline (Spark) on the same stream, tolerance-bounded | PR |
+| **Stream toolchain** | `stream` | pytest + a real Spark JVM | The pinned toolchain on a live session, Delta and the Kafka connector from verified jars, and refusal of a wrong JDK before a JVM starts. Skipped loudly without Temurin 17, pyspark or the jars — and a `-m stream` session that executes none of them **fails** | PR (`test-stream`) |
 | **Transport parity** | `transport_parity` | MCP client + in-process | Identical envelope, authz denial, rate limit, timeout, truncation, audit | PR |
 | **Agent (replay)** | `unit` | cassette adapter | Full LangGraph runs, deterministic, zero API cost | PR |
 | **Agent (live)** | `slow` | real provider | 20-investigation smoke against the real LLM | nightly + release |
@@ -99,7 +100,7 @@ Phase 2 added three more:
   how online/offline parity is proven without anyone redefining a feature (ADR-0032).
 
 ```bash
-make test-fast   # unit + property + contract + conformance + transport_parity  (< 5 min, no services)
+make test-fast   # unit + property + contract + conformance + transport_parity  (< 5 min, no services, no JVM)
 make test        # everything except cloud
 make verify      # ★ canonical: doctor + acceptance + claims + codegen + openapi + lint + types +
                  #   test-fast + bandit + secret-scan
@@ -173,6 +174,7 @@ These exist because a specific failure would be severe and silent.
 | `test-fast` | every push | unit, property, contract, conformance, transport parity |
 | `claims` | every push | `make check-claims` |
 | `test-integration` | PR | testcontainers, feature parity, agent replay, adversarial |
+| `test-stream` | PR | Temurin 17 and SHA-256-verified Spark jars; `pytest -m stream`, failing if no stream test executed (ADR-0045) |
 | `contracts` | PR | OpenAPI + event-schema breaking-change diff vs `main` |
 | `e2e` | nightly + release | full compose, real services, **no-mock grep assertion** |
 | `eval` | nightly + manual | Track A arms A–G, Track B E1–E5, manifest + tier gates, regression gate |

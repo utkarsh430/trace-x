@@ -6,6 +6,7 @@ say so LOUDLY. A silent skip is a false pass.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import sys
@@ -48,8 +49,30 @@ def docker_available() -> bool:
     return _docker_available()
 
 
+_STREAM_NODEIDS: set[str] = set()
+_STREAM_EXECUTED: list[str] = []
+
+
+def _stream_toolchain_failures() -> list[str]:
+    # Imported here: trace_core.stream.toolchain is stdlib-only, but the rest of
+    # the suite should not pay for inspecting a JDK it does not use.
+    from trace_core.stream import toolchain
+
+    return [f"{f.component}: {f.detail}" for f in toolchain.inspect_toolchain() if not f.ok]
+
+
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     """Skip resource-gated tests with an explicit, visible reason."""
+    stream_items = [item for item in items if item.get_closest_marker("stream") is not None]
+    _STREAM_NODEIDS.update(item.nodeid for item in stream_items)
+    if stream_items and (failures := _stream_toolchain_failures()):
+        reason = (
+            "SKIPPED (NOT PASSED): the Phase 3 JVM toolchain does not match its pins -- "
+            + "; ".join(failures)
+            + ". Run `make setup` (and select Temurin 17), then re-run."
+        )
+        for item in stream_items:
+            item.add_marker(pytest.mark.skip(reason=reason))
     if _docker_available():
         return
     reason = (
@@ -71,3 +94,31 @@ def pytest_report_header(config: pytest.Config) -> list[str]:
             "integration/chaos/e2e tests will SKIP, not pass."
         )
     return lines
+
+
+def pytest_runtest_logreport(report: pytest.TestReport) -> None:
+    if report.when == "call" and report.passed and report.nodeid in _STREAM_NODEIDS:
+        _STREAM_EXECUTED.append(report.nodeid)
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """A `-m stream` session that executed no stream test FAILS.
+
+    Loud skips are right for a developer without a JDK, and wrong as acceptance
+    evidence: a CI job whose every Spark test skipped reports green while proving
+    nothing about Spark (docs/PHASE3_PLAN.md §4.4). So when the marker expression
+    asks for stream tests, at least one must actually pass.
+    """
+    del exitstatus
+    expression = str(session.config.getoption("markexpr") or "")
+    if re.search(r"(?<!not )\bstream\b", expression) and not _STREAM_EXECUTED:
+        message = (
+            "\nFAILED (collection guard): `-m stream` selected no stream test that actually "
+            "executed. Skips are not evidence; see docs/PHASE3_PLAN.md §4.4.\n"
+        )
+        reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+        if reporter is not None:
+            reporter.write_line(message, red=True, bold=True)
+        else:
+            sys.stderr.write(message)
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
