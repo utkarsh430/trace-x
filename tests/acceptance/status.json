@@ -4,7 +4,7 @@
   "current_phase": "2",
   "current_phase_name": "Hot Path: Gateway, Rules, Online Features",
   "updated_at": "2026-09-12",
-  "last_verified_commit": "5c77025",
+  "last_verified_commit": "c86c6cd",
   "legend": {
     "NOT_STARTED": "No implementation exists.",
     "IN_PROGRESS": "Implementation started; acceptance evidence incomplete.",
@@ -181,7 +181,7 @@
       "evidence": {
         "command": "make load-gateway",
         "verified_at": "2026-09-12",
-        "result": "make verify 11/11 green; 1,323 tests pass (unit+contract+conformance+integration+chaos). POST /v1/transactions over HTTP with authentication, rate limiting, RFC 9457 problems, idempotency and triage. Canonical load gate PASSES at run_id load-20260912-gateway-550789bb on the representative profile: 499.97 TPS sustained of 500 offered, 0 dropped iterations, p50 1.696 ms and p99 14.248 ms against 20/100 ms budgets, 0 5xx, 0 4xx, 0 429, 0 degraded, 0 unparseable over 600 s on a clean tree. Scoring core p50 0.310 ms / p99 0.430 ms. Report benchmarks/gateway/REPORT.md."
+        "result": "make verify 11/11 green; 1,360 tests pass (unit+contract+conformance+integration+chaos). POST /v1/transactions over HTTP with authentication, rate limiting, RFC 9457 problems, idempotency and triage. Canonical load gate PASSES at run_id load-20260913-gateway-c86c6cdd on the representative profile against the ADR-0044 topology (noeviction feature store + disposable cache): 499.98 TPS sustained of 500 offered, 0 dropped iterations, p50 1.73 ms and p99 25.30 ms against 20/100 ms budgets, 0 5xx, 0 4xx, 0 429, 0 unparseable over 600 s on a clean tree; 0 feature-state evictions (feature store 548.1 MiB against the memory model's projected 548.0 MiB and a 704 MiB limit); 0 unexpected degradations (299,999 history_incomplete, which a cold store reports by design). Scoring core p50 0.344 ms / p99 0.708 ms. The earlier pass on the single-instance topology (run_id load-20260912-gateway-550789bb) is the measurement that exposed the eviction defect. Report benchmarks/gateway/REPORT.md."
       }
     },
     {

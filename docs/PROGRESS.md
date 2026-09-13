@@ -19,14 +19,19 @@ Gate: `docs/ROADMAP.md` § Phase 2.
 **All five Phase 2 capabilities PASS. All three exit conditions are met with recorded evidence.**
 Phase 0 and Phase 1 remain complete; nothing in either was weakened.
 
-`make verify` is **11/11 green**. **1,355 tests pass** across unit, contract, conformance,
+`make verify` is **11/11 green**. **1,360 tests pass** across unit, contract, conformance,
 integration and chaos, the integration and chaos layers against real PostgreSQL and Redis
 containers.
 
-**The canonical load gate passes**, `run_id: load-20260912-gateway-550789bb`, on a clean tree:
-499.97 TPS sustained of 500 offered, **0 dropped iterations**, **p50 1.696 ms** against a 20 ms
-budget, **p99 14.248 ms** against a 100 ms budget, **0 5xx / 0 4xx / 0 429**, 0 degraded, 0
-unparseable, over 600 s. Report: `benchmarks/gateway/REPORT.md`.
+**The canonical load gate passes on the corrected topology**, `run_id: load-20260913-gateway-c86c6cdd`,
+on a clean tree: 499.98 TPS sustained of 500 offered, **0 dropped iterations**, **p50 1.73 ms** against
+a 20 ms budget, **p99 25.30 ms** against a 100 ms budget, **0 5xx / 0 4xx / 0 429**, 0 unparseable,
+over 600 s — and the two correctness verdicts ADR-0044 added: **0 feature-state evictions** and
+**0 unexpected degradations** (every decision carried `history_incomplete`, which a cold store reports
+by design; nothing else). Feature store at end of run **548.1 MiB** against the model's projected
+548.0 MiB and the 704 MiB limit. Report: `benchmarks/gateway/REPORT.md`. The earlier pass on the
+single-instance topology (`run_id: load-20260912-gateway-550789bb`) stands as the measurement that
+exposed the eviction defect.
 
 **No target was moved to reach that.** The ROADMAP numbers are the ones it was measured against. What
 changed was the workload, a bug in the load generator, Redis persistence, and the measurement
@@ -114,7 +119,7 @@ Ollama not installed — blocks **Phase 6**. No AWS credentials — blocks **Pha
 
 | Condition | Evidence |
 |---|---|
-| Load report committed with real measured numbers | `benchmarks/gateway/REPORT.md`, `run_id: load-20260912-gateway-550789bb`. All nine exit conditions pass; `make check-claims` resolves every published figure |
+| Load report committed with real measured numbers | `benchmarks/gateway/REPORT.md`, `run_id: load-20260913-gateway-c86c6cdd`. All eleven conditions pass, including ADR-0044's two correctness verdicts; `make check-claims` resolves every published figure |
 | Degraded mode proven | `pytest -m chaos` — 6 passed. A real Redis container is **paused** under a live gateway; the hot path degrades to rules-only, answers 200 with `degraded=true`, never 5xx, and recovers without a restart. Its first run found a real 21.8 s request (ADR-0035) |
 | OpenAPI under the CI breaking-change gate | `scripts/openapi_diff.py` with the digest-pinned `oasdiff` image (ADR-0036, ADR-0037), two-sided self-test: a breaking fixture pair must be rejected and a compatible pair accepted |
 
@@ -144,10 +149,12 @@ Phase 1 closes at the commit that immediately follows this file, which changes o
 
 | Target | Budget | Result |
 |---|---|---|
-| Sustained throughput | 500 TPS | ✅ **met** — 499.97 TPS, 0 dropped (`run_id: load-20260912-gateway-550789bb`) |
-| p50 latency | < 20 ms | ✅ **met** — 1.696 ms |
-| p99 latency | < 100 ms | ✅ **met** — 14.248 ms |
+| Sustained throughput | 500 TPS | ✅ **met** — 499.98 TPS, 0 dropped (`run_id: load-20260913-gateway-c86c6cdd`) |
+| p50 latency | < 20 ms | ✅ **met** — 1.73 ms |
+| p99 latency | < 100 ms | ✅ **met** — 25.30 ms |
 | Zero 5xx over a 10-minute run | 0 | ✅ **met** — 0 over 600 s |
+| Feature-state evictions (ADR-0044) | 0 | ✅ **met** — 0; store at 548.1 MiB of 704 MiB |
+| Unexpected degradations (ADR-0044) | 0 | ✅ **met** — 0; 299,999 `history_incomplete` (cold store, by design) |
 
 Measured on the **representative** profile, whose entity model is derived from the frozen `eval-v1`
 manifest and whose population is derived from the offered rate so per-account velocity stays realistic
