@@ -685,9 +685,32 @@ Phase 3, in the wave order of `docs/PHASE3_PLAN.md` §5:
 2. **Step E Stage 2, in the approved order.**
    1. Done: amend and freeze `LPC-5` (revision 2).
    2. Done: integrate the Step E worktree; implement `LPC-5` with its §16 self-tests.
-   3. Next: show that eval-v1 fails the intended checks.
+   3. Done (diagnostic, not acceptance evidence): eval-v1, regenerated from its manifest with its
+      transaction digest verified, fails every §14.1 expectation on its named cell
+      (`eval/track_a/lpc5_control.py --manifest`; report in
+      `eval/track_a/audits/stage-2-evidence/lpc5-eval-v1-negative-control.txt`).
+      - **Scale.** A fast-lane-scale run first left the S3 slice-20 and S5b expectations unmet: with
+        so few instances their intervals are too wide to fail. §16.4 puts the controls at
+        acceptance scale, and there both fail as intended.
+      - **Predicted for eval-v2** from the same report, to confirm or refute in step 9:
+        - **AHV-4 (`mcc_habitual`).** eval-v1 picks an unhabitual *merchant*, but the documented
+          signature is "a merchant category it never uses". Step 6 draws the merchant from
+          categories the account never uses. This implements the documented mechanism; no
+          threshold changes.
+        - **MC-5 (`mcc_habitual`, from the `MCC_ANOMALY` key).** Payers drawn without regard to
+          category use a habitual category about as often as not, and frozen G6 draws payers by
+          amount only. MC-5's E_min looks unreachable. If step 9 confirms it, the choice between a
+          criterion revision and a generator rule goes to the user.
+        - **DF-5 (`device_age` in `first-use`, `<1h`).** G5 spreads a device farm over up to a day,
+          so an account's second transaction usually comes more than an hour after its first.
+          DF-5's E_min looks unreachable under G5; same route.
+        - **Cost.** The pure-Python evaluation is slow and memory-heavy at acceptance scale, and
+          eval-v2 adds the identity, device and outcome streams. Watched in step 9; optimised only
+          if it blocks a run.
    4. Folded into step 2: `LPC-5` §5.4 carries R7–R9, and the partial LPC-4 module is retired.
-   5. Record the Q1 extension.
+   5. Done: record the Q1 extension as ADR-0050 (Proposed). It also records G1–G7 and the eval-v2
+      causal-key sets. The card-testing `DEVICE_SHARING` removal is flagged for the user's
+      confirmation.
    6. M4–M6 and N1–N11 behind the gate.
    7. U7/N12 (ADR-0049).
    8. Ablation controls.
