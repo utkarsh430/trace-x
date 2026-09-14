@@ -122,7 +122,8 @@ def main(argv: list[str] | None = None) -> int:
     home_withdrawn: list[str] = []
     identity_types: collections.Counter[str] = collections.Counter()
     transactions = 0
-    for occurred, topic, record in replay.load_streams(args.dataset_dir, limit=args.limit):
+    events, _ = replay.load_streams(args.dataset_dir, limit=args.limit)
+    for occurred, topic, record in events:
         payload = record["payload"]
         if topic == "identity.events.v1":
             identity_types[str(payload.get("identity_event_type"))] += 1

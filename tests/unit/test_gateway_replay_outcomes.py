@@ -229,3 +229,52 @@ def test_the_report_says_where_the_outcomes_came_from() -> None:
     assert "| `REVERSED` | 2 |" in report
     for topic in STREAMS:
         assert f"| `{topic}` |" in report
+
+
+def test_decisions_are_written_one_line_each_without_labels(tmp_path: Path) -> None:
+    from eval.replay.gateway_replay import Replayed, write_decisions
+
+    decisions = [
+        Replayed(
+            "tx_1",
+            "HIGH",
+            0.9,
+            "FLAG",
+            ("R010_device_shared_across_accounts",),
+            False,
+            (),
+            "ONLINE_ONLY",
+        ),
+        Replayed("tx_2", "LOW", 0.0, "APPROVE", (), True, ("history_incomplete",), "ONLINE_ONLY"),
+    ]
+    path = tmp_path / "decisions.jsonl"
+    write_decisions(path, decisions)
+    lines = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    assert [line["transaction_id"] for line in lines] == ["tx_1", "tx_2"]
+    assert lines[0]["fired_rules"] == ["R010_device_shared_across_accounts"]
+    assert not any("label" in key or "fraud" in key for line in lines for key in line)
+
+
+class _FakeStore:
+    def __init__(self, keys: list[str]) -> None:
+        self.data: dict[str, object] = dict.fromkeys(keys, "x")
+
+    def scan_iter(self, count: int = 100) -> list[str]:
+        del count
+        return list(self.data)
+
+    def set(self, key: str, value: object) -> None:
+        self.data[key] = value
+
+
+def test_vouching_sets_the_epoch_only_on_an_empty_store_without_open_holes() -> None:
+    from eval.replay.gateway_replay import EPOCH_KEY, vouch
+
+    fresh = _FakeStore([EPOCH_KEY])
+    vouch(fresh, epoch_ms=1_000, open_holes=0)
+    assert fresh.data[EPOCH_KEY] == 1_000
+
+    with pytest.raises(SystemExit, match="not empty"):
+        vouch(_FakeStore([EPOCH_KEY, "f:acct:x"]), epoch_ms=1_000, open_holes=0)
+    with pytest.raises(SystemExit, match="open feature-store hole"):
+        vouch(_FakeStore([]), epoch_ms=1_000, open_holes=1)

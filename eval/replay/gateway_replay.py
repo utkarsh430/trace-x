@@ -72,7 +72,7 @@ import sys
 import uuid
 from collections import Counter
 from collections.abc import Iterator
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
@@ -398,6 +398,49 @@ def replay(
     return replayed, posted
 
 
+EPOCH_KEY: Final = "f:epoch"
+"""The online feature store's completeness epoch (`RedisOnlineFeatureStore.epoch_key`)."""
+
+
+def vouch(store: Any, *, epoch_ms: int, open_holes: int) -> None:
+    """Make an empty feature store vouch for a whole replay, from `epoch_ms`.
+
+    The gateway dates the epoch when it starts, or at its first write if absent, so a replay of
+    history onto a fresh store reads every earlier window as incomplete and every profile rule
+    abstains. An empty store that records every replayed observation from the first is complete
+    from the dataset's own start, so the epoch is set there, before anything is posted.
+
+    Refused unless the claim is true: the store holds nothing but a start-up epoch, and no hole is
+    open (the gateway would move the epoch past it)."""
+    if open_holes:
+        raise SystemExit(
+            f"refused to vouch: {open_holes} open feature-store hole(s), which the gateway "
+            f"would move the epoch past"
+        )
+    others = [key for key in store.scan_iter(count=100) if _text_key(key) != EPOCH_KEY]
+    if others:
+        raise SystemExit(
+            f"refused to vouch: the feature store is not empty ({len(others)} key(s) besides the "
+            f"epoch, e.g. {_text_key(others[0])!r}); flush it before replaying"
+        )
+    store.set(EPOCH_KEY, epoch_ms)
+
+
+def _text_key(key: Any) -> str:
+    return key.decode() if isinstance(key, bytes) else str(key)
+
+
+def write_decisions(path: Path, replayed: list[Replayed]) -> None:
+    """One JSON line per replayed decision, in replay order, before any label is joined.
+
+    Kept so a later analysis (the R010 threshold study) can recompute a band from the rules that
+    fired without replaying again; it holds no label."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as out:
+        for decision in replayed:
+            out.write(json.dumps(asdict(decision), sort_keys=True) + "\n")
+
+
 FEATURE_BEARING_DEGRADATIONS: Final = frozenset({"redis_unavailable"})
 """Degraded reasons that actually mean the features could not be read.
 
@@ -624,6 +667,25 @@ def main() -> int:
         help="The dataset's generation run manifest. Its seed dates derived outcomes by DM-1 when "
         "the dataset has no tx.authorization.v1 stream (ADR-0049 §7).",
     )
+    parser.add_argument(
+        "--report",
+        type=Path,
+        default=REPORT,
+        help="Where the markdown report is written (eval-v1's manual replay by default).",
+    )
+    parser.add_argument(
+        "--decisions",
+        type=Path,
+        default=None,
+        help="Also write every decision, unlabelled, as JSON lines.",
+    )
+    parser.add_argument(
+        "--vouch-from-manifest",
+        type=Path,
+        default=None,
+        help="The frozen dataset manifest: make the empty feature store vouch for the replay from "
+        "its window start, shifted as the events are.",
+    )
     args = parser.parse_args()
 
     # A run record names the feature set its values were computed with. While the online
@@ -668,7 +730,35 @@ def main() -> int:
     )
     print(f"event-time shift: +{int(delta.total_seconds()):,}s   projection id: {fingerprint}")
 
+    store_note = "not vouched: a fresh store dates its epoch when the gateway starts"
+    if args.vouch_from_manifest is not None:
+        import psycopg
+        import redis
+
+        frozen = json.loads(args.vouch_from_manifest.read_text(encoding="utf-8"))
+        if frozen.get("dataset_version") != args.dataset_version:
+            print(
+                f"refused: {args.vouch_from_manifest} describes {frozen.get('dataset_version')!r}",
+                file=sys.stderr,
+            )
+            return 2
+        window_start = _parse(frozen["config"]["start_at"]) + delta
+        epoch_ms = int(window_start.timestamp() * 1000)
+        with psycopg.connect(_eval_dsn()) as conn:
+            row = conn.execute(
+                "SELECT count(*) FROM app.feature_store_holes WHERE cleared_at IS NULL"
+            ).fetchone()
+        store = redis.Redis(
+            host=os.environ.get("REDIS_HOST", "localhost"),
+            port=int(os.environ.get("REDIS_PORT", "6389")),
+            db=int(os.environ.get("REDIS_DB", "0")),
+        )
+        vouch(store, epoch_ms=epoch_ms, open_holes=int(row[0]) if row else 0)
+        store_note = f"vouched from the shifted window start, {_iso(window_start)}"
+    print(f"feature store: {store_note}")
     replayed, posted = replay(shifted, base_url=args.base_url)
+    if args.decisions is not None:
+        write_decisions(args.decisions, replayed)
     blind, reasons = _degradation_summary(replayed)
     if blind:
         print(
@@ -695,10 +785,11 @@ def main() -> int:
         blind=blind,
         outcome_source=outcome_source,
     )
-    REPORT.parent.mkdir(parents=True, exist_ok=True)
-    REPORT.write_text(report)
+    report += f"\n**Feature store:** {store_note}.\n"
+    args.report.parent.mkdir(parents=True, exist_ok=True)
+    args.report.write_text(report)
     print(report)
-    print(f"written: {REPORT.relative_to(ROOT)}   ({dt.datetime.now(dt.UTC):%Y-%m-%dT%H:%M:%SZ})")
+    print(f"written: {args.report}   ({dt.datetime.now(dt.UTC):%Y-%m-%dT%H:%M:%SZ})")
     return 0
 
 

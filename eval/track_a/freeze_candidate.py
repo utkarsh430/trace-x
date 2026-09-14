@@ -49,10 +49,29 @@ from trace_core.domain.enums import FraudPattern
 ROOT: Final = Path(__file__).resolve().parents[2]
 EVAL_V1: Final = ROOT / "eval" / "track_a" / "eval-v1.manifest.json"
 CANDIDATE = ROOT / "eval" / "track_a" / "eval-v2.candidate.manifest.json"
+FINAL = ROOT / "eval" / "track_a" / "eval-v2.manifest.json"
+ACCEPTANCE_EVIDENCE: Final = "eval/track_a/audits/stage-2-evidence/lpc5-eval-v2-acceptance-rev4.txt"
+LPC5_CATEGORY_B: Final = (
+    "documented behavioural consequences outside revision 4's declared values: takeover and "
+    "high-value merchant effects, velocity and card-testing burst effects, device-history "
+    "availability before the feature horizon, findings inside allowlisted strata, and judged "
+    "compositions"
+)
+LPC5_CATEGORY_C: Final = (
+    "support short of thirty legitimate rows for two rare burst values, the MC-1 and MC-2 minimum "
+    "effect near misses, and chance cells (high-value amount digits, calendar and merchant-code "
+    "cells concentrated in a few instances)"
+)
 DATASET_VERSION: Final = "eval-v2"
 COVERAGE_FLOOR_DISCLOSURE: Final = (
     "G2 added instances to patterns below 20: this dataset's scenario mix is a coverage floor, "
     "not natural prevalence (LPC-5 §14.4)."
+)
+DISCLOSURES: Final = (
+    "eval-v2 is not LPC-5 compliant: strict acceptance under revision 4 is FAIL, with zero "
+    "Category A (correctness, leakage or representation) findings.",
+    COVERAGE_FLOOR_DISCLOSURE,
+    "No natural fraud prevalence may be claimed from eval-v2.",
 )
 
 
@@ -151,6 +170,76 @@ def mismatches(
     ]
 
 
+def finalize(run_record: Path, dataset_dir: Path) -> dict[str, Any]:
+    """The frozen eval-v2 manifest: the candidate's contract, the materialised files and their
+    provenance, and LPC-5's recorded outcome with its disclosures (Stage 2 step 12).
+
+    Refused unless the materialisation reproduced the candidate on a clean tree."""
+    candidate = json.loads(CANDIDATE.read_text(encoding="utf-8"))
+    record = json.loads(run_record.read_text(encoding="utf-8"))
+    problems = [
+        f"{key}: candidate {candidate.get(key)!r}, run record {record.get(key)!r}"
+        for key in (
+            "dataset_version",
+            "fraud_scenario_config_digest",
+            "dataset_digest",
+            "row_count",
+        )
+        if candidate.get(key) != record.get(key)
+    ]
+    if record.get("dirty_worktree") is not False:
+        problems.append("the materialisation ran on a dirty worktree, so it could not be cited")
+    files = {
+        path.name: {
+            "bytes": path.stat().st_size,
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        }
+        for path in sorted(dataset_dir.glob("*.parquet"))
+    }
+    expected = {f"{topic}.parquet" for topic in candidate["streams"]}
+    if set(files) != expected:
+        problems.append(f"files: expected {sorted(expected)}, found {sorted(files)}")
+    if problems:
+        raise ValueError("; ".join(problems))
+    return {
+        **candidate,
+        "$comment": (
+            "The frozen eval-v2 dataset's reproduction contract (Stage 2 step 12). The dataset is "
+            "gitignored; this manifest, the candidate manifest and the materialisation run record "
+            "are what is committed. eval-v2 is NOT LPC-5 compliant: see lpc5 and disclosures."
+        ),
+        "candidate_manifest": "eval/track_a/eval-v2.candidate.manifest.json",
+        "candidate_run_id": candidate["run_id"],
+        "run_id": record["run_id"],
+        "materialised_at": record["finished_at"],
+        "materialisation": {
+            "git_commit_sha": record["git_commit_sha"],
+            "dirty_worktree": record["dirty_worktree"],
+            "env_lock_digest": record["env_lock_digest"],
+            "python_version": record["python_version"],
+        },
+        "files": files,
+        "lpc5": {
+            "criterion": candidate["criterion"],
+            "strict_acceptance": "FAIL",
+            "category_a_findings": 0,
+            "compliant": False,
+            "evidence": ACCEPTANCE_EVIDENCE,
+            "category_b": LPC5_CATEGORY_B,
+            "category_c": LPC5_CATEGORY_C,
+            "acceptance_scale_controls": (
+                "deferred evaluation hardening (user decision, 2026-09-14); not required for "
+                "Phase 3"
+            ),
+        },
+        "disclosures": list(DISCLOSURES),
+        "regenerate": (
+            'make seed ARGS="--manifest eval/track_a/eval-v2.candidate.manifest.json '
+            '--sink parquet --out data/generated"'
+        ),
+    }
+
+
 def _refusal() -> str | None:
     if is_dirty():
         return "the worktree is dirty, so the frozen candidate could not be cited"
@@ -166,8 +255,29 @@ def main(argv: list[str] | None = None) -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument("--check", action="store_true", help="regenerate and compare")
+    parser.add_argument(
+        "--finalize",
+        action="store_true",
+        help="write the frozen eval-v2 manifest from a materialisation run record",
+    )
+    parser.add_argument("--run-record", type=Path, help="the materialisation's run record")
+    parser.add_argument("--dataset-dir", type=Path, help="the materialised parquet directory")
     args = parser.parse_args(argv)
     out = sys.stdout
+    if args.finalize:
+        if args.run_record is None or args.dataset_dir is None:
+            parser.error("--finalize needs --run-record and --dataset-dir")
+        if FINAL.exists():
+            out.write(f"refused: a frozen manifest is never re-written in place: {FINAL}\n")
+            return 2
+        try:
+            final = finalize(args.run_record, args.dataset_dir)
+        except ValueError as exc:
+            out.write(f"refused: {exc}\n")
+            return 2
+        FINAL.write_text(json.dumps(final, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        out.write(f"written: {FINAL}\n")
+        return 0
     if args.check:
         frozen = json.loads(CANDIDATE.read_text(encoding="utf-8"))
         config = GeneratorConfig.from_mapping(frozen["config"])

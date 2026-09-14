@@ -145,3 +145,62 @@ def test_the_acceptance_run_verifies_every_stream_before_any_check(
     target.write_text(json.dumps(manifest), encoding="utf-8")
     assert lpc5_control.main(argv) in (0, 1)
     assert "candidate stream digests: verified (4 streams)" in capsys.readouterr().out
+
+
+def test_finalize_records_files_provenance_and_the_lpc5_outcome(
+    target: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Step 12: the frozen manifest adds the materialised files, the materialisation's provenance
+    and LPC-5's recorded outcome, and refuses a materialisation that does not match or ran dirty."""
+    from data.generator import cli
+    from typer.testing import CliRunner
+
+    assert freeze.main([]) == 0
+    final = tmp_path / "eval-v2.manifest.json"
+    monkeypatch.setattr(freeze, "FINAL", final)
+    candidate = json.loads(target.read_text(encoding="utf-8"))
+    out, records = tmp_path / "out", tmp_path / "records"
+    result = CliRunner().invoke(
+        cli.app,
+        [
+            "--manifest",
+            str(target),
+            "--sink",
+            "parquet",
+            "--no-groundtruth",
+            "--out",
+            str(out),
+            "--record-dir",
+            str(records),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    (record_path,) = records.glob("*.json")
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    record["dirty_worktree"] = False
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+    dataset_dir = out / candidate["dataset_version"]
+    argv = ["--finalize", "--run-record", str(record_path), "--dataset-dir", str(dataset_dir)]
+
+    assert freeze.main(argv) == 0
+    manifest = json.loads(final.read_text(encoding="utf-8"))
+    assert set(manifest["files"]) == {f"{topic}.parquet" for topic in candidate["streams"]}
+    assert manifest["run_id"] == record["run_id"]
+    assert manifest["candidate_run_id"] == candidate["run_id"]
+    assert manifest["streams"] == candidate["streams"]
+    assert manifest["lpc5"]["strict_acceptance"] == "FAIL"
+    assert manifest["lpc5"]["category_a_findings"] == 0
+    assert manifest["lpc5"]["compliant"] is False
+    assert any("not LPC-5 compliant" in line for line in manifest["disclosures"])
+    assert any("natural fraud prevalence" in line for line in manifest["disclosures"])
+    assert freeze.main(argv) == 2  # never re-written in place
+
+    final.unlink()
+    record["dataset_digest"] = "sha256:" + "0" * 64
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+    assert freeze.main(argv) == 2
+    record["dataset_digest"] = candidate["dataset_digest"]
+    record["dirty_worktree"] = True
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+    assert freeze.main(argv) == 2
+    assert not final.exists()
