@@ -68,7 +68,9 @@ TOKEN = f"psp-one.{SECRET}"
 READ_DELAY_S: Final = 0.010
 """Added to the feature read, which is INSIDE scoring."""
 WRITE_DELAY_S: Final = 0.010
-"""Added to the observe-write, which is inside the request and OUTSIDE scoring."""
+"""Added to the replay-cache write, which is inside the request and OUTSIDE scoring. (The
+feature-store write is no longer a separate step: since ADR-0046 it is part of the atomic
+scoring read, so it sits on the other side of the boundary.)"""
 CLOCK_SLACK_S: Final = 0.001
 """Timer granularity. `time.sleep` is a lower bound only in principle; a
 millisecond of slack is an order of magnitude below either delay, so it cannot
@@ -86,27 +88,35 @@ the dashboard would once again be told two different things."""
 
 
 class _SlowStore:
-    """A feature store with a deliberate delay on BOTH sides of the scoring boundary.
-
-    Two delays, because one cannot tell the instruments apart. With only a slow
-    read, a scoring instrument that had silently widened to the whole request
-    would trail the request instrument by microseconds of framework overhead --
-    an amount `request > scoring` could pass on by luck and a slower runner could
-    not be trusted to reproduce. With the write delayed as well, the gap between
-    the two instruments is `WRITE_DELAY_S` wherever the boundary is right and
-    ~0 wherever it is wrong.
-    """
+    """A feature store whose atomic scoring read is deliberately slow: INSIDE scoring."""
 
     def __init__(self) -> None:
         self.inner = ReferenceFeatureStore()
 
-    def snapshot(self, **kwargs: Any) -> Any:
+    def score(self, event: Any) -> Any:
         time.sleep(READ_DELAY_S)
+        return self.inner.score(event)
+
+    def snapshot(self, **kwargs: Any) -> Any:
         return self.inner.snapshot(**kwargs)
 
-    def observe(self, event: Any) -> None:
+
+class _SlowReplayCache:
+    """A replay cache whose write is deliberately slow: inside the request, OUTSIDE scoring.
+
+    Two delays, one on each side of the boundary, because one cannot tell the instruments
+    apart. With only a slow read, a scoring instrument that had silently widened to the whole
+    request would trail the request instrument by microseconds of framework overhead -- an
+    amount `request > scoring` could pass on by luck. With the cache write delayed as well, the
+    gap between the two instruments is `WRITE_DELAY_S` wherever the boundary is right and ~0
+    wherever it is wrong.
+    """
+
+    def lookup(self, idempotency_key: str, payload: object) -> None:
+        return None
+
+    def remember(self, idempotency_key: str, payload: object, response: str) -> None:
         time.sleep(WRITE_DELAY_S)
-        self.inner.observe(event)
 
 
 def _client() -> TestClient:
@@ -130,6 +140,7 @@ def _client() -> TestClient:
             feature_store=_SlowStore(),
         ),
         metrics=HotPathMetrics(),
+        idempotency=_SlowReplayCache(),  # type: ignore[arg-type]
     )
     return TestClient(create_app(state))
 
@@ -264,7 +275,7 @@ def test_request_latency_strictly_exceeds_scoring_latency() -> None:
     )
     assert request.total - scoring.total >= WRITE_DELAY_S - CLOCK_SLACK_S, (
         f"{REQUEST_LATENCY} ({request.total:.6f}s) exceeds {TX_SCORE_LATENCY} "
-        f"({scoring.total:.6f}s) by less than the {WRITE_DELAY_S}s the observe-write slept. "
+        f"({scoring.total:.6f}s) by less than the {WRITE_DELAY_S}s the replay-cache write slept. "
         f"The write happens after the decision and inside the request, so either the scoring "
         f"instrument has widened to include it -- the original defect -- or the request "
         f"instrument has narrowed to exclude it. Both instruments now describe one span."

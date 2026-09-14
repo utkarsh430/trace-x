@@ -7,13 +7,14 @@ asserted as a literal table: a change to any of them is a change of meaning, and
 
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 from typing import Final
 
 import pytest
 
 from trace_core.contracts.canonical import CanonicalField
-from trace_core.domain.enums import IdentityEventType
+from trace_core.domain.enums import AuthorizationOutcome, IdentityEventType
 from trace_core.domain.time import event_time
 from trace_core.features import FEATURE_SET_VERSION
 from trace_core.features.context import INSUFFICIENT_HISTORY
@@ -161,6 +162,31 @@ def test_the_reference_store_reports_positions_and_recognises_redeliveries() -> 
     assert store.observe(second) == ObserveReceipt(position=2, recorded=True)
     assert store.score(first).receipt == ObserveReceipt(position=2, recorded=False)
     assert len(store.events) == 2
+
+
+def test_a_redelivery_carrying_another_observation_is_reported_as_conflicting() -> None:
+    """The first delivery stays the observation either way. The receipt says whether this one
+    agreed with it, so a caller never evaluates its own payload against another's context."""
+    store = ReferenceFeatureStore()
+    first = _tx("tx_1", -20)
+    store.observe(first)
+    same_millisecond = dataclasses.replace(
+        first, occurred_at=event_time(first.occurred_at + dt.timedelta(microseconds=400))
+    )
+    assert store.observe(same_millisecond) == ObserveReceipt(position=1, recorded=False)
+    learned = dataclasses.replace(first, authorization_outcome=AuthorizationOutcome.REVERSED)
+    assert not store.observe(learned).conflicting, "a post-decision field is not the observation"
+    for changed in (
+        dataclasses.replace(first, account_id="acct_000002"),
+        dataclasses.replace(first, amount_minor=first.amount_minor + 1),
+        dataclasses.replace(
+            first, occurred_at=event_time(first.occurred_at + dt.timedelta(milliseconds=1))
+        ),
+    ):
+        assert store.observe(changed) == ObserveReceipt(
+            position=1, recorded=False, conflicting=True
+        )
+    assert store.events == (first,)
 
 
 def test_a_read_only_snapshot_does_not_contain_the_transaction_it_would_have_scored() -> None:

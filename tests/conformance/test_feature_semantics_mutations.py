@@ -490,8 +490,8 @@ MUTANTS: Final[tuple[Mutant, ...]] = (
         (
             (
                 "reference",
-                "            return ObserveReceipt(position=len(self._log), recorded=False)",
-                "            self._log[self._log.index(self._recorded[event.identity])] = event\n            self._recorded[event.identity] = event\n            return ObserveReceipt(position=len(self._log), recorded=False)",
+                "            return ObserveReceipt(\n                position=len(self._log),\n                recorded=False,",
+                "            self._log[self._log.index(self._recorded[event.identity])] = event\n            self._recorded[event.identity] = event\n            return ObserveReceipt(\n                position=len(self._log),\n                recorded=False,",
             ),
         ),
         "test_a_redelivery_counts_once_and_the_first_delivery_is_the_observation",
@@ -511,7 +511,13 @@ MUTANTS: Final[tuple[Mutant, ...]] = (
     ),
     Mutant(
         "a store that does not deduplicate",
-        (("reference", "        if event.identity in self._recorded:\n", "        if False:\n"),),
+        (
+            (
+                "reference",
+                "        if (first := self._recorded.get(event.identity)) is not None:\n",
+                "        if (first := self._recorded.get(event.identity)) is not None and False:\n",
+            ),
+        ),
         "test_a_redelivery_counts_once_and_the_first_delivery_is_the_observation",
         modes=("served",),
     ),
@@ -544,8 +550,8 @@ MUTANTS: Final[tuple[Mutant, ...]] = (
         (
             (
                 "reference",
-                "        if event.identity in self._recorded:\n",
-                "        if event.event_id in self._recorded:\n",
+                "        if (first := self._recorded.get(event.identity)) is not None:\n",
+                "        if (first := self._recorded.get(event.event_id)) is not None:\n",
             ),
             (
                 "reference",

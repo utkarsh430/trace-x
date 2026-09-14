@@ -382,70 +382,71 @@ both reports.
 
 ## WORK IN PROGRESS
 
-* **Step 1 — feature semantics (lead): first half done locally, not committed.** The critic
-  approved it with changes. Every finding has been addressed, and a second critic pass is due before
-  the commit.
-  * **Declared in `trace_core.features`** (ADR-0046, Proposed):
-    * per-feature self-inclusion, and the two evaluation modes;
-    * per-stream identities and the declared order;
-    * a redelivery read as its first delivery;
-    * the sign of a zero-MAD z-score;
-    * per-feature parity comparators;
-    * post-decision fields, and the identity-event streams.
-  * **Tests:**
-    * the reference implements both modes and passes the hand-derived literal fixtures;
-    * a mutation self-test holds 58 mutants across the reference, its shared arithmetic and the
-      definitions, and counts only failed feature expectations. Its reach is the reference;
-      the Redis store and Spark are held to the fixtures, not the mutants;
-    * property tests check that the two modes agree, including on histories built to reach
-      lifetime gaps, robust z-scores and overflowing home samples. They cannot catch a rule broken
-      identically in both modes.
-  * **Gateway:** identity events feed only their declared streams, and their ids are minted by the
-    gateway rather than taken from `X-Request-Id`.
-  * **Completeness guard:** a lost observation opens a durable hole ledger entry (migration 0004).
-    The guard is implemented and tested against PostgreSQL, but not yet wired into the gateway.
-    Clearing covers only holes recorded before the withdrawal, and `trace_app` cannot rewrite a
-    hole. Identity and device events more than 24 h ahead are now refused, so the resume margin
-    covers every recorded stream.
-  * **Run guard:** `SERVED_FEATURES_CONFORM` is false, so the load harness and the gateway replay
-    refuse to produce a record; `FEATURE_SET_VERSION` 2.0.0 is not yet what the gateway serves.
-  * **Not done yet:**
-    * the Redis store's conformance (34 strict expected failures below);
-    * the gateway's atomic score-time read and the guard's wiring;
-    * `X-Idempotency-Key` identities for identity events, a precondition of serving the new
-      semantics: until then a retried identity event counts again;
-    * the Phase 2 load gate, manual replay and rule re-validation on the new values.
-* **Step 2 — Kafka platform (Kafka agent).** Implemented in its worktree. The critic approved it
-  with changes; the blocker is that the fault overlay's "paced" replay publishes as fast as it can,
-  so clean records arrive late. The agent is fixing the findings.
-* **Step 3 — Delta spike and lake conventions (Delta agent).** Implemented in its worktree. The
-  critic approved it with changes. The blockers:
-  * `failOnDataLoss=false` loses rows in a query that is already running;
-  * the scan metric reports selected file sizes, not bytes read.
+* **Step 1 — feature semantics and online-store correctness (lead).**
+  * **Step 1a is committed** (`1ecd6a5`). ADR-0046 (Proposed) declares the semantics. The reference
+    implements both evaluation modes and passes the hand-derived literal fixtures; 58 mutants and the
+    mode-agreement properties keep the fixtures honest. The durable hole ledger (migration 0004) and
+    the run guard landed with it.
+  * **Step 1b is implemented and verified locally; not yet committed at the time of writing.**
+    * **The Redis store conforms.** One Lua script records the scored transaction and reads its
+      context atomically, and Redis refuses it whole when full. All 66 literal fixtures pass as
+      served, so the 34 strict expected failures are gone. Account history is kept raw for 25 hours
+      and reduced by the reference's own code, then folded in event-time order into a bounded
+      profile prefix.
+    * **Identity is store-wide.** A redelivery naming another account is still a redelivery. One
+      carrying a different observation is reported as conflicting, and the gateway decides it
+      rules-only with `observation_conflict` instead of evaluating it against another payload's
+      context.
+    * **A read behind the store's retention is absent, not a lower bound**, and its context stops
+      vouching for the windows the store no longer holds.
+    * **Merchant sums are exact at the released amount bound**: kept as base-1e9 limbs, because the
+      square of the largest amount overflows `HINCRBY` and a failed script is not rolled back.
+    * **The completeness guard is wired** into scoring and identity/device ingress. A refused,
+      unreachable or breaker-skipped write records one hole per episode, and a restarted gateway
+      inherits it and moves the epoch past it (`tests/chaos/test_feature_store_holes.py`).
+    * **Identity events accept `X-Idempotency-Key`**, so their retries are recognised.
+    * **New tests:** seeded months-long histories against the reference, with reach assertions
+      (folding, lifetime gaps, redeliveries, reads behind retention); eight concurrent writers
+      replayed in receipt order; all-or-nothing refusal on a real `noeviction` Redis.
+    * `SERVED_FEATURES_CONFORM` is true: all four of ADR-0046 §5's conditions hold.
+  * **Not done yet:** the Phase 2 load gate, manual replay and rule re-validation on feature set
+    2.0.0, against a rebuilt gateway image. Thresholds stay as declared; a legitimate-traffic
+    regression is reported, not tuned away.
+  * **Known limits and risks, recorded rather than resolved:**
+    * A score decodes its account's last 25 hours in the gateway, so scoring cost grows with the
+      account's velocity. A diagnostic measurement without a `run_id` showed it material for
+      accounts with thousands of transactions a day, which an adversary controls. Step 12 measures
+      it with a `run_id`; pre-aggregating account windows inside the script is the fallback design.
+    * The memory model (`run_id: bench-20260913-memory-model-5c770259`) describes the Phase 2
+      layout, not this one. Memory is re-measured in Step 12.
+    * The script spans several entities' keys, so the store runs on one Redis instance, not a
+      Cluster (Phase 12).
+    * Key expiry is wall-clock garbage collection, sized for event time advancing at least as fast
+      as the clock. That holds for the live gateway, the load harness and the time-shifted replay.
+    * A running gateway learns of another instance's hole only when that instance withdraws it. One
+      gateway runs locally; several instances need plan §4.1's writer fencing (Step 4).
+* **Execution is single-agent from 2026-09-13**, at the user's instruction, to conserve usage.
+  Implementation, integration and critic-style self-review run in sequence, and the lead integrates
+  the worktrees below itself.
+* **Step 2 — Kafka platform.** Implemented in its worktree, with every first-pass critic finding
+  fixed; the second critic pass did not run. Awaits the lead's self-review and integration: docs,
+  Makefile targets and the integration collection guard.
+* **Step 3 — Delta spike and lake conventions.** Implemented in its worktree, with every first-pass
+  critic finding fixed; the second critic pass did not run. Awaits the lead's self-review and
+  integration. The snake_case naming of lake tables needs a user decision (U9).
+* **Step E — `eval-v2`.** Stages 1, 1b and 1c are complete in its worktree:
+  * legitimate identity, device and decline activity;
+  * planted-row markers removed;
+  * label-proxy criteria LPC-1 to LPC-3 declared before any gated run. The `eval-v1` negative
+    control fails them for the proxy reason, and gate-off output is byte-identical.
 
-  The agent is fixing the findings. The snake_case naming of lake tables needs a user decision (U9).
-* **Step E — `eval-v2` (generator agent).** Stages 1 and 1b are complete in its worktree:
-  * legitimate identity and device activity, and legitimate declines;
-  * sub-second planted timestamps and legitimate new-device spend;
-  * two label-proxy criteria declared before any gated run. The `eval-v1` negative control fails them
-    for the proxy reason, and gate-off output is byte-identical.
-
-  Stage 1c is removing three more planted-row markers. Stage 2, generation and freeze, waits for the
-  critic's review and for U7.
+  Stage 1d, the systematic label-proxy audit, has started and is unreviewed. Stage 2 waits for U7.
 
 ## CURRENTLY FAILING TESTS
 
 **None unexpected.** Deliberate expected failures:
 
 * The generation-throughput budget, discussed above.
-* **34 strict `xfail`s in `tests/integration/test_feature_semantics_redis.py`.** These are the
-  ADR-0046 literal fixtures the Phase 2 Redis store does not satisfy.
-  * Each is recorded with the exact set of features it diverges on. A different set, whether a new
-    divergence or a partial fix, fails the test.
-  * Each is tagged as a store defect or as an artefact of the harness emulating a score-time read on
-    a store that has none.
-  * They run in CI's `test-integration` job, not in `make verify`.
-  * Owned by Step 1's online-store work.
 
 ---
 
@@ -499,11 +500,13 @@ both reports.
 
 Phase 3, in the wave order of `docs/PHASE3_PLAN.md` §5:
 
-1. **Wave B, in parallel:** Step 1 (feature semantics and online-store correctness — lead owns the
-   semantics and the conformance suite, and first settles Q4c's medoid definition and the
-   self-inclusion conflict from evidence), Step 2 (Kafka platform), Step 3 (Delta capability spike and
-   stream runtime), Step E (`eval-v2`).
-2. **Confirm the first `test-stream` CI run on GitHub** executed Spark: it has only been reproduced
+1. **Step 1 close-out:** commit Step 1b, rebuild the gateway image, and re-run the Phase 2 load gate
+   on the representative profile, the manual replay and rule re-validation on feature set 2.0.0,
+   recording each with its `run_id`.
+2. **Integrate Steps 2 and 3** from their worktrees: self-review, the requested doc edits,
+   `make verify`, commit.
+3. **Step E stage 1d**, the label-proxy audit; stage 2 after U7.
+4. **Confirm the first `test-stream` CI run on GitHub** executed Spark: it has only been reproduced
    locally so far (macOS session, and a Linux container for the hashed install).
 
 ---
@@ -511,7 +514,7 @@ Phase 3, in the wave order of `docs/PHASE3_PLAN.md` §5:
 ## LAST VERIFICATION RESULTS
 
 ```
-TRACE-X verify — 2026-09-13T03:45:35Z
+TRACE-X verify — 2026-09-14T03:47:56Z
   PASS  doctor
   PASS  acceptance-status
   PASS  check-claims
@@ -520,19 +523,13 @@ TRACE-X verify — 2026-09-13T03:45:35Z
   PASS  ruff-format
   PASS  ruff-lint
   PASS  mypy
-  PASS  test-fast           1260 passed, 120 deselected
+  PASS  test-fast
   PASS  bandit
   PASS  secret-scan
 ======================================================================
-  phase 2   11 passed   0 failed   0 skipped     VERIFY OK
+  phase 3   11 passed   0 failed   0 skipped     VERIFY OK
 ```
 
-Run on the CI-fix tree with `.venv` present; the same targets were also replayed with the venv pointed
-at a nonexistent directory and the interpreter taken from PATH, which is the runner's situation
-(`make codegen-openapi`, the spec drift check, `make contracts-self-test`, the event-schema contract
-tests). The integration and chaos layers were last run in the session that closed the load gate
-(1,360 tests across all layers, see CURRENT STATUS) and were not re-run for a change that touches no
-runtime code.
-
-**Acceptance status: 19 PASS · 0 IN_PROGRESS · 39 NOT_STARTED · 0 FAIL · 0 BLOCKED** across 58 tracked
-capabilities. `tests/acceptance/status.json` is the authoritative machine-readable record.
+Run on the Step 1b tree before this entry was written. Outside `make verify`, on the same code with
+the local stack up and `.env` loaded: `pytest -m integration tests/integration` passed 155 with none
+skipped, and `tests/chaos/test_redis_down.py` with `tests/chaos/test_feature_store_holes.py` passed 9.

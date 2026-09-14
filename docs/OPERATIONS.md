@@ -103,9 +103,10 @@ hand — let the Spark reconciliation job rebuild them, then confirm `feature_pa
 **This is a capacity condition, not an outage, and the gateway treats it that way.** The feature
 store runs `noeviction` (ADR-0044): when it is full it REFUSES the write instead of discarding
 someone else's history. The decision is still made, it is marked degraded with reason
-`feature_write_failed`, and the store's completeness epoch is withdrawn — so every decision after it
-also says `history_incomplete`, because an observation that was not recorded is a hole in the
-history and no window spanning the hole is complete.
+`feature_write_failed`, and a hole is recorded once in `app.feature_store_holes` — so every decision
+after it also says `history_incomplete`, because an observation that was not recorded is a hole in the
+history and no window spanning the hole is complete. A refused write is all or nothing: nothing of
+the refused transaction is left in the store. A gateway that restarts inherits the open hole.
 
 **Detect:** `degraded_mode_total{reason="feature_write_failed"}` rising;
 `online_store_memory_bytes{store="features"}` at `maxmemory`; `/readyz` still ready.
@@ -122,8 +123,10 @@ failure for state that decides fraud.
 offered rate if it is a spike; provision memory if it is not. The memory model
 (`benchmarks/features/memory_model.py`, `benchmarks/features/MEMORY.md`) says what the store needs for
 a given rate and retention. Keys expire on their declared retention, so a full store recovers on its
-own once the rate drops; the epoch is re-established by the first successful write and warm-up begins
-from there.
+own once the rate drops. When a write next succeeds, the gateway clears the hole and moves the epoch
+to that moment plus 24 hours (a lost observation may be dated up to 24 h ahead), and warm-up runs from
+there; the ledger keeps the record. The memory model describes the Phase 2 layout; the Step 1 layout
+(ADR-0046 §5) is re-measured in Phase 3 Step 12.
 
 ### Feature store empty or warming — after a restart or `FLUSHALL`
 
@@ -151,6 +154,12 @@ and `{reason="idempotency_cache_unavailable"}`.
 skipped and a retry is re-scored, returning the existing `case_id` from Postgres — never a duplicate
 case (ADR-0007). The feature store is not blamed: `redis` stays `ok` and `redis_unavailable` does not
 appear.
+
+A retry that reuses its transaction id for a different payload -- another account or amount, which
+the cache would have refused with 409 -- is decided rules-only and says `observation_conflict`: the
+store serves the first delivery's context, which must not be read as the retry's (ADR-0046 §1). A
+rising `degraded_mode_total{reason="observation_conflict"}` means a client reusing transaction ids,
+not a store fault.
 
 **Action:** restore it at leisure. Nothing in it is authoritative and nothing in it is missed.
 

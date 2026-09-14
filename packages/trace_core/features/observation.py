@@ -17,6 +17,7 @@ follows `Event.order_key`, `(occurred_ms, identity)`.
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Final
@@ -137,6 +138,20 @@ class Event:
     def located(self) -> bool:
         return self.latitude is not None and self.longitude is not None
 
+    def recorded_form(self) -> tuple[object, ...]:
+        """What a store records of this delivery: enough to tell a plain redelivery from one
+        carrying a different observation.
+
+        Event time at the declared millisecond, and no post-decision field: a retry that only
+        reports the authorization outcome learned since carries the same observation (ADR-0046 §7).
+        """
+        skipped = {field.value for field in POST_DECISION_FIELDS}
+        return tuple(
+            self.occurred_ms if f.name == "occurred_at" else getattr(self, f.name)
+            for f in dataclasses.fields(self)
+            if f.name not in skipped
+        )
+
     def entity_id(self, entity: Entity) -> str | None:
         return {
             Entity.ACCOUNT: self.account_id,
@@ -173,6 +188,10 @@ class ObserveReceipt:
     epoch, because a store that restarts restarts its counter."""
     recorded: bool
     """False when the identity had already been recorded: a redelivery contributes nothing."""
+    conflicting: bool = False
+    """True when the identity had been recorded with a different observation -- another account,
+    amount, time or place. The first delivery stays the observation (ADR-0046 §1), so a context a
+    score returns is the first delivery's and must not be read as this payload's."""
 
 
 @dataclass(frozen=True, slots=True)

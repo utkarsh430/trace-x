@@ -11,6 +11,7 @@ the error, fails here before it reaches a load test.
 from __future__ import annotations
 
 import datetime as dt
+import re
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +23,13 @@ from trace_core.domain.errors import FeatureWriteFailedError
 from trace_core.domain.time import event_time
 from trace_core.features.reference import Event
 from trace_core.features.semantics import Stream
-from trace_core.repositories.redis_features import RedisOnlineFeatureStore
+from trace_core.repositories.redis_features import (
+    READ_SCRIPT,
+    WITHDRAW_SCRIPT,
+    WRITE_SCRIPT,
+    RedisOnlineFeatureStore,
+    unsupported_declarations,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -56,33 +63,31 @@ def test_the_cache_store_may_evict_and_is_a_separate_instance() -> None:
 
 
 class _FullRedis:
-    """A client whose pipeline reports OOM, and which records what happened next."""
+    """A client that refuses every writing script for OOM, and records any other command."""
 
     def __init__(self) -> None:
-        self.deleted: list[str] = []
-        self.sets: list[tuple[str, Any]] = []
+        self.commands: list[str] = []
 
-    def pipeline(self, transaction: bool = False) -> _FullRedis:
-        return self
+    def register_script(self, script: str) -> Any:
+        def run(keys: Any = None, args: Any = None) -> Any:
+            raise OutOfMemoryError("OOM command not allowed when used memory > 'maxmemory'.")
+
+        return run
 
     def __getattr__(self, name: str) -> Any:
-        # Every pipelined command is accepted and forgotten; only execute matters.
-        return lambda *a, **k: None
+        def command(*args: Any, **kwargs: Any) -> None:
+            self.commands.append(name)
 
-    def execute(self) -> None:
-        raise OutOfMemoryError("OOM command not allowed when used memory > 'maxmemory'.")
-
-    def delete(self, key: str) -> None:
-        self.deleted.append(key)
+        return command
 
 
-def test_a_refused_write_raises_a_typed_error_and_invalidates_the_epoch() -> None:
-    """Loud, typed, and the completeness claim withdrawn.
+def test_a_refused_write_raises_a_typed_error_and_issues_nothing_further() -> None:
+    """Loud, typed, and nothing half-done after it.
 
-    An observation that was not recorded is a hole in the history. Every window
-    spanning the hole is no longer complete, and the way the store says so is
-    by deleting its epoch -- so the next snapshot reports UNKNOWN completeness
-    and the next decision carries `history_incomplete` (ADR-0044).
+    An observation that was not recorded is a hole in the history. Withdrawing completeness is
+    the gateway's `CompletenessGuard`'s job, through a durable ledger that survives a restart
+    (ADR-0046 §5). The store must not answer a refusal with commands of its own -- Phase 2
+    deleted the epoch here, which a restart re-established as if nothing had been lost.
     """
     client = _FullRedis()
     store = RedisOnlineFeatureStore(client)  # type: ignore[arg-type]
@@ -96,6 +101,37 @@ def test_a_refused_write_raises_a_typed_error_and_invalidates_the_epoch() -> Non
     )
     with pytest.raises(FeatureWriteFailedError):
         store.observe(event)
-    assert client.deleted == [store.epoch_key], (
-        f"expected the epoch to be withdrawn after a refused write, deleted={client.deleted}"
+    with pytest.raises(FeatureWriteFailedError):
+        store.score(event)
+    with pytest.raises(FeatureWriteFailedError):
+        store.withdraw_completeness(resume_at=event.occurred_at)
+    assert client.commands == [], f"the store acted after a refusal: {client.commands}"
+
+
+def test_writing_scripts_are_refused_whole_before_they_run() -> None:
+    """All or nothing depends on the shebang.
+
+    Redis refuses a `#!lua` script that may write before it starts when the instance is over
+    `maxmemory`. Without the shebang, a script is judged command by command, and a full store
+    could keep the record and lose the distinct-count update.
+
+    The read script must answer a full store -- it is what a refused write degrades to -- so it is
+    `allow-oom`, and therefore must issue no write command except `PFCOUNT`, whose in-place
+    cardinality cache Redis counts as a write but which allocates nothing.
+    """
+    assert WRITE_SCRIPT.startswith("#!lua\n")
+    assert WITHDRAW_SCRIPT.startswith("#!lua\n")
+    assert READ_SCRIPT.startswith("#!lua flags=allow-oom\n")
+    assert "allow-oom" not in WRITE_SCRIPT + WITHDRAW_SCRIPT
+    called = set(re.findall(r"redis\.call\('([A-Z]+)'", READ_SCRIPT))
+    assert called <= READ_ONLY_COMMANDS | {"PFCOUNT"}, (
+        f"the full-store read script issues {sorted(called - READ_ONLY_COMMANDS - {'PFCOUNT'})}"
     )
+
+
+READ_ONLY_COMMANDS = frozenset({"GET", "MGET", "HGETALL", "LRANGE", "ZCOUNT", "ZRANGEBYSCORE"})
+
+
+def test_the_store_has_a_primitive_for_every_released_feature() -> None:
+    """A feature the store cannot answer would read as absent forever, and look like warm-up."""
+    assert unsupported_declarations() == []

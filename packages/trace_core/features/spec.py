@@ -60,14 +60,16 @@ number produced by a different feature set is not comparable to one produced by
 this one, and a version is how a reader can tell.
 """
 
-SERVED_FEATURES_CONFORM: Final = False
+SERVED_FEATURES_CONFORM: Final = True
 """Whether the online path the gateway runs actually serves `FEATURE_SET_VERSION`.
 
-False from ADR-0046's declaration until Phase 3 Step 1 makes the Redis store and the
-gateway's score-time read conform to it. Until then the version names the declared
-meaning, not the values being served, so nothing may produce a run record from the
-gateway: `require_served_conformance` refuses, and the load harness and the gateway
-replay call it before doing anything else. A sentence in PROGRESS is not a control.
+False from ADR-0046's declaration until Phase 3 Step 1b made the Redis store and the gateway's
+score-time read conform to it: the store passes every literal fixture as served, recording and
+reading are one atomic operation, the completeness guard is wired, and identity events carry
+`X-Idempotency-Key` identities. While it was false, the version named the declared meaning rather
+than the values being served, so `require_served_conformance` refused and the load harness and the
+gateway replay called it before doing anything else. A change that breaks any of the four must set
+it back. A sentence in PROGRESS is not a control.
 """
 
 

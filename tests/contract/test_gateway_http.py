@@ -50,11 +50,17 @@ class _ReferenceStore:
     def __init__(self) -> None:
         self.inner = ReferenceFeatureStore()
 
+    def score(self, event: Any) -> Any:
+        return self.inner.score(event)
+
     def snapshot(self, **kwargs: Any) -> Any:
         return self.inner.snapshot(**kwargs)
 
-    def observe(self, event: Any) -> None:
-        self.inner.observe(event)
+    def observe(self, event: Any) -> Any:
+        return self.inner.observe(event)
+
+    def withdraw_completeness(self, *, resume_at: Any) -> None:
+        self.inner.withdraw_completeness(resume_at=resume_at)
 
 
 def _state(*, feature_store: Any = None, triage: Any = None) -> GatewayState:
@@ -314,9 +320,9 @@ class _RecordingStore(_ReferenceStore):
         super().__init__()
         self.observed: list[Any] = []
 
-    def observe(self, event: Any) -> None:
+    def observe(self, event: Any) -> Any:
         self.observed.append(event)
-        super().observe(event)
+        return super().observe(event)
 
 
 @pytest.mark.parametrize(
@@ -431,3 +437,31 @@ def test_an_event_dated_beyond_the_future_skew_bound_is_refused_and_not_recorded
         )
     assert response.status_code == 422, response.text
     assert store.observed == []
+
+
+def _identity_post(client: TestClient, key: str | None) -> Any:
+    headers = {**AUTH, **({"X-Idempotency-Key": key} if key else {})}
+    return client.post(
+        "/v1/events/identity",
+        json={
+            "account_id": "acct_000001",
+            "identity_event_type": "LOGIN_FAILED",
+            "occurred_at": dt.datetime.now(dt.UTC).isoformat().replace("+00:00", "Z"),
+        },
+        headers=headers,
+    )
+
+
+def test_an_identity_event_retried_under_one_key_is_one_observation() -> None:
+    """The event id is derived from the caller's token and key (plan §3 Q2), so a retry
+    counts once; without a key each delivery is new -- the limit ADR-0046 §1 states."""
+    store = _RecordingStore()
+    with TestClient(create_app(_state(feature_store=store))) as running:
+        first = _identity_post(running, "retry-me").json()["event_id"]
+        second = _identity_post(running, "retry-me").json()["event_id"]
+        other = _identity_post(running, "another").json()["event_id"]
+        unkeyed = {_identity_post(running, None).json()["event_id"] for _ in range(2)}
+    assert first == second
+    assert other != first
+    assert len(unkeyed) == 2
+    assert len(store.inner.events) == 1 + 1 + 2, "the retry was recorded as a second failed login"

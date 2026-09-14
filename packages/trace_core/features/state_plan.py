@@ -51,14 +51,12 @@ from trace_core.features.semantics import (
 )
 from trace_core.features.spec import FeatureRegistry
 
-NEEDS_VELOCITY: Final = frozenset({Aggregation.COUNT, Aggregation.AMOUNT_CV})
+NEEDS_VELOCITY: Final = frozenset({Aggregation.COUNT})
 """Aggregations that read the exact per-observation count.
 
-`COUNT` obviously. `AMOUNT_CV` less obviously: it divides by `WindowState.count`,
-and the bucket merge supplies that count from the velocity set when one exists
-and from the minute-rounded bucket total when one does not -- a different number
-at the window boundary. Keeping the velocity set for CV is what keeps the online
-and offline coefficient of variation equal rather than merely close."""
+`COUNT` only. Phase 2 kept a velocity set for `AMOUNT_CV` too, because the coefficient of variation
+divided by `WindowState.count`; since ADR-0046 it divides same-currency sums by the same-currency
+count of its own minute-aligned window, so no velocity set serves it."""
 
 BUCKET_DERIVED: Final = frozenset(
     {Aggregation.AMOUNT_SUM, Aggregation.DECLINED_RATIO, Aggregation.AMOUNT_CV}

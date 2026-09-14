@@ -479,6 +479,15 @@ paths:
   /v1/events/device:
     post:
       operationId: ingest_device_v1_events_device_post
+      parameters:
+      - in: header
+        name: X-Idempotency-Key
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Idempotency-Key
       requestBody:
         content:
           application/json:
@@ -504,6 +513,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/Problem'
           description: 'Unauthenticated: no valid service token was presented.'
+        '409':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+          description: "Idempotency conflict: the key was reused with a different payload (\xA75)."
         '422':
           content:
             application/problem+json:
@@ -514,6 +529,15 @@ paths:
   /v1/events/identity:
     post:
       operationId: ingest_identity_v1_events_identity_post
+      parameters:
+      - in: header
+        name: X-Idempotency-Key
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Idempotency-Key
       requestBody:
         content:
           application/json:
@@ -539,6 +563,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/Problem'
           description: 'Unauthenticated: no valid service token was presented.'
+        '409':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+          description: "Idempotency conflict: the key was reused with a different payload (\xA75)."
         '422':
           content:
             application/problem+json:

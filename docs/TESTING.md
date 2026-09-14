@@ -90,9 +90,16 @@ Phase 2 added three more:
   week, and then nothing is checked at all.
 - **online-store correctness** — `tests/integration/test_online_store_capacity.py` starts a real
   Redis with a 2 MB limit and `noeviction`, fills it, and asserts the store refuses rather than evicts
-  (`evicted_keys` stays 0), the refusal is typed, and the breaker stays closed;
+  (`evicted_keys` stays 0), the refusal is typed and all or nothing (the refused observation leaves no
+  trace and the observation counter does not move), reads still answer, and the breaker stays closed;
+  `tests/integration/test_redis_feature_store.py` holds the store to the reference on seeded,
+  months-long histories -- folding, lifetime gaps, redeliveries naming other accounts, reads behind
+  retention -- and replays eight concurrent writers in receipt order;
   `tests/chaos/test_redis_down.py` pauses the **cache** instance and asserts no decision changes, and
-  `FLUSHALL`s the feature store and asserts `history_incomplete`; the conformance suite carries
+  `FLUSHALL`s the feature store and asserts `history_incomplete`;
+  `tests/chaos/test_feature_store_holes.py` pauses the feature store under one gateway, stops that
+  gateway, and asserts the next one inherits the hole from PostgreSQL, moves the epoch past it and
+  serves `history_incomplete`; the conformance suite carries
   `complete_since` explicitly, so "an unseen device is not known" is asserted on a store that has
   watched for its horizon and "cannot tell" on one that has not (ADR-0044).
 - **feature-semantics conformance** — `tests/conformance/feature_semantics_suite.py`, run unmodified

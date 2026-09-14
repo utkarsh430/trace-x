@@ -52,6 +52,11 @@ sufficient; the literals are the oracle.
     again. That support is a precondition of serving these semantics (§5).
   - An observation contributes at most once per identity. **The first delivery of an identity is the
     observation**; a later delivery under the same identity contributes nothing, whatever it carries.
+  - A store reports a later delivery that carries a different observation -- another account,
+    amount, time or place, post-decision fields aside -- as **conflicting**
+    (`ObserveReceipt.conflicting`). The context it serves is the first delivery's, so the gateway
+    does not evaluate the new payload against it: it decides rules-only and says
+    `observation_conflict`.
 - **The declared total order** is `(occurred_ms, namespace, event_id)`, compared as strings after
   the millisecond. At one millisecond, every identity event therefore sorts before every
   transaction.
@@ -179,19 +184,31 @@ sufficient; the literals are the oracle.
 
 - **The score-time read is atomic.** The store records the scored transaction and reads its context in
   one operation, and returns the position.
+  - The Redis store does both in one Lua script; `ReferenceFeatureStore.score` is the same contract.
+    Redis refuses a `#!lua` script that may write before it starts when the instance is over
+    `maxmemory`, so a refused score leaves nothing half-recorded
+    (`tests/integration/test_online_store_capacity.py`).
   - Reading first and then adding the transaction in memory is not equivalent. A HyperLogLog cannot
     count a member without a write, and an exact distinct count would need a membership read.
   - Reading and writing in separate operations lets two concurrent transactions each miss the other
     while the recorded order says one preceded the other.
 - **The online store is idempotent and order-independent.**
-  - Every contribution is keyed by identity.
+  - Every contribution is keyed by identity, and identity is checked across the whole store rather
+    than per account: a redelivery naming another account is still a redelivery, read as its first
+    delivery.
   - The previous observation, first-seen and lifetime boundaries are derived from event time, never
     from the last write.
   - Retention trims are computed from `min(occurred, now)`, so a future-dated observation cannot evict
     current state.
+  - Beyond 25 hours an account's transactions are folded, in event-time order, into a bounded profile
+    prefix: the lifetime's start, visit counters, known devices, the last 128 amounts per currency and
+    the last 20 located points. A folded observation is no longer recognised as a redelivery, and one
+    folded out of order marks that lifetime inexact, so its profile features read as absent until a
+    30-day gap starts a new lifetime. Neither case produces a different number.
 - **An observation the store did not record withdraws its completeness, durably.**
   - `features.completeness.CompletenessGuard` and its PostgreSQL ledger implement this, tested against
-    a real database. The guard is wired into the gateway in Step 1b, with the atomic score-time read.
+    a real database, and are wired into the gateway's scoring pipeline and its identity and device
+    ingress.
   - A hole is opened when a write is refused, the store is unreachable, or the breaker is open.
   - The hole is recorded **once per episode** in `app.feature_store_holes` (migration 0004), never
     once per transaction. While it is open, no read may claim completeness.
@@ -205,13 +222,19 @@ sufficient; the literals are the oracle.
     history.
   - The margin covers every recorded stream. Transactions, identity events and device events dated more
     than 24 hours ahead are all refused at ingress.
-  - A process that starts with an open hole inherits it. A ledger that is configured but unreadable
-    counts as holding one. A crash after a failed ledger write forgets the hole; plan §4.1's writer
-    fencing, in Step 4, closes that window.
-  - Conditions for wiring it in Step 1b:
-    - withdrawing keeps the later of the store's existing epoch and `resume_at`;
-    - the store's refused-write path must not re-create the epoch at "now";
-    - hydration (`P3.redis-hydration`) must check the ledger before restoring any earlier epoch.
+  - A process that starts with an open hole inherits it. A running process learns of another
+    instance's hole only when that instance withdraws it, by the epoch moving in the shared store; if
+    that instance stops first, its peers keep claiming completeness until one of them restarts. One
+    gateway runs locally; closing this for several instances belongs with plan §4.1's writer fencing
+    (Step 4).
+  - A ledger that is configured but unreadable counts as holding one. A crash after a failed ledger
+    write forgets the hole; plan §4.1's writer fencing, in Step 4, closes that window.
+  - The conditions for wiring it, as met in Step 1b:
+    - withdrawing keeps the later of the store's existing epoch and `resume_at`, in one
+      compare-and-set script;
+    - the store's refused-write path issues no command at all, so nothing re-creates the epoch at
+      "now";
+    - hydration (`P3.redis-hydration`) must still check the ledger before restoring any earlier epoch.
   - When the scored transaction itself is refused, the decision is made on a read-only snapshot that
     does not contain it, and is marked degraded. The published scored event carries that observe
     outcome, so an as-served replay reproduces what was served.
@@ -220,6 +243,14 @@ sufficient; the literals are the oracle.
   bounds are served where Phase 2 served absences. The `history_incomplete` degraded reason still
   fires, because the profile features gated on the 30-day horizon are absent on any store younger than
   that.
+- **A read behind what the store still holds is absent, not a lower bound.** Each structure keeps
+  what its widest window reads, plus the late-arrival margin, behind the newest observation. A read
+  further behind — a late arrival, or a redelivery read at its first delivery's time — would find the
+  oldest part of a window trimmed and serve what is left. The store knows how far each structure has
+  been trimmed, folded or dropped. A declared window reaching behind that is left out, and the context
+  stops vouching for it, so it reads `INSUFFICIENT_HISTORY` and the decision carries
+  `history_incomplete`. A previous observation is served only when nothing that could be later has
+  been folded away (`tests/integration/test_redis_feature_store.py`).
 - **Parity is declared per feature** (`FeatureSpec.parity`, a `semantics.ParityComparison`), so a
   comparison cannot quietly choose its own tolerance.
   - `EXACT`: counts, amount sums, exact distinct counts and the habitual and known sets. Compared
@@ -232,12 +263,13 @@ sufficient; the literals are the oracle.
   - The literal fixtures enforce this: an `EXACT` feature may not be given a tolerance.
 - **`FEATURE_SET_VERSION` becomes `2.0.0`**, because served values change.
 - **No run is recorded until the served values conform.**
-  - `spec.SERVED_FEATURES_CONFORM` stays false until Step 1 makes the Redis store and the gateway's
+  - `spec.SERVED_FEATURES_CONFORM` was false until Step 1b made the Redis store and the gateway's
     score-time read implement these semantics.
-  - While it is false, the load harness and the gateway replay refuse before doing anything, so no
-    record can carry a version its values were not computed with.
-  - Setting it requires the Redis store to pass every fixture, the atomic score-time read, the wired
-    completeness guard, and `X-Idempotency-Key` identities for identity events.
+  - While it was false, the load harness and the gateway replay refused before doing anything, so no
+    record could carry a version its values were not computed with.
+  - Setting it required the Redis store to pass every fixture, the atomic score-time read, the wired
+    completeness guard, and `X-Idempotency-Key` identities for identity events. All four hold as of
+    Step 1b, and a change that breaks one must set it back.
 
 ### 6. Literal fixtures, and the tests that keep them honest
 
@@ -434,9 +466,15 @@ and R002 keep Phase 2's treatment of earlier outcomes, and `P3.semantics-hardeni
   example, `account_tx_count_1m ≥ 5` fires on the fifth transaction in a minute rather than the sixth.
   The load gate, the manual replay and rule validation are re-run to measure what that does to
   legitimate traffic.
-- The online store holds more per account: the last twenty located observations, identity-keyed
-  contributions, and event-time-ordered profile state. That costs memory and hot-path CPU. Both are
-  measured (plan Steps 1 and 12), and the medoid's cost must stay bounded on the hot path.
+- The online store holds more: every observation raw for 25 hours under its own identity key, then a
+  bounded folded profile per account. That costs memory and hot-path CPU: a score decodes its
+  account's last 25 hours in the gateway, so the cost grows with the account's velocity. The Phase 2
+  memory model describes the Phase 2 layout and does not bound this one; memory is re-measured in plan
+  Step 12, and the medoid's cost must stay bounded on the hot path.
+- The store's script reads and writes several entities' keys at once, so it runs on one Redis
+  instance, not a Redis Cluster. Sharding is a Phase 12 decision.
+- A late arrival or a late redelivery reads absent where the store no longer holds its windows, and
+  carries `history_incomplete`, where Phase 2 served a lower bound.
 - A zero MAD now scores a lower amount −50 instead of +50, so R015, R009 and R016 stop firing on small
   payments by constant-amount accounts. The re-validation records the change.
 - Identity and device events dated more than 24 hours ahead are refused with 422, as transactions

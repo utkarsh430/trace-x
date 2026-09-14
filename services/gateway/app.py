@@ -20,7 +20,9 @@ through a decision.
 
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
+import hashlib
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable
@@ -44,6 +46,8 @@ from services.gateway.config import (
 from services.gateway.errors import classify, describe, problem
 from services.gateway.pipeline import (
     REASON_RATE_LIMIT,
+    REASON_REDIS,
+    REASON_WRITE_FAILED,
     ScoringPipeline,
     TriageUnavailableError,
     absent_feature_reasons,
@@ -57,7 +61,9 @@ from trace_core.contracts.api.events_ingress import (
 from trace_core.contracts.api.problem import ErrorType
 from trace_core.contracts.api.transaction import TransactionRequest
 from trace_core.contracts.envelope import ZERO_TRACE_ID
+from trace_core.domain.errors import FeatureWriteFailedError
 from trace_core.domain.time import event_time
+from trace_core.features.completeness import CompletenessGuard, HoleReason
 from trace_core.features.definitions import ONLINE_FEATURES
 from trace_core.features.observation import Event
 from trace_core.features.semantics import Stream, identity_stream
@@ -65,6 +71,7 @@ from trace_core.observability.logging import configure_logging
 from trace_core.observability.metrics import HotPathMetrics, register_online_store_gauges
 from trace_core.observability.telemetry import configure_telemetry, current_trace_id
 from trace_core.repositories.circuit_breaker import CircuitBreaker
+from trace_core.repositories.postgres_completeness import PostgresHoleLedger
 from trace_core.repositories.postgres_triage import PostgresTriageStore, new_case_id
 from trace_core.repositories.redis_idempotency import RedisIdempotencyCache, ReplayVerdict
 from trace_core.repositories.redis_ratelimit import RedisRateLimiter
@@ -115,6 +122,8 @@ class GatewayState:
     replay cache."""
     feature_store: Any = None
     """Kept on the state so readiness can report how warm the store is."""
+    completeness: CompletenessGuard | None = None
+    """The same guard the pipeline holds (ADR-0046 §5); readiness reports a pending hole."""
 
     def ready(self) -> tuple[bool, dict[str, str]]:
         """Readiness, per ADR-0035.
@@ -162,6 +171,8 @@ class GatewayState:
         Operators read it here; every decision carries it as
         `history_incomplete` until it clears (ADR-0044).
         """
+        if self.completeness is not None and self.completeness.pending:
+            return "withdrawn: an unrecorded observation is pending; no completeness is claimed"
         store = self.feature_store
         if store is None or not hasattr(store, "epoch_key") or self.redis is None:
             return "unknown"
@@ -260,6 +271,15 @@ def build_state(settings: GatewaySettings | None = None) -> GatewayState:
         log.error("postgres_pool_unavailable", detail="triage cannot be recorded")
 
     breaker = CircuitBreaker("redis-features")
+    completeness = (
+        CompletenessGuard(
+            feature_store,
+            PostgresHoleLedger(pool) if pool is not None else None,
+            instance_id=f"gateway-{uuid.uuid4().hex[:12]}",
+        )
+        if feature_store is not None
+        else None
+    )
     cache_breaker = CircuitBreaker("redis-cache")
     return GatewayState(
         settings=resolved,
@@ -271,6 +291,7 @@ def build_state(settings: GatewaySettings | None = None) -> GatewayState:
             feature_store=feature_store,
             producer_version=SERVICE_VERSION,
             breaker=breaker,
+            completeness=completeness,
         ),
         metrics=HotPathMetrics(),
         limiter=limiter,
@@ -280,6 +301,7 @@ def build_state(settings: GatewaySettings | None = None) -> GatewayState:
         cache_redis=cache_client,
         pool=pool,
         breaker=breaker,
+        completeness=completeness,
         cache_breaker=cache_breaker,
         feature_store=feature_store,
     )
@@ -301,6 +323,11 @@ def create_app(state: GatewayState | None = None) -> FastAPI:
         # restart). Until the store has warmed for the widest declared lookback
         # every decision carries `history_incomplete`; readiness reports when
         # that clears (ADR-0044).
+        # A hole a previous process recorded and never withdrew is inherited, and withdrawn
+        # before the epoch is (re)established (ADR-0046 §5).
+        if resolved.completeness is not None:
+            resolved.completeness.resume()
+            resolved.completeness.reconcile()
         store = resolved.feature_store
         if store is not None and hasattr(store, "establish_epoch"):
             try:
@@ -612,7 +639,7 @@ def _register_routes(app: FastAPI) -> None:
         # The request clock starts HERE, not after the replay lookup and not
         # before scoring: `gateway_request_latency_seconds` is meant to answer
         # "how long did this server take", so it has to include the rate limit,
-        # the replay lookup, triage and the observe-write. The scoring-only
+        # the replay lookup, triage and the replay store. The scoring-only
         # number is a separate instrument (`tx_score_latency_seconds`), because
         # a single histogram that quietly spans some of the work is worse than
         # two that each say what they cover.
@@ -691,8 +718,9 @@ def _register_routes(app: FastAPI) -> None:
         if state.pipeline.opens_investigation(decision):
             decision = _triage(state, outcome, body)
 
-        observe_reason = state.pipeline.observe(outcome.canonical)
-        _record(state, outcome, decision, observe_reason=observe_reason)
+        # The transaction was recorded in the online store by the scoring read itself, before
+        # this response: an answered transaction is never missing from the store (plan §4.1).
+        _record(state, outcome, decision)
 
         if state.idempotency is not None:
             try:
@@ -707,26 +735,30 @@ def _register_routes(app: FastAPI) -> None:
         response.headers[HEADER_FEATURE_SOURCE] = decision.feature_source.value
         return decision
 
-    # `dependencies=` rather than a parameter: these endpoints need the caller
-    # to be AUTHENTICATED but do not need to know who it is. Taking the token as
-    # an argument and ignoring it would read as an oversight.
+    # The caller's token is taken as a parameter because an optional `X-Idempotency-Key` is
+    # scoped to it: the event's identity is derived from (token, key), so a retry is recognised
+    # and two callers' keys can never collide (plan §3 Q2, ADR-0046 §1).
     @app.post(
         "/v1/events/identity",
         status_code=202,
         summary="Ingest an identity event",
         response_model=AcceptedResponse,
-        dependencies=[Depends(_authenticate)],
-        responses={status: _PROBLEM_RESPONSES[status] for status in (400, 401, 422)},
+        responses={status: _PROBLEM_RESPONSES[status] for status in (400, 401, 409, 422)},
     )
     async def ingest_identity(
         request: Request,
         body: IdentityEventRequest,
+        token: Annotated[ServiceToken, Depends(_authenticate)],
+        idempotency_key: Annotated[str | None, Header(alias=HEADER_IDEMPOTENCY)] = None,
     ) -> Any:
         # Sync: `_ingest` writes to Redis. See `score_transaction`.
         if (problem := _future_skew_problem(request, body.occurred_at)) is not None:
             return problem
         return _ingest(
             request,
+            token_id=token.token_id,
+            idempotency_key=idempotency_key,
+            payload=body.model_dump(mode="json", exclude_none=True),
             account_id=body.account_id,
             occurred_at=body.occurred_at,
             # Which stream a type feeds is declared beside the features (ADR-0046 §4), where
@@ -743,18 +775,22 @@ def _register_routes(app: FastAPI) -> None:
         status_code=202,
         summary="Ingest a device event",
         response_model=AcceptedResponse,
-        dependencies=[Depends(_authenticate)],
-        responses={status: _PROBLEM_RESPONSES[status] for status in (400, 401, 422)},
+        responses={status: _PROBLEM_RESPONSES[status] for status in (400, 401, 409, 422)},
     )
     async def ingest_device(
         request: Request,
         body: DeviceEventRequest,
+        token: Annotated[ServiceToken, Depends(_authenticate)],
+        idempotency_key: Annotated[str | None, Header(alias=HEADER_IDEMPOTENCY)] = None,
     ) -> Any:
         # Sync: `_ingest` writes to Redis. See `score_transaction`.
         if (problem := _future_skew_problem(request, body.occurred_at)) is not None:
             return problem
         return _ingest(
             request,
+            token_id=token.token_id,
+            idempotency_key=idempotency_key,
+            payload=body.model_dump(mode="json", exclude_none=True),
             account_id=body.account_id,
             occurred_at=body.occurred_at,
             stream=None,
@@ -778,28 +814,62 @@ def _future_skew_problem(request: Request, occurred_at: dt.datetime) -> Any:
     return None
 
 
+def _identity_event_id(token_id: str, idempotency_key: str | None) -> str:
+    """The observation's id: derived from the caller's key when there is one.
+
+    Deterministic from `(token, key)`, so a retry under the same key is the same observation
+    and counts once. Without a key nothing distinguishes a retry from a repeat, so every
+    delivery is new -- the limit ADR-0046 §1 states.
+    """
+    if not idempotency_key:
+        return f"idev_{uuid.uuid4().hex}"
+    digest = hashlib.sha256(f"{token_id}\x00{idempotency_key}".encode()).hexdigest()
+    return f"idev_{digest[:32]}"
+
+
 def _ingest(
     request: Request,
     *,
     account_id: str,
     occurred_at: dt.datetime,
     stream: Stream | None,
+    token_id: str,
+    idempotency_key: str | None,
+    payload: dict[str, object],
     device_id: str | None = None,
     ip_id: str | None = None,
-) -> AcceptedResponse:
+) -> Any:
     """202: update online state for later transactions, return nothing to score.
 
     `stream` is None for an event no released feature reads -- a successful login, an
     enrolled second factor, every device event today -- and such an event changes no
     online state (ADR-0046 §4). Otherwise best effort: these events sharpen a later
     decision, and failing the caller because the store is unavailable would make an
-    optional signal into a required dependency.
+    optional signal into a required dependency. An observation the store did not record
+    still withdraws its completeness (ADR-0046 §5).
+
+    A key reused for a different payload is refused (409), as for transactions; without
+    the replay cache that check is skipped and the first delivery is the observation.
     """
     state = _gateway(request)
     request_id = _request_id(request)
-    # Minted here, never taken from the caller: `X-Request-Id` is a correlation header the
-    # caller chooses, and two distinct events sent under one would count once (ADR-0046 §1).
-    event_id = f"idev_{uuid.uuid4().hex}"
+    event_id = _identity_event_id(token_id, idempotency_key)
+    cache_key = f"event:{token_id}:{idempotency_key}" if idempotency_key else None
+    cache_usable = state.cache_breaker is None or state.cache_breaker.allows()
+    if cache_key is not None and state.idempotency is not None and cache_usable:
+        try:
+            lookup = state.idempotency.lookup(cache_key, payload)
+        except Exception:
+            lookup = None
+        if lookup is not None and lookup.verdict is ReplayVerdict.CONFLICT:
+            return _problem_response(
+                request,
+                ErrorType.IDEMPOTENCY_CONFLICT,
+                detail=(
+                    f"{HEADER_IDEMPOTENCY} was already used for a different event. "
+                    f"Use a new key for a new event."
+                ),
+            )
     if stream is not None and state.pipeline.feature_store is not None:
         event = Event(
             stream=stream,
@@ -809,11 +879,24 @@ def _ingest(
             ip_id=ip_id,
             event_id=event_id,
         )
+        guard = state.pipeline.completeness
+        if guard is not None:
+            guard.reconcile()
         try:
             state.pipeline.feature_store.observe(event)
+        except FeatureWriteFailedError:
+            if guard is not None:
+                guard.observation_unrecorded(HoleReason.REFUSED)
+            state.metrics.degraded.add(1, {"reason": REASON_WRITE_FAILED})
         except Exception:
-            state.metrics.degraded.add(1, {"reason": "redis_unavailable"})
-    return AcceptedResponse(accepted=True, event_id=event_id, request_id=request_id)
+            if guard is not None:
+                guard.observation_unrecorded(HoleReason.UNREACHABLE)
+            state.metrics.degraded.add(1, {"reason": REASON_REDIS})
+    accepted = AcceptedResponse(accepted=True, event_id=event_id, request_id=request_id)
+    if cache_key is not None and state.idempotency is not None and cache_usable:
+        with contextlib.suppress(Exception):
+            state.idempotency.remember(cache_key, payload, accepted.model_dump_json())
+    return accepted
 
 
 def _triage(state: GatewayState, outcome: Any, body: TransactionRequest) -> RiskDecision:
@@ -858,8 +941,6 @@ def _record(
     state: GatewayState,
     outcome: Any,
     decision: RiskDecision,
-    *,
-    observe_reason: str | None,
 ) -> None:
     """Emit the §13 metric set for one scored transaction."""
     metrics = state.metrics
@@ -874,8 +955,6 @@ def _record(
     metrics.scored.add(1, {"band": decision.risk_band.value})
     for reason in decision.degraded_reasons:
         metrics.degraded.add(1, {"reason": reason})
-    if observe_reason is not None:
-        metrics.degraded.add(1, {"reason": observe_reason})
     for fired in outcome.evaluation.fired:
         metrics.rules_fired.add(1, {"rule": fired.rule_id})
     for abstained in outcome.evaluation.abstained:

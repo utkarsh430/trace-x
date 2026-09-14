@@ -475,7 +475,8 @@ The two latency histograms measure deliberately different things and neither is 
 the other: `tx_score_latency_seconds` covers **scoring only** — the feature read, the rules and the
 banding — and is the `latency_ms` the caller is told; `gateway_request_latency_seconds` covers the
 **whole server-side request**, including authentication, the rate limit, the replay lookup, triage
-and the observe-write, and is the one to compare against the p99 budget. They were briefly one
+and the replay store, and is the one to compare against the p99 budget. Recording the transaction
+in the online store is part of scoring since ADR-0046: one atomic read-and-record. They were briefly one
 metric that spanned scoring plus triage plus the observe-write, which on a workload where most
 requests open an investigation reported a Postgres transaction as scoring time.
 Streaming: consumer lag, batch duration, `late_events_total`, `dedup_dropped_total`,
@@ -514,13 +515,16 @@ container cost, which is what makes local-first MCP viable on an 8 GB VM.
 
 **Two Redis instances, because eviction policy is per instance** (ADR-0044). The feature store holds
 correctness-relevant state and runs `noeviction`: when full it refuses the write, the decision says
-`feature_write_failed`, and its completeness epoch is withdrawn. The cache instance holds the replay
+`feature_write_failed`, and the gateway's completeness guard records a hole in PostgreSQL and moves the
+store's epoch forward (ADR-0046 §5). The cache instance holds the replay
 cache and rate-limit windows and runs `allkeys-lru`, because nothing in it decides — the replay
 guarantee's authority is `cases.trigger_transaction_id` in Postgres and the limiter fails open. The
 feature store's limit follows from `benchmarks/features/memory_model.py`: 704 MiB holds the
 ten-minute representative acceptance run with 1.25× headroom and about thirteen minutes of 500 TPS;
 the steady-state requirement at that rate is ~26 GiB and does not fit this profile, which ADR-0044
-states structure by structure rather than resolving by changing feature semantics. Allocated:
+states structure by structure rather than resolving by changing feature semantics. That model
+describes the Phase 2 layout; the Step 1 layout (ADR-0046 §5) keeps raw observations for 25 hours and
+is re-measured in Phase 3 Step 12. Allocated:
 postgres 768M, redis 832M, redis-cache 160M, gateway 384M — 2,144 MiB, leaving 621 MiB for `api`,
 `worker` and `ui`.
 
@@ -604,10 +608,10 @@ zero unauthorized tool calls.
 
 | Failure | Detection | Behaviour |
 |---|---|---|
-| Feature-store Redis down | health probe / 20 ms timeout / breaker | Hot path → rules-only, `degraded=true` reason `redis_unavailable`, alert. Never fail-open silently. The cache instance and its limiter are NOT blamed |
-| Feature-store Redis **full** | `feature_write_failed` counted; `online_store_memory_bytes{store="features"}` at `maxmemory`; `online_store_evicted_keys_total{store="features"}` must stay 0 | Write refused (`noeviction`), decision made and marked degraded, completeness epoch withdrawn so every later decision says `history_incomplete`. Reads continue; the breaker does NOT open (ADR-0044) |
+| Feature-store Redis down | health probe / 20 ms timeout / breaker | Hot path → rules-only, `degraded=true` reason `redis_unavailable`, alert. Never fail-open silently. The cache instance and its limiter are NOT blamed. The unrecorded transactions are a hole, recorded and withdrawn as for a full store, and inherited by a gateway that restarts first (ADR-0046 §5) |
+| Feature-store Redis **full** | `feature_write_failed` counted; `online_store_memory_bytes{store="features"}` at `maxmemory`; `online_store_evicted_keys_total{store="features"}` must stay 0 | Write refused whole (`noeviction`; the record-and-read script is all or nothing), decision made on a read-only snapshot and marked degraded. A hole is recorded once in `app.feature_store_holes`; once writes succeed the epoch moves to that moment plus 24 h, so later decisions say `history_incomplete`, across restarts. Reads continue; the breaker does NOT open (ADR-0044, ADR-0046 §5) |
 | Feature-store Redis **empty or warming** (restart, `FLUSHALL`) | `/readyz` `feature_history: warming since …`; `degraded_mode_total{reason="history_incomplete"}` | Decisions made, `degraded=true` reason `history_incomplete`, until the store has recorded for the widest declared lookback (24 h windowed, 30 d profile). New-device and tenure rules cannot fire meanwhile. Readiness stays healthy (ADR-0044) |
-| Cache Redis down | health probe on `redis_cache` / cache breaker | Rate limiter fails open (`rate_limit_unavailable`), replay lookups skipped and retries re-scored against Postgres's `case_id`. **No decision changes** (ADR-0044) |
+| Cache Redis down | health probe on `redis_cache` / cache breaker | Rate limiter fails open (`rate_limit_unavailable`), replay lookups skipped and retries re-scored against Postgres's `case_id`. **No decision changes** (ADR-0044). A retry reusing its transaction id for a different payload, which the cache would have refused with 409, is decided rules-only with `observation_conflict` (ADR-0046 §1) |
 | Postgres down | connection error | Gateway 503; worker stops consuming — no work lost, the queue is in PG |
 | Kafka down | producer timeout | Gateway buffers to a bounded local WAL then sheds; scoring continues |
 | Model artifact missing/corrupt | digest check at boot | **Refuse to start.** A gateway serving an unknown model is worse than a down gateway |

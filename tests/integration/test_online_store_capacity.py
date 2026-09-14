@@ -5,9 +5,12 @@ file with a deliberately tiny limit and `noeviction`:
 
 * the store cannot silently evict correctness state -- `evicted_keys` stays at
   zero however hard it is pushed;
+* a refused write is all or nothing -- the refused observation leaves no trace
+  in any structure, and the observation counter does not move;
 * write-capacity failure becomes visible -- the pipeline reports
-  `feature_write_failed`, the breaker stays closed, and the epoch is withdrawn
-  so the next decision also says its history is incomplete.
+  `feature_write_failed` and `ObserveOutcome.REFUSED`, and the breaker stays
+  closed. Withdrawing completeness is the `CompletenessGuard`'s job, through its
+  durable ledger (tests/unit/test_gateway_pipeline.py, ADR-0046 §5).
 
 A throwaway container rather than the compose instance: filling the shared
 feature store would disturb every other test, and shrinking its limit at
@@ -121,7 +124,7 @@ def _fill_until_refused(store: RedisOnlineFeatureStore, limit: int = 200_000) ->
 
 
 def test_a_full_feature_store_refuses_rather_than_evicts(tiny_noeviction_redis: Any) -> None:
-    store = RedisOnlineFeatureStore(tiny_noeviction_redis)
+    store = RedisOnlineFeatureStore(tiny_noeviction_redis, namespace="f")
     store.establish_epoch()
     assert tiny_noeviction_redis.get(store.epoch_key) is not None
 
@@ -133,12 +136,37 @@ def test_a_full_feature_store_refuses_rather_than_evicts(tiny_noeviction_redis: 
         f"the feature store evicted {stats['evicted_keys']} keys under pressure. With "
         f"`noeviction` that number must be zero forever; a rise is a configuration fault."
     )
-    assert tiny_noeviction_redis.get(store.epoch_key) is None, (
-        "the refused write left the completeness epoch in place. An observation that was "
-        "not recorded is a hole in the history; the epoch must be withdrawn (ADR-0044)."
+    refused = _event(written)
+    assert int(tiny_noeviction_redis.get("f:position")) == written, (
+        "the observation counter moved for a refused write: part of the script ran"
     )
-    # Reads still work: the store is full, not gone.
-    assert tiny_noeviction_redis.ping()
+    for key, member in (
+        (f"f:txd:{refused.account_id}", refused.identity),
+        (f"f:tx:{refused.account_id}", refused.identity),
+    ):
+        assert not tiny_noeviction_redis.execute_command(
+            "HEXISTS" if ":txd:" in key else "ZSCORE", key, member
+        ), f"the refused observation left {member} in {key}"
+    for key in (f"f:card:{refused.card_id}", f"f:dev:{refused.device_id}"):
+        assert not tiny_noeviction_redis.exists(key), f"the refused observation created {key}"
+    assert tiny_noeviction_redis.get(store.epoch_key) is not None, (
+        "the store withdrew its own epoch. That is the CompletenessGuard's job, recorded "
+        "durably; a store-side delete is re-established by the next write as if nothing "
+        "had been lost."
+    )
+    # Reads still work: the store is full, not gone, and its read script declares it writes nothing.
+    # Every id, so the sketch counts run too: Redis flags PFCOUNT as a write.
+    recorded = _event(0)
+    context = store.snapshot(
+        as_of=refused.occurred_at,
+        account_id=recorded.account_id,
+        currency="GBP",
+        card_id=recorded.card_id,
+        device_id=recorded.device_id,
+        merchant_id=recorded.merchant_id,
+        ip_id=recorded.ip_id,
+    )
+    assert context.complete_since is not None
 
 
 def test_the_pipeline_reports_a_refused_write_without_tripping_the_breaker(
@@ -146,7 +174,12 @@ def test_the_pipeline_reports_a_refused_write_without_tripping_the_breaker(
 ) -> None:
     """Full is not unavailable. The breaker must stay closed, because reads still
     answer, and the decision must name the real condition."""
-    from services.gateway.pipeline import REASON_REDIS, REASON_WRITE_FAILED, ScoringPipeline
+    from services.gateway.pipeline import (
+        REASON_REDIS,
+        REASON_WRITE_FAILED,
+        ObserveOutcome,
+        ScoringPipeline,
+    )
 
     from trace_core.contracts.api.transaction import TransactionRequest
     from trace_core.features.definitions import ONLINE_FEATURES
@@ -178,10 +211,10 @@ def test_the_pipeline_reports_a_refused_write_without_tripping_the_breaker(
         }
     )
     outcome = pipeline.score(request)
-    reason = pipeline.observe(outcome.canonical)
 
-    assert reason == REASON_WRITE_FAILED, f"expected {REASON_WRITE_FAILED!r}, got {reason!r}"
-    assert reason != REASON_REDIS
+    assert outcome.observe_outcome is ObserveOutcome.REFUSED, outcome.observe_outcome
+    assert REASON_WRITE_FAILED in outcome.degraded_reasons, outcome.degraded_reasons
+    assert REASON_REDIS not in outcome.degraded_reasons
     assert breaker.allows(), (
         "the breaker opened on a refused write. The store is answering reads; opening the "
         "circuit would blind scoring to punish a write that did not happen."

@@ -28,6 +28,7 @@ because that is what "reference" has to mean for a disagreement to be attributab
 
 from __future__ import annotations
 
+import datetime as dt
 import functools
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
@@ -62,7 +63,7 @@ _OUTCOME_IS_POST_DECISION: Final = CanonicalField.AUTHORIZATION_OUTCOME in POST_
 
 
 @dataclass(frozen=True, slots=True)
-class _Read:
+class ReadScope:
     """What one read is about: the instant, the scope, and the current observation."""
 
     as_of_ms: int
@@ -98,7 +99,9 @@ def _declared_current(entity: Entity, stream: Stream, window: Window) -> Current
     return CurrentObservation.INCLUDED
 
 
-def _in_window(event: Event, *, lower_ms: int, read: _Read, declared: CurrentObservation) -> bool:
+def _in_window(
+    event: Event, *, lower_ms: int, read: ReadScope, declared: CurrentObservation
+) -> bool:
     """Half-open `(as_of - W, as_of]`, with the upper edge the declaration and the mode define."""
     if event.occurred_ms <= lower_ms:
         return False
@@ -112,7 +115,7 @@ def _in_window(event: Event, *, lower_ms: int, read: _Read, declared: CurrentObs
     return event.order_key <= key
 
 
-def _aligned(observations: Sequence[Event], *, read: _Read, window: Window) -> list[Event]:
+def _aligned(observations: Sequence[Event], *, read: ReadScope, window: Window) -> list[Event]:
     """The merchant CV's declared minute-aligned, same-currency window (ADR-0046 §2)."""
     lower_minute = (read.as_of_ms - window.seconds * 1000) // ALIGNED_MINUTE_MS
     upper_minute = read.as_of_ms // ALIGNED_MINUTE_MS
@@ -125,8 +128,13 @@ def _aligned(observations: Sequence[Event], *, read: _Read, window: Window) -> l
     ]
 
 
-def _window_state(
-    observations: Sequence[Event], *, read: _Read, entity: Entity, stream: Stream, window: Window
+def window_state(
+    observations: Sequence[Event],
+    *,
+    read: ReadScope,
+    entity: Entity,
+    stream: Stream,
+    window: Window,
 ) -> WindowState | None:
     from trace_core.features.state_plan import PLAN
 
@@ -196,7 +204,7 @@ def _window_state(
     )
 
 
-def _profile(transactions: Sequence[Event], read: _Read) -> Profile | None:
+def lifetime_profile(transactions: Sequence[Event], read: ReadScope) -> Profile | None:
     """The account's lifetime strictly before `as_of`, reduced (ADR-0046 §3).
 
     Strictly before, in both modes: a transaction entering its own baseline would make every
@@ -247,7 +255,9 @@ def _profile(transactions: Sequence[Event], read: _Read) -> Profile | None:
     )
 
 
-def _previous(observations: Sequence[Event], read: _Read, lookback: Window) -> Observation | None:
+def previous_observation(
+    observations: Sequence[Event], read: ReadScope, lookback: Window
+) -> Observation | None:
     """The latest `(occurred_ms, identity)` strictly before `as_of`, inside the lookback."""
     lower_ms = read.as_of_ms - lookback.seconds * 1000
     earlier = [
@@ -283,7 +293,7 @@ def build_context(
     """
     from trace_core.features.state_plan import PLAN
 
-    read = _Read(as_of_ms=as_of_ms, currency=currency, current=current, mode=mode)
+    read = ReadScope(as_of_ms=as_of_ms, currency=currency, current=current, mode=mode)
     windows: dict[tuple[Entity, str, Stream, str], WindowState] = {}
     for entity, entity_id in ids.items():
         if entity_id is None:
@@ -292,7 +302,7 @@ def build_context(
         for stream in Stream:
             on_stream = [e for e in mine if e.stream is stream]
             for window in WINDOWS:
-                state = _window_state(
+                state = window_state(
                     on_stream, read=read, entity=entity, stream=stream, window=window
                 )
                 if state is not None:
@@ -304,7 +314,7 @@ def build_context(
         transactions = [
             e for e in visible if e.stream is Stream.TRANSACTION and e.account_id == account_id
         ]
-        if (profile := _profile(transactions, read)) is not None:
+        if (profile := lifetime_profile(transactions, read)) is not None:
             profiles[(Entity.ACCOUNT, account_id)] = profile
 
     previous: dict[tuple[Entity, str, Stream], Observation] = {}
@@ -313,7 +323,7 @@ def build_context(
         if entity_id is None:
             continue
         on_stream = [e for e in visible if e.stream is stream and e.entity_id(entity) == entity_id]
-        if (observation := _previous(on_stream, read, lookback)) is not None:
+        if (observation := previous_observation(on_stream, read, lookback)) is not None:
             previous[(entity, entity_id, stream)] = observation
 
     return FeatureContext(
@@ -349,10 +359,28 @@ class ReferenceFeatureStore:
         """Recorded observations in recording order, one per identity."""
         return tuple(self._log)
 
+    def establish_epoch(self, *, at: EventTime | None = None) -> EventTime:
+        """When recording began, if not already said: an existing claim is never moved earlier."""
+        if self.complete_since is None:
+            self.complete_since = (
+                at if at is not None else EventTime(from_millis(to_millis(dt.datetime.now(dt.UTC))))
+            )
+        return self.complete_since
+
+    def withdraw_completeness(self, *, resume_at: EventTime) -> None:
+        """Vouch for no window that began before `resume_at`, keeping any later claim
+        (ADR-0046 §5): a withdrawal never moves completeness backwards."""
+        if self.complete_since is None or self.complete_since < resume_at:
+            self.complete_since = resume_at
+
     def observe(self, event: Event) -> ObserveReceipt:
         """Record an observation unless its identity already was (ADR-0046 §1)."""
-        if event.identity in self._recorded:
-            return ObserveReceipt(position=len(self._log), recorded=False)
+        if (first := self._recorded.get(event.identity)) is not None:
+            return ObserveReceipt(
+                position=len(self._log),
+                recorded=False,
+                conflicting=first.recorded_form() != event.recorded_form(),
+            )
         self._log.append(event)
         self._recorded[event.identity] = event
         return ObserveReceipt(position=len(self._log), recorded=True)
@@ -441,7 +469,11 @@ def event_time_complete_context(
 __all__ = [
     "HABITUAL_MIN_VISITS",
     "Event",
+    "ReadScope",
     "ReferenceFeatureStore",
     "build_context",
     "event_time_complete_context",
+    "lifetime_profile",
+    "previous_observation",
+    "window_state",
 ]

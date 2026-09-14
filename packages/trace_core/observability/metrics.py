@@ -53,7 +53,8 @@ telemetry that gets trusted."""
 
 REQUEST_LATENCY: Final = "gateway_request_latency_seconds"
 """THE WHOLE server-side request: authentication, rate limiting, the replay
-lookup, scoring, triage, the observe-write, the replay store and serialisation.
+lookup, scoring (which records the transaction in the online store), triage, the replay store
+and serialisation.
 
 The one to compare against a p99 budget. Measured from the first thing the
 handler does to the last, so the only latency it excludes is what happens
@@ -165,7 +166,7 @@ class HotPathMetrics:
         self.request_latency: Histogram = meter.create_histogram(
             REQUEST_LATENCY,
             unit="s",
-            description="Whole server-side request, including triage and the observe-write.",
+            description="Whole server-side request, including triage and the replay store.",
             explicit_bucket_boundaries_advisory=list(LATENCY_BUCKETS_S),
         )
         self.feature_read_latency: Histogram = meter.create_histogram(
