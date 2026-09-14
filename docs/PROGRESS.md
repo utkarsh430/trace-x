@@ -749,9 +749,15 @@ Phase 3, in the wave order of `docs/PHASE3_PLAN.md` §5:
           - With N8 ablated, M4 moves a device-farm session as a whole (the draft's original
             class), so eval-v1's one-minute repeat survives for the N8 control to detect. Applied
             per transaction, M4 would erase it.
-      - **6d next:** legitimate look-alikes N1–N5. Points are drawn near the same actor's previous
-        transaction when it was minutes earlier; otherwise bursts and micro-sessions imply
-        impossible speeds.
+      - **6d-1 done.**
+        - N1: every transaction without a planted IP may come from an away IP.
+        - N3: legitimate micro-sessions, a follow-up purchase within a minute.
+        - A transaction minutes after the same actor's previous one, from the same anchor, is drawn
+          near that point. This holds for legitimate transactions and within a planted instance,
+          so bursts and micro-sessions no longer imply impossible speeds.
+        - Ablation switches wired for N1 and N3.
+      - **6d-2 next:** N2 legitimate trips.
+      - **6d-3:** N4 fixed-price merchants and N5 households.
    7. U7/N12 (ADR-0049).
    8. Ablation controls.
    9. Diagnostic eval-v2 probe.

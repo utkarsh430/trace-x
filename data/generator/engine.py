@@ -198,6 +198,13 @@ def _build_transaction(
     device = profile.home_devices[rng.randrange(len(profile.home_devices))]
     ip = profile.home_ips[rng.randrange(len(profile.home_ips))]
     card = profile.cards[rng.randrange(len(profile.cards))]
+    settings = config.baseline_identity
+    if settings is not None:
+        # N1. Both draws are made whenever the gate is on, so an ablation moves nothing else.
+        away = rng.random() < settings.transaction_away_ip_share
+        away_ip = universe.ips[rng.randrange(len(universe.ips))].ip_id
+        if away and settings.applies("N1"):
+            ip = away_ip
 
     # Processing time is at or after event time; the gap is the lag the warm path
     # measures. Without it Bronze would carry an ingested_at identical to
@@ -319,9 +326,9 @@ class _LegitimateTransaction:
     role: int
     pair: int
     """Identifies a retry pair (the retry's draw index); the draw's own index otherwise."""
-    location: tuple[float, float]
-    """(latitude, longitude), planned before emission so G3 can be judged exactly. A retry pair
-    shares its retry's point."""
+    location: tuple[float, float] | None = None
+    """(latitude, longitude), planned before emission (`_locate_legitimate`) so G3 can be judged
+    exactly. A retry shares its declined attempt's point."""
 
 
 def _device_platform(universe: Universe, device: str) -> str:
@@ -613,6 +620,8 @@ def _plan_eval_v2(
     # An ablated T1 or T3 still makes its draws, so the other decisions stay where they were.
     t1 = settings.applies("T1")
     t3 = settings.applies("T3")
+    n3 = settings.applies("N3")
+    end_ms = to_millis(config.end_at)
     streams: dict[int, tuple[random.Random, float]] = {}
     consumed = False
     for index in range(legit_count):
@@ -627,7 +636,6 @@ def _plan_eval_v2(
             streams[account] = (stream, multiplier)
         rng, multiplier = streams[account]
         devices = payment.get(account)
-        location = _legitimate_location(config, universe, account, index)
 
         retry_p = (
             min(_MAX_DECLINE_PROBABILITY, settings.decline_retry_share_per_transaction * multiplier)
@@ -645,7 +653,7 @@ def _plan_eval_v2(
                         attempt_ms,
                         index + 1,
                         3,
-                        _LegitimateTransaction(account, device, True, _ATTEMPT, index, location),
+                        _LegitimateTransaction(account, device, True, _ATTEMPT, index),
                     )
                 )
                 plan.append(
@@ -653,7 +661,7 @@ def _plan_eval_v2(
                         at_ms,
                         index,
                         3,
-                        _LegitimateTransaction(account, device, False, _RETRY, index, location),
+                        _LegitimateTransaction(account, device, False, _RETRY, index),
                     )
                 )
                 consumed = True
@@ -664,6 +672,25 @@ def _plan_eval_v2(
             if t3
             else 0.0
         )
+        # N3. Drawn whenever a next draw exists, so an ablation moves nothing else.
+        if index + 1 < legit_count:
+            micro = rng.random() < settings.micro_session_share_per_transaction
+            follow_ms = at_ms + rng.randrange(*_MICRO_SESSION_GAP_MS)
+            if micro and n3 and follow_ms < end_ms:
+                # The follow-up takes the consumed draw's tiebreak, as a retry's attempt does.
+                for tiebreak, moment in ((index, at_ms), (index + 1, follow_ms)):
+                    declined = rng.random() < decline_p
+                    device = _legitimate_device(settings, devices, moment, rng) if t1 else None
+                    plan.append(
+                        (
+                            moment,
+                            tiebreak,
+                            3,
+                            _LegitimateTransaction(account, device, declined, _SINGLE, tiebreak),
+                        )
+                    )
+                consumed = True
+                continue
         declined = rng.random() < decline_p
         device = _legitimate_device(settings, devices, at_ms, rng)
         if not t1:
@@ -673,12 +700,13 @@ def _plan_eval_v2(
                 at_ms,
                 index,
                 3,
-                _LegitimateTransaction(account, device, declined, _SINGLE, index, location),
+                _LegitimateTransaction(account, device, declined, _SINGLE, index),
             )
         )
 
     # Planted episodes: placement and timing (N6, M4, G5, bursts), T2, M1-M3 and G3 in one
     # proposal loop per instance; then G4's devices on the final times.
+    plan = _locate_legitimate(config, universe, plan)
     placed = _place_planted(config, universe, planted, plan)
     plan.extend(_resolve_planted_devices(config, universe, placed, payment))
 
@@ -719,32 +747,18 @@ def plan_order_key(seed: int, item: tuple[int, int, int, Any]) -> tuple[int, int
     return occurred_ms, tie_order_key(seed, identity)
 
 
-def _with_redrawn_fields(
-    config: GeneratorConfig, universe: Universe, entry: tuple[int, int, int, Any], attempt: int
+def _with_redrawn_entry_mode(
+    config: GeneratorConfig, entry: tuple[int, int, int, Any]
 ) -> tuple[int, int, int, Any]:
-    """One planted transaction with M1-M3 applied; any other entry unchanged.
-
-    A point planted on the account's exact home point is M2's; any other planted point is M1's.
-    An ablated correction leaves its field as planned."""
+    """One planted transaction with M3 applied: its entry mode drawn from its planted channel's
+    legitimate modes, or kept when M3 is ablated. Points are `_locate_planted`'s."""
     from dataclasses import replace
-
-    from trace_core.domain.geo import GeoPoint
 
     occurred_ms, tiebreak, kind, (instance, planned, ordinal) = entry
     if planned.topic != "tx.raw.v1":
         return entry
     overrides = dict(planned.overrides)
     key = f"{instance.instance_id}:{ordinal}"
-    if "latitude" in overrides or "longitude" in overrides:
-        anchor = GeoPoint(
-            latitude=float(overrides["latitude"]), longitude=float(overrides["longitude"])
-        )
-        home = universe.profiles[planned.account_index].account.home
-        if _corrected(config, "M2" if anchor == home else "M1"):
-            location = derive(config.seed, "scenario-location", f"{key}:{attempt}")
-            point = sample_location(location, anchor, config.geo_jitter_km)
-            overrides["latitude"] = point.latitude
-            overrides["longitude"] = point.longitude
     if "entry_mode" in overrides and _corrected(config, "M3"):
         modes = _CHANNEL_ENTRY.get(str(overrides.get("channel")))
         if modes is None:
@@ -804,20 +818,68 @@ _G3_PATTERNS: Final = frozenset(
     {FraudPattern.ACCOUNT_TAKEOVER, FraudPattern.UNUSUAL_LOCATION_DEVICE}
 )
 
+_SESSION_WINDOW_MS: Final = 30 * 60_000
+"""A transaction this soon after the same actor's previous one, from the same anchor, is drawn near
+that previous point (chosen). Otherwise two payments seconds apart land kilometres apart and imply
+speeds no one travels -- for bursts and micro-sessions alike."""
+_SESSION_JITTER_KM: Final = 0.3
+"""Spread around the previous point within a session (chosen): a street, not a town."""
+_MICRO_SESSION_GAP_MS: Final = (3_000, 60_000)
+"""N3: from a legitimate purchase to its follow-up (chosen)."""
+
 _Located = tuple[int, float, float, bool]
 """(event time, latitude, longitude, whether G3 binds the row)."""
 
 
-def _legitimate_location(
-    config: GeneratorConfig, universe: Universe, account_index: int, draw: int
-) -> tuple[float, float]:
-    """A legitimate transaction's point, drawn as `_build_transaction` draws one, from a substream
-    keyed by the draw index. Planned before emission so G3 can be judged on exact coordinates."""
-    home = universe.profiles[account_index].account.home
-    point = sample_location(
-        derive(config.seed, "baseline-location", str(draw)), home, config.geo_jitter_km
+def _session_point(
+    rng: random.Random,
+    anchor: GeoPoint,
+    previous: tuple[int, GeoPoint, GeoPoint] | None,
+    at_ms: int,
+    jitter_km: float,
+) -> GeoPoint:
+    """A transaction's point. `previous` is (time, anchor, point) of the same actor's previous
+    transaction: within `_SESSION_WINDOW_MS` and from the same anchor, the point is drawn around it;
+    otherwise around the anchor, as eval-v1 drew every point."""
+    if previous is not None and at_ms - previous[0] <= _SESSION_WINDOW_MS and previous[1] == anchor:
+        return sample_location(rng, previous[2], _SESSION_JITTER_KM)
+    return sample_location(rng, anchor, jitter_km)
+
+
+def _locate_legitimate(
+    config: GeneratorConfig, universe: Universe, entries: list[tuple[int, int, int, Any]]
+) -> list[tuple[int, int, int, Any]]:
+    """Every legitimate transaction's point, account by account in time order.
+
+    Drawn from `derive(seed, "baseline-location", str(tiebreak))` around home, or near the
+    account's previous legitimate transaction when it was minutes earlier (`_session_point`). A
+    retry keeps its declined attempt's point, as it keeps every other field."""
+    order = sorted(
+        range(len(entries)),
+        key=lambda n: (entries[n][3].account_index, entries[n][0], entries[n][1]),
     )
-    return point.latitude, point.longitude
+    located = list(entries)
+    previous: dict[int, tuple[int, GeoPoint, GeoPoint]] = {}
+    attempts: dict[int, GeoPoint] = {}
+    for n in order:
+        at_ms, tiebreak, kind, row = entries[n]
+        account = row.account_index
+        anchor = universe.profiles[account].account.home
+        if row.role == _RETRY and row.pair in attempts:
+            point = attempts.pop(row.pair)
+        else:
+            rng = derive(config.seed, "baseline-location", str(tiebreak))
+            point = _session_point(rng, anchor, previous.get(account), at_ms, config.geo_jitter_km)
+            if row.role == _ATTEMPT:
+                attempts[row.pair] = point
+        previous[account] = (at_ms, anchor, point)
+        located[n] = (
+            at_ms,
+            tiebreak,
+            kind,
+            replace(row, location=(point.latitude, point.longitude)),
+        )
+    return located
 
 
 @dataclass(slots=True)
@@ -1022,19 +1084,58 @@ def _g3_holds(timeline: list[_Located]) -> bool:
     return True
 
 
-def _with_home_location(
-    config: GeneratorConfig, universe: Universe, entry: tuple[int, int, int, Any]
-) -> tuple[int, int, int, Any]:
-    """A planted transaction with no planted point, located around home as a legitimate one is,
-    from `derive(seed, "scenario-home-location", f"{instance_id}:{ordinal}")`."""
-    at_ms, tiebreak, kind, (instance, planned, ordinal) = entry
-    if planned.topic != "tx.raw.v1" or "latitude" in planned.overrides:
-        return entry
-    home = universe.profiles[planned.account_index].account.home
-    rng = derive(config.seed, "scenario-home-location", f"{instance.instance_id}:{ordinal}")
-    point = sample_location(rng, home, config.geo_jitter_km)
-    overrides = {**planned.overrides, "latitude": point.latitude, "longitude": point.longitude}
-    return at_ms, tiebreak, kind, (instance, replace(planned, overrides=overrides), ordinal)
+def _locate_planted(
+    config: GeneratorConfig,
+    universe: Universe,
+    candidate: list[tuple[int, int, int, Any]],
+    attempt: int,
+) -> list[tuple[int, int, int, Any]]:
+    """Points for one instance's transactions, in time order (M1, M2 and home anchors).
+
+    - A planted point is the anchor of the legitimate noise model: drawn around it from
+      `derive(seed, "scenario-location", f"{instance_id}:{ordinal}:{attempt}")`, or copied exactly
+      when its correction is ablated (M2 for a point on the account's home, M1 otherwise).
+    - Every other transaction is anchored at home, from
+      `derive(seed, "scenario-home-location", f"{instance_id}:{ordinal}")`.
+    - Either way, a transaction minutes after the instance's previous one on that account, from the
+      same anchor, is drawn near it (`_session_point`), as a legitimate one is. Impossible travel's
+      legs have different anchors, so they stay apart."""
+    order = sorted(range(len(candidate)), key=lambda n: (candidate[n][0], candidate[n][3][2]))
+    located = list(candidate)
+    previous: dict[int, tuple[int, GeoPoint, GeoPoint]] = {}
+    for n in order:
+        at_ms, tiebreak, kind, (instance, planned, ordinal) = candidate[n]
+        if planned.topic != "tx.raw.v1":
+            continue
+        account = planned.account_index
+        home = universe.profiles[account].account.home
+        key = f"{instance.instance_id}:{ordinal}"
+        overrides = dict(planned.overrides)
+        if "latitude" in overrides or "longitude" in overrides:
+            anchor = GeoPoint(
+                latitude=float(overrides["latitude"]), longitude=float(overrides["longitude"])
+            )
+            if _corrected(config, "M2" if anchor == home else "M1"):
+                rng = derive(config.seed, "scenario-location", f"{key}:{attempt}")
+                point = _session_point(
+                    rng, anchor, previous.get(account), at_ms, config.geo_jitter_km
+                )
+            else:
+                point = anchor
+        else:
+            anchor = home
+            rng = derive(config.seed, "scenario-home-location", key)
+            point = _session_point(rng, anchor, previous.get(account), at_ms, config.geo_jitter_km)
+        previous[account] = (at_ms, anchor, point)
+        overrides["latitude"] = point.latitude
+        overrides["longitude"] = point.longitude
+        located[n] = (
+            at_ms,
+            tiebreak,
+            kind,
+            (instance, replace(planned, overrides=overrides), ordinal),
+        )
+    return located
 
 
 def _place_instance(
@@ -1086,10 +1187,8 @@ def _place_instance(
             if settings.applies("T2"):
                 subsecond = derive(seed, "scenario-subsecond", f"{iid}:{ordinal}")
                 at_ms = at_ms - at_ms % 1000 + subsecond.randrange(1000)
-            entry = _with_redrawn_fields(
-                config, universe, (at_ms, tiebreak, kind, payload), attempt
-            )
-            candidate.append(_with_home_location(config, universe, entry))
+            candidate.append(_with_redrawn_entry_mode(config, (at_ms, tiebreak, kind, payload)))
+        candidate = _locate_planted(config, universe, candidate, attempt)
         if not _travel_stays_impossible(candidate):
             continue
         if instance.pattern in _G3_PATTERNS:
@@ -1405,6 +1504,8 @@ def generate_dataset(
                     overrides["device_id"] = legitimate.device_id
                 if legitimate.declined:
                     overrides["authorization_outcome"] = "DECLINED"
+                if legitimate.location is None:  # pragma: no cover - `_locate_legitimate` sets it
+                    raise ValueError(f"legitimate draw {legitimate.pair} has no planned point")
                 overrides["latitude"], overrides["longitude"] = legitimate.location
             event = _build_transaction(
                 config, universe, legitimate.account_index, occurred_ms, position, lag, overrides

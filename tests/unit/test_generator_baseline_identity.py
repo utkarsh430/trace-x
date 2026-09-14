@@ -79,7 +79,7 @@ from data.generator.scenarios import (
 )
 
 from trace_core.domain.enums import FraudPattern
-from trace_core.domain.geo import GeoPoint, implied_speed_kmh
+from trace_core.domain.geo import GeoPoint, haversine_km, implied_speed_kmh
 from trace_core.domain.time import to_millis
 
 pytestmark = pytest.mark.unit
@@ -1813,3 +1813,86 @@ def test_ablating_n8_restores_the_one_minute_device_farm_repeat() -> None:
             for a, b in itertools.pairwise(sorted(account_times)):
                 near_a_minute += 59_000 <= b - a <= 61_000
     assert near_a_minute > 0
+
+
+# ==================================== 6d-1: away IPs, micro-sessions, sessions =====
+
+
+def _consecutive_legitimate(rows: list[GeneratedRow]) -> list[tuple[GeneratedRow, GeneratedRow]]:
+    by_account: dict[str, list[GeneratedRow]] = collections.defaultdict(list)
+    for row in rows:
+        if _is_legit_tx(row):
+            by_account[row.event["payload"]["account_id"]].append(row)
+    pairs: list[tuple[GeneratedRow, GeneratedRow]] = []
+    for account_rows in by_account.values():
+        account_rows.sort(key=_millis)
+        pairs.extend(itertools.pairwise(account_rows))
+    return pairs
+
+
+def _km(a: GeneratedRow, b: GeneratedRow) -> float:
+    pa, pb = a.event["payload"], b.event["payload"]
+    return float(
+        haversine_km(
+            GeoPoint(pa["latitude"], pa["longitude"]), GeoPoint(pb["latitude"], pb["longitude"])
+        )
+    )
+
+
+def test_n1_legitimate_payments_come_from_away_ips_at_the_declared_share(
+    gate_on: list[GeneratedRow], universe: Universe
+) -> None:
+    home = {p.account_id: set(p.home_ips) for p in universe.profiles}
+    legitimate = [r for r in gate_on if _is_legit_tx(r)]
+    away = [
+        r
+        for r in legitimate
+        if r.event["payload"]["ip_id"] not in home[r.event["payload"]["account_id"]]
+    ]
+    share = BaselineIdentityConfig().transaction_away_ip_share
+    expected = len(legitimate) * share
+    # An away draw can land on a home IP by chance, so the observed count sits just below.
+    _assert_within(len(away), expected, math.sqrt(expected), "away-IP payments")
+
+
+def test_ablating_n1_keeps_legitimate_payments_on_home_ips() -> None:
+    config = _ablation_config("N1")
+    universe = build_universe(config)
+    home = {p.account_id: set(p.home_ips) for p in universe.profiles}
+    legitimate = [r for r in generate_dataset(config, universe) if _is_legit_tx(r)]
+    assert legitimate
+    assert all(
+        r.event["payload"]["ip_id"] in home[r.event["payload"]["account_id"]] for r in legitimate
+    )
+
+
+def test_n3_micro_sessions_exist_at_about_the_declared_share(gate_on: list[GeneratedRow]) -> None:
+    pairs = _consecutive_legitimate(gate_on)
+    legitimate = sum(1 for r in gate_on if _is_legit_tx(r))
+    quick = sum(1 for a, b in pairs if 3_000 <= _millis(b) - _millis(a) < 60_000)
+    expected = legitimate * BaselineIdentityConfig().micro_session_share_per_transaction
+    assert 0.6 * expected <= quick <= 1.6 * expected + 10, (quick, expected)
+
+
+def test_ablating_n3_leaves_sub_minute_legitimate_gaps_rare() -> None:
+    rows = _ablated("N3")
+    quick = sum(1 for a, b in _consecutive_legitimate(rows) if _millis(b) - _millis(a) < 60_000)
+    legitimate = sum(1 for r in rows if _is_legit_tx(r))
+    assert quick <= 0.01 * legitimate
+
+
+def test_transactions_minutes_apart_by_one_actor_stay_close(gate_on: list[GeneratedRow]) -> None:
+    """Bursts and micro-sessions must not imply impossible speeds: within a session, a point is
+    drawn near the previous one."""
+    close = [
+        (a, b)
+        for a, b in _consecutive_legitimate(gate_on)
+        if 0 < _millis(b) - _millis(a) <= 30 * 60_000
+    ]
+    assert close
+    assert all(_km(a, b) < 5.0 for a, b in close)
+    for rows in _by_instance(
+        _planted_tx(gate_on, FraudPattern.CARD_TESTING, FraudPattern.VELOCITY_ATTACK)
+    ).values():
+        ordered = sorted(rows, key=_millis)
+        assert all(_km(a, b) < 5.0 for a, b in itertools.pairwise(ordered))

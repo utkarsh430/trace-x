@@ -609,6 +609,8 @@ ZERO_RATE_FIELDS = frozenset(
         "secondary_device_transaction_share",
         "decline_share_per_transaction",
         "decline_retry_share_per_transaction",
+        "transaction_away_ip_share",
+        "micro_session_share_per_transaction",
     }
 )
 """Every identity, device, T1 and T3 rate, named. A rate added later must be

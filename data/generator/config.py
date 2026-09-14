@@ -177,6 +177,18 @@ class BaselineIdentityConfig(StrictModel):
     """Lognormal sigma of a mean-one per-account multiplier on both decline
     shares: declines concentrate on a minority of accounts."""
 
+    # ---- N1 and N3: legitimate look-alikes (Stage 2) ------------------------
+    transaction_away_ip_share: _Share = 0.05
+    """N1: share of transactions paid from outside the account's home IPs -- mobile data, work,
+    public Wi-Fi, travel -- drawn from the whole universe, datacenter ranges at their population
+    rate, so unrelated accounts briefly share an IP. Applies to every transaction whose IP is not
+    planted, since an unplanted IP is drawn the legitimate way."""
+
+    micro_session_share_per_transaction: _Share = 0.03
+    """N3: share of legitimate purchases followed within a minute by another from the same account
+    -- split tender, a transit tap, a basket then a tip. One extra transaction, never a burst, so
+    it stays well below planted burst intensity."""
+
     # ---- G2 and the ablation controls (Stage 2) -----------------------------
     coverage_floor_instances: Annotated[int, Field(ge=1, le=1000)] = 20
     """G2 (`LPC-5` §14.4): after the weighted mix, a pattern with fewer instances is topped up to
