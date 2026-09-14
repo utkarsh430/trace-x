@@ -60,6 +60,7 @@ been thought through.
 | [0046](0046-feature-semantics-precision.md) | Feature semantics made precise: one declared meaning per feature, and an idempotent, order-independent online store | 3 | Proposed |
 | [0047](0047-event-transport.md) | Event transport: declared topics, one producer factory, and a scheduled fault overlay | 3 | Proposed |
 | [0048](0048-delta-capabilities-and-lake-conventions.md) | What Delta 4.0.1 actually does, and the lake conventions built on it | 3 | Proposed |
+| [0049](0049-authorization-outcome-events.md) | Authorization decisions are their own dated events; `declined_ratio_1h` reads only decisions known before the score | 3 | Proposed |
 
 ## Notes on status
 

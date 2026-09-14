@@ -74,8 +74,9 @@ exit condition; each is owned by a Phase 3 step.
   with self-inclusion declared per feature and the thresholds left unchanged; ADR-0046 §2. Owned by
   Step 1, which re-runs the load gate, the manual replay and rule validation on the new values.
 * **`authorization_outcome` is post-decision information carried by a pre-decision contract**
-  (ADR-0046 §7). Step 1 keeps a transaction's own outcome out of its own features; how earlier
-  outcomes may be used is an open architecture decision (U7).
+  (ADR-0046 §7). Step 1 keeps a transaction's own outcome out of its own features. U7, decided on
+  2026-09-14, makes authorization decisions their own dated events (ADR-0049, Proposed). It is not
+  implemented yet: until Stage 2 step 7, earlier outcomes still come from scoring requests.
 * **Phase 2's manual replay predates ADR-0044.** `benchmarks/gateway/triage-bands.md` was generated
   (`42f907c`) hours before completeness gating existed (`5c77025`), so its profile rules fired on a
   store that could not tell "not known" from "cannot tell". Replayed again by its own commit on a
@@ -388,7 +389,8 @@ both reports.
 ## WORK IN PROGRESS
 
 * **Step 1 — feature semantics and online-store correctness (lead): complete.** `P3.semantics-hardening`
-  is PASS. U10 was decided on 2026-09-14 (R010 unchanged); U7 stays open.
+  is PASS. U10 was decided on 2026-09-14 (R010 unchanged). U7 was decided the same day (ADR-0049) and
+  is not implemented yet.
   * **Step 1a is committed** (`1ecd6a5`). ADR-0046 (Proposed) declares the semantics. The reference
     implements both evaluation modes and passes the hand-derived literal fixtures; 58 mutants and the
     mode-agreement properties keep the fixtures honest. The durable hole ledger (migration 0004) and
@@ -541,8 +543,29 @@ both reports.
   home, the declared time-of-day, merchant-popularity and channel corrections are not implemented, no
   episode starts in the last three days of the window, and two scenario timing constants are fixed.
   It proposes `LPC-5` -- no observable may be exclusive to planted rows, even a documented one, plus
-  representation, calendar-coverage and fixed-offset rules -- and a Stage 2 order. **Awaiting review;
-  Stage 2 not begun, and its freeze waits for U7.**
+  representation, calendar-coverage and fixed-offset rules -- and a Stage 2 order.
+
+  **Reviewed by the user on 2026-09-14. No eval-v2 generation has started.**
+  * **Audit and corrections.** The audit is accepted. M4–M6 and N1–N11 are approved conceptually,
+    every one behind the gate; `eval-v1` stays byte-identical.
+  * **Q1 extension.** A scenario's identity is its causal mechanism, its required causal relationships,
+    its documented behavioural signature and its scenario-specific acceptance tests.
+    - Nuisance parameters are not part of it: exact timestamps and offsets, amounts, merchant choice,
+      window position, non-required entry modes, formatting and precision, and tie order.
+    - N6–N9 are therefore approved as nuisance randomisation, with seed and manifest reproducibility
+      kept.
+    - To be recorded as a decision that updates ADR-0030 (Stage 2 step 5).
+  * **U7 decided.** See UNRESOLVED DECISIONS; designed in ADR-0049 (Proposed), not implemented.
+  * **`LPC-5` amended and frozen** as `eval/track_a/criteria/lpc-5.md`, revision 1, sha256
+    `ae6c334df1c0a22d26d2d09701f4319eab4d9aca6bf2ebb3ca6a4926b50b6fbb`.
+    - **Fully mechanical.** An INTRINSIC_BEHAVIOURAL_SIGNAL allowlist of 57 cited entries, each with a
+      value set, exemption, composition rule, minimum effect and consequences; the S0–S8 checks; a
+      declared amount mechanism (G1) and coverage floor (G2); and eval-v1, zero-rate and per-correction
+      ablation controls.
+    - **Revisions.** A threshold changes only by a numbered revision, with a fresh candidate generated
+      after it.
+    - **Predicted conflicts.** §18 lists 14, read from the code rather than from any run, for the
+      diagnostic probe to confirm or refute. Several need user decisions (NEXT EXECUTABLE TASKS).
 
 ## CURRENTLY FAILING TESTS
 
@@ -594,7 +617,7 @@ both reports.
 | U4 | Whether the Skeptic agent pays for its cost | Phase 9 Arm F — `UNUSUAL_LOCATION_DEVICE` was built deliberately ambiguous to give this ablation something real to measure |
 | U5 | LightGBM vs XGBoost on measured PR-AUC | Phase 4 |
 | U6 | Whether Phase 13 (Go gateway) is worth doing | Phase 13 entry |
-| **U7** | How authorization outcomes reach features. The scored transaction's own outcome is post-decision and is excluded (ADR-0046 §7). Earlier transactions' outcomes are still taken from their scoring requests. Recommended: an authorization-result event dated when the outcome is known | User decision (new event contract) |
+| **U7** | **Decided 2026-09-14: authorization decisions are their own dated events.** A transaction's own outcome is post-decision and never enters its own features. Decisions arrive as `tx.authorization.v1` events after the score. `declined_ratio_1h` reads only decisions made before `as_of` and recorded before the read, never the scored transaction's own (`CurrentObservation.PRIOR_KNOWN`, feature set 3.0.0). Historical sources replay the transaction first and the decision after it, through the declared delay model DM-1. Designed in ADR-0049 (Proposed). **Not implemented:** until Stage 2 step 7, earlier outcomes still come from scoring requests | Decided; implementation in Stage 2 step 7 |
 | **U9** | **Decided 2026-09-14: snake_case** for every data-platform identifier -- schema and table identifiers and the lake directories derived from them, streaming query and checkpoint names, Delta transaction app ids, Databricks job and task identifiers, and metric and manifest identifiers for the same logical name. CLAUDE.md §6 amended narrowly; no mapping layer; a consistency test pins it (ADR-0048) | Decided |
 | **U10** | **Decided 2026-09-14: R010 stays at `device_distinct_accounts_24h >= 5`.** The `eval-v1` replay delta -- 9 more legitimate and 3 more fraud high-risk decisions, all attributed to self-inclusion -- is expected semantic drift, not a regression. Not retuned on `eval-v1`, whose device-related label proxies would fit the ruleset to a flawed dataset. A threshold study follows on `eval-v2` (NEXT EXECUTABLE TASKS); any change is a separate, versioned ruleset decision | Decided |
 
@@ -604,10 +627,31 @@ both reports.
 
 Phase 3, in the wave order of `docs/PHASE3_PLAN.md` §5:
 
-1. **User decisions still open:** U7, and acceptance of ADR-0046, ADR-0047 and ADR-0048 together with
-   ADR-0048's proposed plan corrections.
-2. **Review the Step E stage 1d audit**, its proposed `LPC-5` criterion and corrections. Stage 2
-   follows the review; its freeze waits for U7.
+1. **User decisions still open.**
+   - Acceptance of ADR-0046 to ADR-0049, with ADR-0048's proposed plan corrections.
+   - The `LPC-5` §18 items that need a user decision:
+     - remote-attacker travel speed (item 1);
+     - MC-3 and MC-4 (item 7);
+     - `CREDENTIAL_STUFFING`'s `IDENTITY_CHANGE` key (item 8);
+     - planted devices (item 9);
+     - the G2 coverage floor (item 10);
+     - multi-transaction spacing (item 14).
+2. **Step E Stage 2, in the approved order.**
+   1. Done: amend and freeze `LPC-5`.
+   2. Next: `LPC-5` unit and self-tests.
+   3. Show that eval-v1 fails the intended checks.
+   4. Complete and test LPC-4.
+   5. Record the Q1 extension.
+   6. M4–M6 and N1–N11 behind the gate.
+   7. U7/N12 (ADR-0049).
+   8. Ablation controls.
+   9. Diagnostic eval-v2 probe.
+   10. Final candidate.
+   11. Frozen `LPC-5` acceptance.
+   12. Freeze the manifest and digests.
+   13. Re-run replay validation, rules validation, the R010 study and the Phase 2 manual comparison.
+
+   No `LPC-5` threshold is tuned after the final candidate is seen.
 3. **R010 threshold study (U10)**, once `eval-v2` is frozen and its label-proxy checks pass. Compare
    candidate thresholds on fraud recall, false-positive rate, legitimate and fraud high-risk counts,
    the business and risk trade-off, and confidence intervals or sample counts, with attribution
@@ -642,6 +686,8 @@ skipped, and `tests/chaos/test_redis_down.py` with `tests/chaos/test_feature_sto
 After the start-up fix, `make verify` at 2026-09-14T03:54:36Z again reported VERIFY OK, 11 passed; the guard's
 unit tests and both restart chaos tests passed on that code.
 At the Step 1 close-out, `make verify` at 2026-09-14T04:41:22Z again reported VERIFY OK, 11 passed.
+After freezing `LPC-5` and writing ADR-0049 (documents only; no code changed), `make verify` at
+2026-09-14T06:42:36Z reported VERIFY OK, 11 passed.
 
 **Acceptance status: 21 PASS · 1 IN_PROGRESS · 44 NOT_STARTED · 0 FAIL · 0 BLOCKED** across 66 tracked
 capabilities. `tests/acceptance/status.json` is the authoritative machine-readable record.

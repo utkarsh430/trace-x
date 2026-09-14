@@ -426,6 +426,9 @@ not yet known. This is pinned by a fixture and by a mutation.
 **Recommendation: A**, as its own decision and outside Step 1. Until it is decided, `declined_ratio_1h`
 and R002 keep Phase 2's treatment of earlier outcomes, and `P3.semantics-hardening` discloses it.
 
+**Decided (U7, 2026-09-14): option A**, designed in ADR-0049. Until ADR-0049 is implemented, the
+treatment above stands.
+
 ## Alternatives Considered
 
 | Alternative | Why rejected |
