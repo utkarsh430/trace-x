@@ -65,3 +65,16 @@ def test_the_gateway_replay_refuses_before_reading_the_dataset(
     monkeypatch.setattr(sys, "argv", ["gateway_replay.py", "--dataset-version", "eval-v1"])
     assert replay.main() == 2
     assert "refused" in capsys.readouterr().err
+
+
+def test_the_gateway_replay_refuses_while_it_replays_no_outcomes(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Conforming served values are not enough: without outcomes every replayed declined ratio
+    would be absent, in a report naming the feature set that reads them (ADR-0049 §7)."""
+    replay = _load_script("gateway_replay_outcome_guard", "eval/replay/gateway_replay.py")
+    monkeypatch.setattr(spec, "SERVED_FEATURES_CONFORM", True)
+    monkeypatch.setattr(replay, "load_streams", _forbidden)
+    monkeypatch.setattr(sys, "argv", ["gateway_replay.py", "--dataset-version", "eval-v1"])
+    assert replay.main() == 2
+    assert "authorization outcomes" in capsys.readouterr().err

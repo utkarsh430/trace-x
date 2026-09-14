@@ -21,6 +21,12 @@ nothing -- it never leaves the counters and the distinct sets disagreeing.
 * **Cards**: identities scored by event time. **Devices**: account and identity, scored by event
   time. **IPs and merchants**: five-minute HyperLogLogs of accounts (the declared APPROXIMATE
   estimand).
+* **Authorization outcomes** (ADR-0049 §6): each once, under its namespaced identity, with a
+  verdict. One whose transaction the store holds with the same account is verified and joins the
+  account's verified outcomes, and its declines, scored by outcome time. One whose transaction is
+  not held waits as pending, and that transaction's own record verifies or rejects it. Kept for the
+  widest outcome window plus the late-arrival margin; PostgreSQL, not this store, decides
+  duplicates and conflicts.
 * **Merchant amounts**: per-currency minute buckets of count, sum and sum of squares, for the
   minute-aligned coefficient of variation. Sums are kept as base-1e9 limbs: the square of the
   largest released amount does not fit Redis's 64-bit `HINCRBY`, and a script that fails part-way
@@ -40,6 +46,11 @@ late observation never shortens it.
   delivery's time -- gets no value for a declared window reaching behind what is still held, and
   its context stops vouching for that window (`history_incomplete`): absent, never a lower bound.
   A previous observation is served only when nothing that could be later has been folded away.
+* An outcome is verified only against a transaction the store still holds. One arriving after its
+  transaction was folded away -- decided a day or more after it, or delivered further behind than
+  the margin -- stays pending as served where a complete history verifies it; so does one whose
+  transaction arrives after the pending outcome expired, the margin past the later of its outcome
+  time and the clock. No released producer does either: DM-1 decides within seconds.
 * The script touches keys of several entities, so it cannot run on a Redis Cluster as written.
 
 Redis is authoritative for nothing (ADR-0003): it holds derived state that Phase 3 can rebuild.
@@ -63,7 +74,13 @@ from trace_core.domain.errors import ContractError, FeatureWriteFailedError
 from trace_core.domain.time import EventTime, from_millis, to_millis
 from trace_core.features.context import FeatureContext, Observation, Profile, WindowState
 from trace_core.features.definitions import ONLINE_FEATURES
-from trace_core.features.observation import Event, ObserveReceipt, ServedRead
+from trace_core.features.observation import (
+    Event,
+    IdentityNamespace,
+    ObserveReceipt,
+    ServedRead,
+    Verification,
+)
 from trace_core.features.profile_math import geodesic_medoid, robust_centre
 from trace_core.features.reference import (
     ReadScope,
@@ -130,7 +147,12 @@ def unsupported_declarations() -> list[str]:
         shape = spec.semantics
         if isinstance(shape, WindowedAggregate):
             if shape.entity is Entity.ACCOUNT:
-                continue  # raw account history answers every windowed aggregation
+                if (
+                    shape.stream is Stream.AUTHORIZATION_OUTCOME
+                    and shape.aggregation is not Aggregation.DECLINED_RATIO
+                ):
+                    problems.append(f"{spec.feature_id}: outcome state answers only the ratio")
+                continue  # raw account history and outcome state answer the rest
             key = (shape.entity, shape.aggregation, shape.dimension, shape.storage)
             if key not in _NON_ACCOUNT_SHAPES or shape.stream is not Stream.TRANSACTION:
                 problems.append(f"{spec.feature_id}: no primitive for {key} on {shape.stream}")
@@ -188,6 +210,7 @@ class Layout:
     ip_windows: tuple[Window, ...]
     merchant_distinct_windows: tuple[Window, ...]
     cv_windows: tuple[Window, ...]
+    outcome_windows: tuple[Window, ...]
 
     @property
     def card_ms(self) -> int:
@@ -207,6 +230,11 @@ class Layout:
     @property
     def cv_ms(self) -> int:
         return _retention_ms(self.cv_windows, ALIGNED_MINUTE_MS)
+
+    @property
+    def outcome_ms(self) -> int:
+        """Verified outcomes, and pending ones past the later of outcome time and the clock."""
+        return _retention_ms(self.outcome_windows)
 
     def config_json(self) -> str:
         def ms(windows: tuple[Window, ...]) -> list[int]:
@@ -233,6 +261,10 @@ class Layout:
                 "ip_windows": ms(self.ip_windows),
                 "mer_windows": ms(self.merchant_distinct_windows),
                 "cv_windows": ms(self.cv_windows),
+                "ao_ms": self.outcome_ms,
+                "ao_windows": ms(self.outcome_windows),
+                "tx_ns": IdentityNamespace.TRANSACTION.value,
+                "ao_ns": IdentityNamespace.TRANSACTION_AUTHORIZATION.value,
             },
             separators=(",", ":"),
         )
@@ -249,6 +281,7 @@ def _layout() -> Layout:
         ip_windows=_windows_of(Entity.IP, Aggregation.DISTINCT_COUNT),
         merchant_distinct_windows=_windows_of(Entity.MERCHANT, Aggregation.DISTINCT_COUNT),
         cv_windows=_windows_of(Entity.MERCHANT, Aggregation.AMOUNT_CV),
+        outcome_windows=_windows_of(Entity.ACCOUNT, Aggregation.DECLINED_RATIO),
     )
 
 
@@ -294,7 +327,7 @@ end
 """
 
 _READ_LUA: Final = r"""
-local function read(as_of, acct, card, dev, mer, ip, cur)
+local function read(as_of, acct, card, dev, mer, ip, cur, own)
   local reply = {}
   reply[1] = redis.call('GET', key('epoch')) or ''
   reply[2] = observations(redis.call('ZRANGEBYSCORE', key('tx', acct), '-inf', fmt(as_of)))
@@ -368,6 +401,22 @@ local function read(as_of, acct, card, dev, mer, ip, cur)
   reply[12] = cv
   reply[13] = redis.call('GET', key('position')) or '0'
   reply[14] = redis.call('GET', key('hw')) or ''
+  -- Verified outcomes decided strictly inside (as_of - W, as_of), and the declines among them,
+  -- without the scored transaction's own outcome whatever its time (ADR-0049 §5).
+  local outcomes = {}
+  for i, w in ipairs(cfg.ao_windows) do
+    local counts = {}
+    for j, set in ipairs({key('ao', acct), key('aod', acct)}) do
+      local n = redis.call('ZCOUNT', set, '(' .. fmt(as_of - w), '(' .. fmt(as_of))
+      if present(own) then
+        local s = tonumber(redis.call('ZSCORE', set, own) or '')
+        if s ~= nil and s > as_of - w and s < as_of then n = n - 1 end
+      end
+      counts[j] = n
+    end
+    outcomes[i] = counts
+  end
+  reply[15] = outcomes
   return reply
 end
 """
@@ -457,25 +506,71 @@ local function cv_fields(minute)
   end
   return fields
 end
+local function add_verified(acct, id, ms, outcome, ref, clock)
+  local sets = {key('ao', acct)}
+  if outcome == 'DECLINED' then sets[2] = key('aod', acct) end
+  for _, k in ipairs(sets) do
+    -- NX: an outcome is added once, at its first delivery's outcome time.
+    redis.call('ZADD', k, 'NX', fmt(ms), id)
+    redis.call('ZREMRANGEBYSCORE', k, '-inf', '(' .. fmt(ref - cfg.ao_ms))
+    expire_at(k, ms, clock, cfg.ao_ms)
+  end
+end
+local function reconcile(acct, id, ref, clock)
+  -- A transaction recorded while an outcome for it is pending verifies or rejects that outcome by
+  -- its account. Its own read never counts it: it is its own outcome (ADR-0049 §6).
+  local verdict = key('aov', id)
+  if redis.call('GET', verdict) ~= 'PENDING' then return end
+  local pending = redis.call('GET', key('obs', cfg.ao_ns .. ':' .. id))
+  if not pending then return end
+  local o = cjson.decode(pending)
+  if o.a == acct then
+    add_verified(acct, id, o.ms, o.out, ref, clock)
+    redis.call('SET', verdict, 'VERIFIED', 'KEEPTTL')
+  else
+    redis.call('SET', verdict, 'REJECTED', 'KEEPTTL')
+  end
+end
 local function record(ev, identity, amount, amount_sq, now, js)
   local observation = key('obs', identity)
+  local is_outcome = ev.s == 'AUTHORIZATION_OUTCOME'
   local existing = redis.call('GET', observation)
-  if existing then return 0, existing end
+  if existing then
+    return 0, existing, is_outcome and (redis.call('GET', key('aov', ev.id)) or '') or ''
+  end
   local t = redis.call('TIME')
   local clock = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
   local acct = ev.a
-  local is_tx = ev.s == 'TRANSACTION'
-  local raw = is_tx and key('tx', acct) or key('ie', acct)
   redis.call('INCR', key('position'))
   redis.call('SET', key('epoch'), fmt(now), 'NX')
   redis.call('SET', observation, js)
-  expire_at(observation, ev.ms, clock, cfg.profile_ms)
-  redis.call('ZADD', raw, fmt(ev.ms), identity)
   local ref = math.min(ev.ms, now)
   -- The newest instant any trim has been relative to: nothing later than
   -- `hw - retention` has been trimmed from a structure with that retention.
   local high = tonumber(redis.call('GET', key('hw')) or '')
   if high == nil or ref > high then redis.call('SET', key('hw'), fmt(ref)) end
+  if is_outcome then
+    -- Verified only against the transaction the store holds, with the same account.
+    expire_at(observation, ev.ms, clock, cfg.ao_ms)
+    local verdict = 'PENDING'
+    local transaction = redis.call('GET', key('obs', cfg.tx_ns .. ':' .. ev.id))
+    if transaction then
+      if cjson.decode(transaction).a == acct then
+        verdict = 'VERIFIED'
+        add_verified(acct, ev.id, ev.ms, ev.out, ref, clock)
+      else
+        verdict = 'REJECTED'
+      end
+    end
+    local vk = key('aov', ev.id)
+    redis.call('SET', vk, verdict)
+    expire_at(vk, ev.ms, clock, cfg.ao_ms)
+    return 1, js, verdict
+  end
+  local is_tx = ev.s == 'TRANSACTION'
+  local raw = is_tx and key('tx', acct) or key('ie', acct)
+  expire_at(observation, ev.ms, clock, cfg.profile_ms)
+  redis.call('ZADD', raw, fmt(ev.ms), identity)
   if is_tx then
     if present(ev.card) then
       local ck = key('card', ev.card)
@@ -516,6 +611,7 @@ local function record(ev, identity, amount, amount_sq, now, js)
       end
       expire_at(cvk, ev.ms, clock, cfg.cv_ms)
     end
+    reconcile(acct, ev.id, ref, clock)
     fold(acct, raw, ref - cfg.raw_tx_ms)
   else
     drop(acct, raw, ref - cfg.raw_ie_ms)
@@ -528,7 +624,7 @@ local function record(ev, identity, amount, amount_sq, now, js)
     account_keys[#account_keys + 1] = key('pfa', acct, c)
   end
   for _, k in ipairs(account_keys) do expire_at(k, ev.ms, clock, cfg.profile_ms) end
-  return 1, js
+  return 1, js, ''
 end
 """
 
@@ -538,16 +634,17 @@ local now = tonumber(ARGV[4])
 local js = ARGV[5]
 local identity = ARGV[6]
 local ev = cjson.decode(js)
-local recorded, current_js = record(
+local recorded, current_js, verdict = record(
   ev, identity, cjson.decode(ARGV[7]), cjson.decode(ARGV[8]), now, js)
 local position = redis.call('GET', key('position')) or '0'
-if mode == 'observe' then return {recorded, position, current_js} end
+if mode == 'observe' then return {recorded, position, current_js, verdict} end
 local c = cjson.decode(current_js)
-return {recorded, position, current_js, read(c.ms, c.a, c.card, c.dev, c.mer, c.ip, c.cur)}
+return {recorded, position, current_js, verdict,
+  read(c.ms, c.a, c.card, c.dev, c.mer, c.ip, c.cur, c.id)}
 """
 
 _READ_MAIN_LUA: Final = r"""
-return read(tonumber(ARGV[3]), ARGV[4], ARGV[5], ARGV[6], ARGV[7], ARGV[8], ARGV[9])
+return read(tonumber(ARGV[3]), ARGV[4], ARGV[5], ARGV[6], ARGV[7], ARGV[8], ARGV[9], '')
 """
 
 WRITE_SCRIPT: Final = "#!lua\n" + _COMMON_LUA + _READ_LUA + _WRITE_LUA + _WRITE_MAIN_LUA
@@ -603,12 +700,12 @@ class RedisOnlineFeatureStore:
 
     def observe(self, event: Event) -> ObserveReceipt:
         """Record an observation unless its identity already was (ADR-0046 §1)."""
-        recorded, position, current_json = self._run("observe", event)
-        return _receipt(event, recorded, position, current_json)
+        recorded, position, current_json, verdict = self._run("observe", event)
+        return _receipt(event, recorded, position, current_json, verdict)
 
     def score(self, event: Event) -> ServedRead:
         """Record the scored transaction and read its context, atomically (ADR-0046 §5)."""
-        recorded, position, current_json, reply = self._run("score", event)
+        recorded, position, current_json, verdict, reply = self._run("score", event)
         current = _decode(_text(current_json))
         context = self._assemble(
             reply,
@@ -617,7 +714,9 @@ class RedisOnlineFeatureStore:
             ids=_ids(current),
             current=current,
         )
-        return ServedRead(receipt=_receipt(event, recorded, position, current), context=context)
+        return ServedRead(
+            receipt=_receipt(event, recorded, position, current, verdict), context=context
+        )
 
     def _run(self, mode: str, event: Event) -> Any:
         amount = event.amount_minor
@@ -699,6 +798,7 @@ class RedisOnlineFeatureStore:
             cv_fields,
             _position,
             high_watermark,
+            outcome_counts,
         ) = reply
         read = ReadScope(
             as_of_ms=as_of_ms, currency=currency, current=current, mode=EvaluationMode.AS_SERVED
@@ -752,6 +852,16 @@ class RedisOnlineFeatureStore:
                     )
                     if state is not None:
                         windows[(Entity.ACCOUNT, account, stream, window.label)] = state
+            # The reference's outcome window, counted by the script from verified outcomes,
+            # without the scored transaction's own (ADR-0049 §6).
+            outcome = Stream.AUTHORIZATION_OUTCOME
+            for window, pair in zip(LAYOUT.outcome_windows, outcome_counts, strict=True):
+                known, declined = int(pair[0]), int(pair[1])
+                held_through = trimmed_through(LAYOUT.outcome_ms)
+                if held(Entity.ACCOUNT, outcome, window, held_through) and known:
+                    windows[(Entity.ACCOUNT, account, outcome, window.label)] = WindowState(
+                        count=known, declined_count=declined, outcome_known_count=known
+                    )
 
         tx = Stream.TRANSACTION
         card = ids[Entity.CARD]
@@ -947,15 +1057,26 @@ def account_profile(
     )
 
 
-def _receipt(event: Event, recorded: Any, position: Any, first: Event | Any) -> ObserveReceipt:
-    """The store's answer, with the first delivery compared only when this one was not recorded."""
+def _receipt(
+    event: Event, recorded: Any, position: Any, first: Event | Any, verdict: Any
+) -> ObserveReceipt:
+    """The store's answer, with the first delivery compared only when this one was not recorded.
+
+    An outcome's verdict is the first delivery's, as the store stands after this call; one the store
+    no longer knows is pending, the direction that counts nothing."""
     was_recorded = bool(int(recorded))
     conflicting = False
     if not was_recorded:
         first_event = first if isinstance(first, Event) else _decode(_text(first))
         conflicting = first_event.recorded_form() != event.recorded_form()
+    verification = None
+    if event.stream is Stream.AUTHORIZATION_OUTCOME:
+        verification = Verification(_text(verdict) or Verification.PENDING.value)
     return ObserveReceipt(
-        position=int(_text(position)), recorded=was_recorded, conflicting=conflicting
+        position=int(_text(position)),
+        recorded=was_recorded,
+        conflicting=conflicting,
+        verification=verification,
     )
 
 

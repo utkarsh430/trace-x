@@ -70,6 +70,7 @@ TRIAGE_ENQUEUED_TOTAL: Final = "triage_enqueued_total"
 IDEMPOTENT_REPLAY_TOTAL: Final = "idempotent_replay_total"
 RATE_LIMITED_TOTAL: Final = "rate_limited_total"
 UNAUTHENTICATED_TOTAL: Final = "unauthenticated_total"
+AUTHORIZATION_OUTCOME_TOTAL: Final = "authorization_outcome_total"
 RULE_PACK_RELOAD_FAILED_TOTAL: Final = "rule_pack_reload_failed_total"
 
 ONLINE_STORE_EVICTED_KEYS: Final = "online_store_evicted_keys_total"
@@ -106,6 +107,7 @@ HOT_PATH_METRICS: Final[frozenset[str]] = frozenset(
         RATE_LIMITED_TOTAL,
         UNAUTHENTICATED_TOTAL,
         RULE_PACK_RELOAD_FAILED_TOTAL,
+        AUTHORIZATION_OUTCOME_TOTAL,
         ONLINE_STORE_EVICTED_KEYS,
         ONLINE_STORE_MEMORY_BYTES,
     }
@@ -134,6 +136,7 @@ class HotPathMetrics:
 
     __slots__ = (
         "abstained",
+        "authorization_outcomes",
         "degraded",
         "feature_read_latency",
         "feature_unavailable",
@@ -208,6 +211,12 @@ class HotPathMetrics:
         self.reload_failed: Counter = meter.create_counter(
             RULE_PACK_RELOAD_FAILED_TOTAL,
             description="Rule-pack reloads refused; the previous pack stayed in force.",
+        )
+        self.authorization_outcomes: Counter = meter.create_counter(
+            AUTHORIZATION_OUTCOME_TOTAL,
+            description=(
+                "Authorization outcomes delivered, by durable delivery and online verification."
+            ),
         )
 
 

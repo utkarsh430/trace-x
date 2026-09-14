@@ -129,7 +129,9 @@ def test_writing_scripts_are_refused_whole_before_they_run() -> None:
     )
 
 
-READ_ONLY_COMMANDS = frozenset({"GET", "MGET", "HGETALL", "LRANGE", "ZCOUNT", "ZRANGEBYSCORE"})
+READ_ONLY_COMMANDS = frozenset(
+    {"GET", "MGET", "HGETALL", "LRANGE", "ZCOUNT", "ZRANGEBYSCORE", "ZSCORE"}
+)
 
 
 def test_the_store_has_a_primitive_for_every_released_feature() -> None:

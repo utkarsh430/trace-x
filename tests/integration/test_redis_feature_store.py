@@ -45,7 +45,13 @@ from trace_core.domain.time import EventTime, event_time, to_millis
 from trace_core.features import FeatureContext, FeatureState
 from trace_core.features.context import Completeness
 from trace_core.features.definitions import ONLINE_FEATURES
-from trace_core.features.observation import Event, ObserveReceipt, transaction_observation
+from trace_core.features.observation import (
+    Event,
+    ObserveReceipt,
+    Verification,
+    authorization_observation,
+    transaction_observation,
+)
 from trace_core.features.reference import ReferenceFeatureStore
 from trace_core.features.semantics import (
     LATE_ARRIVAL_MARGIN_S,
@@ -236,6 +242,16 @@ def _redelivery(rng: random.Random, original: Delivery) -> Delivery:
     account = original.event.account_id
     if rng.random() < 0.5:
         account = next(a for a in ACCOUNTS if a != account)
+    if original.event.stream is Stream.AUTHORIZATION_OUTCOME:
+        other = (
+            AuthorizationOutcome.APPROVED
+            if original.event.authorization_outcome is AuthorizationOutcome.DECLINED
+            else AuthorizationOutcome.DECLINED
+        )
+        return Delivery(
+            dataclasses.replace(original.event, account_id=account, authorization_outcome=other),
+            None,
+        )
     if original.subject is None:
         stream = (
             Stream.IDENTITY_CHANGE
@@ -257,12 +273,37 @@ def _redelivery(rng: random.Random, original: Delivery) -> Delivery:
     return Delivery(transaction_observation(subject), subject)
 
 
+def _outcome(rng: random.Random, subject: CanonicalTransaction, occurred_ms: int) -> Event:
+    """An authorization outcome for `subject`, decided within seconds as DM-1 decides, now and then
+    naming another account, which the store must reject."""
+    account = subject.account_id
+    if rng.random() < 0.05:
+        account = next(a for a in ACCOUNTS if a != account)
+    return authorization_observation(
+        transaction_id=subject.transaction_id,
+        account_id=account,
+        authorization_outcome=(
+            AuthorizationOutcome.DECLINED if rng.random() < 0.35 else AuthorizationOutcome.APPROVED
+        ),
+        decided_at=_at(occurred_ms + rng.randint(40, 2_000)),
+    )
+
+
 def _long_log(seed: int, count: int) -> list[Delivery]:
     """One clock for every entity, arrivals out of order by less than the late-arrival margin,
     and each redelivery sent before anything could fold its first delivery away -- the conditions
-    under which the store promises the reference's answers exactly."""
+    under which the store promises the reference's answers exactly.
+
+    Most transactions also get an authorization outcome, decided within seconds, so its transaction
+    is still held whenever the outcome arrives: sometimes before its transaction (pending, then
+    reconciled), sometimes naming another account (rejected), sometimes again with another outcome
+    or account. Outcomes draw from their own generator, so the transactions and identity events a
+    seed produced before outcomes existed are unchanged, and so is what they exercise.
+    """
     rng = random.Random(seed)
+    outcome_rng = random.Random(seed + 1_000_000)
     timeline: list[Delivery] = []
+    outcomes: list[Delivery] = []
     ms = 0
     for i in range(count):
         ms += _step_ms(rng)
@@ -278,11 +319,26 @@ def _long_log(seed: int, count: int) -> list[Delivery]:
         else:
             subject = _transaction(rng, f"tx_{i:05d}", account, ms)
             timeline.append(Delivery(transaction_observation(subject), subject))
+            if outcome_rng.random() < 0.7:
+                outcomes.append(Delivery(_outcome(outcome_rng, subject, ms), None))
     lateness = [rng.randrange(LATE_MS) if rng.random() < 0.3 else 0 for _ in timeline]
-    order = sorted(range(count), key=lambda i: (timeline[i].event.occurred_ms + lateness[i], i))
+    outcome_lateness = [
+        outcome_rng.randrange(LATE_MS) if outcome_rng.random() < 0.3 else 0 for _ in outcomes
+    ]
+    arrivals = sorted(
+        [
+            (d.event.occurred_ms + late, 0, i, d)
+            for i, (d, late) in enumerate(zip(timeline, lateness, strict=True))
+        ]
+        + [
+            (d.event.occurred_ms + late, 1, i, d)
+            for i, (d, late) in enumerate(zip(outcomes, outcome_lateness, strict=True))
+        ],
+        key=lambda arrival: arrival[:3],
+    )
     log: list[Delivery] = []
     pending: list[tuple[int, Delivery, Delivery]] = []
-    for delivery in (timeline[i] for i in order):
+    for delivery in (arrival[3] for arrival in arrivals):
         waiting = []
         for remaining, original, again in pending:
             elapsed = delivery.event.occurred_ms - original.event.occurred_ms
@@ -292,8 +348,9 @@ def _long_log(seed: int, count: int) -> list[Delivery]:
                 waiting.append((remaining - 1, original, again))
         pending = waiting
         log.append(delivery)
-        if rng.random() < 0.12:
-            pending.append((rng.randint(0, 3), delivery, _redelivery(rng, delivery)))
+        draw = outcome_rng if delivery.event.stream is Stream.AUTHORIZATION_OUTCOME else rng
+        if draw.random() < 0.12:
+            pending.append((draw.randint(0, 3), delivery, _redelivery(draw, delivery)))
     log.extend(again for _, _, again in pending)
     return log
 
@@ -312,6 +369,7 @@ def test_long_histories_agree_with_the_reference_as_served(redis_client: Any, se
     reach: Counter[str] = Counter()
     available: Counter[str] = Counter()
     behind: Counter[str] = Counter()
+    awaiting_transaction: dict[str, str] = {}
     for index, delivery in enumerate(log):
         event = delivery.event
         where = f"seed {seed}, delivery {index} ({event.identity})"
@@ -320,11 +378,23 @@ def test_long_histories_agree_with_the_reference_as_served(redis_client: Any, se
             got, want = store.observe(event), reference.observe(event)
             if got != want:
                 problems.append(f"{where}: receipt {got}, reference {want}")
+            if event.stream is Stream.AUTHORIZATION_OUTCOME and want.verification is not None:
+                if not want.recorded:
+                    reach["outcome redelivery"] += 1
+                else:
+                    reach[f"outcome {want.verification.value.lower()} on arrival"] += 1
+                    if want.verification is Verification.PENDING:
+                        awaiting_transaction[event.event_id] = event.account_id
         else:
             served, expected = store.score(event), reference.score(event)
             if served.receipt != expected.receipt:
                 problems.append(f"{where}: receipt {served.receipt}, reference {expected.receipt}")
             subject = first.setdefault(event.identity, delivery.subject)
+            if expected.receipt.recorded and event.event_id in awaiting_transaction:
+                if awaiting_transaction.pop(event.event_id) == event.account_id:
+                    reach["pending outcome verified by its transaction"] += 1
+                else:
+                    reach["pending outcome rejected by its transaction"] += 1
             if expected.receipt.recorded:
                 account_earliest = earliest.get(subject.account_id, event.occurred_ms)
                 earliest[subject.account_id] = min(account_earliest, event.occurred_ms)
@@ -378,6 +448,11 @@ def test_long_histories_agree_with_the_reference_as_served(redis_client: Any, se
         "transaction redelivery carrying the same observation": 1,
         "read-only snapshot": 10,
         "read behind the late-arrival margin": 3,
+        "outcome verified on arrival": 40,
+        "outcome pending on arrival": 10,
+        "outcome rejected on arrival": 2,
+        "outcome redelivery": 3,
+        "pending outcome verified by its transaction": 5,
     }
     unreached = {name: reach[name] for name, least in minimums.items() if reach[name] < least}
     assert not unreached, (
@@ -391,6 +466,10 @@ def test_long_histories_agree_with_the_reference_as_served(redis_client: Any, se
         and available[spec.feature_id] < 3
     }
     assert not rare, f"profile and previous-observation features almost never available: {rare}"
+    assert available["declined_ratio_1h"] >= 10, (
+        f"seed {seed}: the declined ratio was almost never available "
+        f"({available['declined_ratio_1h']}), so verified outcomes were barely compared"
+    )
     assert behind, (
         f"seed {seed}: no read behind the margin had a window the store no longer held, so the "
         f"declared limit was never exercised"

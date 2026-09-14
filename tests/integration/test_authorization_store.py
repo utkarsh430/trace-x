@@ -10,6 +10,16 @@ gateway route that writes it.
 - **F15.** A gateway whose system of record is unreachable acknowledges nothing.
 
 The application role cannot rewrite a recorded outcome: it has no UPDATE and no DELETE.
+
+Then applied online, against a real Redis (ADR-0049 §6):
+- **Verified.** An outcome for a held transaction of the same account counts.
+- **F9.** One naming another account is refused with 409, recorded as reported, and never counted.
+- **F10, F13.** While its transaction is not held, an outcome, its duplicate and a conflicting
+  delivery count nothing; once the transaction is recorded the first delivery counts, once.
+- **F14.** After the online store is flushed, PostgreSQL still decides the duplicate and the
+  conflict.
+- **A store that cannot apply it.** The outcome is still acknowledged, because the durable record
+  holds it, and completeness is withdrawn.
 """
 
 from __future__ import annotations
@@ -21,10 +31,14 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
+from tests.conformance.feature_semantics_suite import transaction
 
 from trace_core.contracts import authorization
 from trace_core.contracts.topics import TX_AUTHORIZATION_V1
-from trace_core.domain.time import from_millis
+from trace_core.domain.time import event_time, from_millis
+from trace_core.features.context import WindowState
+from trace_core.features.observation import transaction_observation
+from trace_core.features.semantics import ONE_HOUR, Entity, Stream
 from trace_core.repositories.postgres_authorization import (
     AuthorizationOutcomeRecord,
     Delivery,
@@ -37,6 +51,9 @@ pytestmark = pytest.mark.integration
 OCCURRED_MS = 1_789_200_000_123
 TRACE_ID = "0" * 32
 SECRET = "s" * 32
+HEADERS = {"Authorization": f"Bearer psp-one.{SECRET}"}
+REDIS_DB = int(os.environ.get("REDIS_AUTHORIZATION_TEST_DB", "13"))
+"""Not the live gateway's database, nor the semantics suites' (15): these tests flush it."""
 
 
 def _dsn(user_env: str, password_env: str, *, port: str | None = None) -> str:
@@ -186,7 +203,7 @@ def test_the_application_role_cannot_rewrite_a_recorded_outcome(pool: Any) -> No
 # --- through the gateway route ---------------------------------------------------
 
 
-def _client(authorizations: Any) -> Any:
+def _client(authorizations: Any, *, feature_store: Any = None, completeness: Any = None) -> Any:
     from fastapi.testclient import TestClient
     from services.gateway.app import GatewayState, create_app
     from services.gateway.config import GatewaySettings
@@ -203,7 +220,12 @@ def _client(authorizations: Any) -> Any:
         settings=GatewaySettings.from_environment({}),
         verifier=ServiceTokenVerifier({"psp-one": SECRET}),
         loader=loader,
-        pipeline=ScoringPipeline(pack=loader.load(), thresholds=load_thresholds()),
+        pipeline=ScoringPipeline(
+            pack=loader.load(),
+            thresholds=load_thresholds(),
+            feature_store=feature_store,
+            completeness=completeness,
+        ),
         metrics=HotPathMetrics(),
         authorizations=authorizations,
     )
@@ -254,3 +276,180 @@ def test_the_route_acknowledges_nothing_when_the_system_of_record_is_unreachable
             "/v1/events/authorization", json=_body(f"tx_{uuid.uuid4().hex[:16]}"), headers=headers
         )
     assert response.status_code == 503, response.text
+
+
+# --- applied online (ADR-0049 §4, §6) ----------------------------------------------
+
+
+@pytest.fixture
+def redis_store() -> Iterator[tuple[Any, Any]]:
+    redis = pytest.importorskip("redis", reason="the `db` extra provides the Redis client")
+    from trace_core.repositories.redis_features import RedisOnlineFeatureStore
+
+    client = redis.Redis(
+        host=os.environ.get("REDIS_HOST", "localhost"),
+        port=int(os.environ.get("REDIS_PORT", "6389")),
+        db=REDIS_DB,
+        decode_responses=True,
+    )
+    try:
+        client.ping()
+    except Exception as exc:  # pragma: no cover - environment dependent
+        pytest.skip(
+            f"SKIPPED (NOT PASSED): no Redis reachable ({exc}). Run `make up`; the online store is "
+            f"never faked (docs/TESTING.md §4)."
+        )
+    client.flushdb()
+    yield client, RedisOnlineFeatureStore(client)
+    client.flushdb()
+
+
+def _occurred() -> dt.datetime:
+    return (dt.datetime.now(dt.UTC) - dt.timedelta(seconds=30)).replace(microsecond=0)
+
+
+def _hold(store: Any, transaction_id: str, account: str, occurred: dt.datetime) -> None:
+    """Record the transaction as the gateway's scoring path does."""
+    store.observe(
+        transaction_observation(
+            transaction(
+                occurred_at=event_time(occurred), transaction_id=transaction_id, account_id=account
+            )
+        )
+    )
+
+
+def _outcome_body(
+    transaction_id: str,
+    occurred: dt.datetime,
+    *,
+    outcome: str = "DECLINED",
+    account: str = "acct_000001",
+) -> dict[str, Any]:
+    return {
+        "transaction_id": transaction_id,
+        "account_id": account,
+        "authorization_outcome": outcome,
+        "decided_at": (occurred + dt.timedelta(milliseconds=340))
+        .isoformat()
+        .replace("+00:00", "Z"),
+        "transaction_occurred_at": occurred.isoformat().replace("+00:00", "Z"),
+    }
+
+
+def _outcomes(store: Any, account: str, occurred: dt.datetime) -> WindowState | None:
+    """The account's verified outcomes as a score ten seconds after the transaction reads them."""
+    context = store.snapshot(
+        as_of=event_time(occurred + dt.timedelta(seconds=10)), account_id=account, currency="GBP"
+    )
+    window: WindowState | None = context.windows.get(
+        (Entity.ACCOUNT, account, Stream.AUTHORIZATION_OUTCOME, ONE_HOUR.label)
+    )
+    return window
+
+
+def test_an_outcome_for_a_held_transaction_of_the_same_account_counts(
+    pool: Any, redis_store: tuple[Any, Any]
+) -> None:
+    _, store = redis_store
+    transaction_id, occurred = f"tx_{uuid.uuid4().hex[:16]}", _occurred()
+    _hold(store, transaction_id, "acct_000001", occurred)
+    with _client(PostgresAuthorizationStore(pool), feature_store=store) as client:
+        response = client.post(
+            "/v1/events/authorization",
+            json=_outcome_body(transaction_id, occurred),
+            headers=HEADERS,
+        )
+    assert response.status_code == 202, response.text
+    state = _outcomes(store, "acct_000001", occurred)
+    assert state is not None
+    assert (state.outcome_known_count, state.declined_count) == (1, 1)
+
+
+def test_an_outcome_naming_another_account_is_refused_recorded_and_never_counted(
+    pool: Any, redis_store: tuple[Any, Any]
+) -> None:
+    """F9."""
+    _, store = redis_store
+    transaction_id, occurred = f"tx_{uuid.uuid4().hex[:16]}", _occurred()
+    _hold(store, transaction_id, "acct_000001", occurred)
+    body = _outcome_body(transaction_id, occurred, account="acct_000002")
+    with _client(PostgresAuthorizationStore(pool), feature_store=store) as client:
+        response = client.post("/v1/events/authorization", json=body, headers=HEADERS)
+    assert response.status_code == 409, response.text
+    assert response.json()["type"].endswith("authorization-account-mismatch")
+    recorded = PostgresAuthorizationStore(pool).recorded(transaction_id)
+    assert recorded is not None and recorded.account_id == "acct_000002"
+    assert _outcomes(store, "acct_000002", occurred) is None
+    assert _outcomes(store, "acct_000001", occurred) is None
+
+
+def test_a_pending_outcome_its_duplicate_and_a_conflict_count_nothing_until_the_transaction(
+    pool: Any, redis_store: tuple[Any, Any]
+) -> None:
+    """F10 and F13 through the route, then F11 when the transaction is recorded."""
+    _, store = redis_store
+    transaction_id, occurred = f"tx_{uuid.uuid4().hex[:16]}", _occurred()
+    body = _outcome_body(transaction_id, occurred)
+    with _client(PostgresAuthorizationStore(pool), feature_store=store) as client:
+        first = client.post("/v1/events/authorization", json=body, headers=HEADERS)
+        assert first.status_code == 202, first.text
+        again = client.post("/v1/events/authorization", json=body, headers=HEADERS)
+        assert again.status_code == 202, again.text
+        assert again.json()["event_id"] == first.json()["event_id"]
+        conflicting = {**body, "authorization_outcome": "APPROVED"}
+        refused = client.post("/v1/events/authorization", json=conflicting, headers=HEADERS)
+        assert refused.status_code == 409, refused.text
+        assert refused.json()["type"].endswith("authorization-conflict")
+    assert _outcomes(store, "acct_000001", occurred) is None
+    _hold(store, transaction_id, "acct_000001", occurred)
+    state = _outcomes(store, "acct_000001", occurred)
+    assert state is not None
+    assert (state.outcome_known_count, state.declined_count) == (1, 1)
+
+
+def test_the_system_of_record_decides_after_the_online_store_is_flushed(
+    pool: Any, redis_store: tuple[Any, Any]
+) -> None:
+    """F14."""
+    redis_client, store = redis_store
+    transaction_id, occurred = f"tx_{uuid.uuid4().hex[:16]}", _occurred()
+    _hold(store, transaction_id, "acct_000001", occurred)
+    body = _outcome_body(transaction_id, occurred)
+    with _client(PostgresAuthorizationStore(pool), feature_store=store) as client:
+        first = client.post("/v1/events/authorization", json=body, headers=HEADERS)
+        assert first.status_code == 202, first.text
+        redis_client.flushdb()
+        again = client.post("/v1/events/authorization", json=body, headers=HEADERS)
+        assert again.status_code == 202, again.text
+        assert again.json()["event_id"] == first.json()["event_id"]
+        conflicting = {**body, "authorization_outcome": "APPROVED"}
+        refused = client.post("/v1/events/authorization", json=conflicting, headers=HEADERS)
+        assert refused.status_code == 409, refused.text
+        assert refused.json()["type"].endswith("authorization-conflict")
+    assert _outbox_rows(pool, transaction_id) == 1
+
+
+def test_an_outcome_the_online_store_cannot_apply_is_accepted_and_withdraws_completeness(
+    pool: Any,
+) -> None:
+    redis = pytest.importorskip("redis", reason="the `db` extra provides the Redis client")
+    from trace_core.features.completeness import CompletenessGuard
+    from trace_core.repositories.redis_features import RedisOnlineFeatureStore
+
+    unreachable = RedisOnlineFeatureStore(
+        redis.Redis(host="localhost", port=1, socket_connect_timeout=0.5, socket_timeout=0.5)
+    )
+    guard = CompletenessGuard(unreachable, None, instance_id="authorization-integration")
+    transaction_id, occurred = f"tx_{uuid.uuid4().hex[:16]}", _occurred()
+    with _client(
+        PostgresAuthorizationStore(pool), feature_store=unreachable, completeness=guard
+    ) as client:
+        response = client.post(
+            "/v1/events/authorization",
+            json=_outcome_body(transaction_id, occurred),
+            headers=HEADERS,
+        )
+    assert response.status_code == 202, response.text
+    assert guard.pending, "an outcome the online store never saw must withdraw its completeness"
+    assert PostgresAuthorizationStore(pool).recorded(transaction_id) is not None

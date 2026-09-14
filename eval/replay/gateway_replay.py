@@ -71,7 +71,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from trace_core.domain.errors import NonConformantFeatureSetError
-from trace_core.features.spec import require_served_conformance
+from trace_core.features.spec import FEATURE_SET_VERSION, require_served_conformance
 
 ROOT: Final = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "packages"))
@@ -79,6 +79,11 @@ sys.path.insert(0, str(ROOT))
 
 REPORT: Final = ROOT / "benchmarks" / "gateway" / "triage-bands.md"
 TRIAGE_BANDS: Final = frozenset({"HIGH", "CRITICAL"})
+
+OUTCOMES_REPLAYED: Final = False
+"""Whether this replay delivers `tx.authorization.v1`, or derives it for a historical source
+(ADR-0049 §7). Until it does, every replayed `declined_ratio_1h` would read no outcome, so no report
+is written: one would name the feature set with no outcome input."""
 
 STREAMS: Final[dict[str, str]] = {
     "tx.raw.v1": "/v1/transactions",
@@ -492,6 +497,13 @@ def main() -> int:
         require_served_conformance("A gateway replay report")
     except NonConformantFeatureSetError as exc:
         print(f"refused: {exc}", file=sys.stderr)
+        return 2
+    if not OUTCOMES_REPLAYED:
+        print(
+            f"refused: feature set {FEATURE_SET_VERSION} reads authorization outcomes, which this "
+            f"replay neither delivers nor derives yet (ADR-0049 §7, Stage 2 step 7 unit 3).",
+            file=sys.stderr,
+        )
         return 2
 
     events = load_streams(args.dataset_dir, limit=args.limit)

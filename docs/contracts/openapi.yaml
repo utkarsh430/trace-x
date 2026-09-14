@@ -551,8 +551,9 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/Problem'
-          description: "Conflict: an idempotency key reused with a different payload (\xA75), or a different\
-            \ authorization outcome already recorded for the transaction (ADR-0049)."
+          description: "Conflict: an idempotency key reused with a different payload (\xA75); a different\
+            \ authorization outcome already recorded for the transaction; or an outcome naming another\
+            \ account than its transaction (ADR-0049)."
         '422':
           content:
             application/problem+json:
@@ -608,8 +609,9 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/Problem'
-          description: "Conflict: an idempotency key reused with a different payload (\xA75), or a different\
-            \ authorization outcome already recorded for the transaction (ADR-0049)."
+          description: "Conflict: an idempotency key reused with a different payload (\xA75); a different\
+            \ authorization outcome already recorded for the transaction; or an outcome naming another\
+            \ account than its transaction (ADR-0049)."
         '422':
           content:
             application/problem+json:
@@ -659,8 +661,9 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/Problem'
-          description: "Conflict: an idempotency key reused with a different payload (\xA75), or a different\
-            \ authorization outcome already recorded for the transaction (ADR-0049)."
+          description: "Conflict: an idempotency key reused with a different payload (\xA75); a different\
+            \ authorization outcome already recorded for the transaction; or an outcome naming another\
+            \ account than its transaction (ADR-0049)."
         '422':
           content:
             application/problem+json:
@@ -710,8 +713,9 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/Problem'
-          description: "Conflict: an idempotency key reused with a different payload (\xA75), or a different\
-            \ authorization outcome already recorded for the transaction (ADR-0049)."
+          description: "Conflict: an idempotency key reused with a different payload (\xA75); a different\
+            \ authorization outcome already recorded for the transaction; or an outcome naming another\
+            \ account than its transaction (ADR-0049)."
         '422':
           content:
             application/problem+json:

@@ -471,7 +471,7 @@ forbids UPDATE/DELETE, and a verifier job detects tampering. A broken chain is a
 **Tracing.** One `trace_id` flows HTTP ingress → Kafka header → Spark → worker → each agent node →
 each tool call (including across MCP) → action execution. An investigation is one distributed trace.
 
-**Metrics.** Hot path: `tx_score_latency_seconds`, `gateway_request_latency_seconds`, `online_store_memory_bytes{store}`, `online_store_evicted_keys_total{store}`, `tx_scored_total{band}`, `degraded_mode_total{reason}`.
+**Metrics.** Hot path: `tx_score_latency_seconds`, `gateway_request_latency_seconds`, `online_store_memory_bytes{store}`, `online_store_evicted_keys_total{store}`, `tx_scored_total{band}`, `degraded_mode_total{reason}`. Outcome ingress: `authorization_outcome_total{delivery,verification}` (ADR-0049).
 The two latency histograms measure deliberately different things and neither is a substitute for
 the other: `tx_score_latency_seconds` covers **scoring only** — the feature read, the rules and the
 banding — and is the `latency_ms` the caller is told; `gateway_request_latency_seconds` covers the

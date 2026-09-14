@@ -63,11 +63,12 @@ from trace_core.contracts.api.events_ingress import (
 from trace_core.contracts.api.problem import ErrorType
 from trace_core.contracts.api.transaction import TransactionRequest
 from trace_core.contracts.envelope import ZERO_TRACE_ID
+from trace_core.domain.enums import AuthorizationOutcome
 from trace_core.domain.errors import FeatureWriteFailedError
 from trace_core.domain.time import event_time, from_millis, to_millis, utc_now
 from trace_core.features.completeness import CompletenessGuard, HoleReason
 from trace_core.features.definitions import ONLINE_FEATURES
-from trace_core.features.observation import Event
+from trace_core.features.observation import Event, Verification, authorization_observation
 from trace_core.features.semantics import Stream, identity_stream
 from trace_core.observability.logging import configure_logging
 from trace_core.observability.metrics import HotPathMetrics, register_online_store_gauges
@@ -558,8 +559,9 @@ _PROBLEM_STATUSES: Final[dict[int, str]] = {
     400: "Malformed request: the body does not match the schema (§6.1).",
     401: "Unauthenticated: no valid service token was presented.",
     409: (
-        "Conflict: an idempotency key reused with a different payload (§5), or a different "
-        "authorization outcome already recorded for the transaction (ADR-0049)."
+        "Conflict: an idempotency key reused with a different payload (§5); a different "
+        "authorization outcome already recorded for the transaction; or an outcome naming another "
+        "account than its transaction (ADR-0049)."
     ),
     422: "Semantically invalid: the shape is right and a value cannot be (§6.6).",
     429: "Rate limited. Carries Retry-After.",
@@ -940,6 +942,11 @@ def _ingest(
     return accepted
 
 
+_NOT_APPLIED: Final = "NOT_APPLIED"
+"""The verification label of a delivery the online store did not apply: a conflict, no store, or a
+store failure."""
+
+
 def _record_authorization(request: Request, body: AuthorizationOutcomeRequest) -> Any:
     """Record an authorization outcome in the system of record, and only then acknowledge it.
 
@@ -951,10 +958,11 @@ def _record_authorization(request: Request, body: AuthorizationOutcomeRequest) -
     - different content under the same transaction id is a conflict: 409, and the first delivery
       stays the observation.
 
+    - then a recorded or duplicate delivery is applied online (ADR-0049 §6): one naming another
+      account than the transaction the store holds is refused with 409 and never reaches a feature;
+      a store failure is still 202, because the durable record has the outcome.
+
     Both times are compared and published at millisecond precision, the precision of the event.
-    Applying outcomes online -- verification against the held transaction, pending outcomes and the
-    account-mismatch refusal -- arrives with feature set 3.0.0, the first reader of outcomes. Until
-    then no feature reads an outcome, so there is nothing online to apply.
     """
     state = _gateway(request)
     decided_ms = to_millis(event_time(body.decided_at))
@@ -1003,6 +1011,18 @@ def _record_authorization(request: Request, body: AuthorizationOutcomeRequest) -
         log.warning("authorization_record_failed", error=type(exc).__name__)
         return _authorization_unavailable(request)
     log.info("authorization_outcome_delivered", delivery=receipt.delivery.value)
+    applied = (
+        None
+        if receipt.delivery is Delivery.CONFLICT
+        else _apply_authorization(state, body, decided_ms)
+    )
+    state.metrics.authorization_outcomes.add(
+        1,
+        {
+            "delivery": receipt.delivery.value,
+            "verification": _NOT_APPLIED if applied is None else applied.value,
+        },
+    )
     if receipt.delivery is Delivery.CONFLICT:
         return _problem_response(
             request,
@@ -1012,9 +1032,55 @@ def _record_authorization(request: Request, body: AuthorizationOutcomeRequest) -
                 "first delivery stays the observation (ADR-0049 §2)."
             ),
         )
+    if applied is Verification.REJECTED:
+        return _problem_response(
+            request,
+            ErrorType.AUTHORIZATION_ACCOUNT_MISMATCH,
+            detail=(
+                "The outcome names another account than the transaction it reports. It is recorded "
+                "as reported and never reaches a feature (ADR-0049 §4)."
+            ),
+        )
     return AcceptedResponse(
         accepted=True, event_id=receipt.recorded.event_id, request_id=_request_id(request)
     )
+
+
+def _apply_authorization(
+    state: GatewayState, body: AuthorizationOutcomeRequest, decided_ms: int
+) -> Verification | None:
+    """Apply a durably recorded outcome to the online store; None when nothing was applied.
+
+    Best effort, as for identity events: the durable record already holds the outcome. A store
+    failure is counted as degraded and withdraws completeness, so no window claims to be complete
+    over an outcome the store never saw (ADR-0049 §4; ADR-0046 §5).
+    """
+    store = state.pipeline.feature_store
+    if store is None:
+        return None
+    observation = authorization_observation(
+        transaction_id=body.transaction_id,
+        account_id=body.account_id,
+        authorization_outcome=AuthorizationOutcome(body.authorization_outcome.value),
+        decided_at=event_time(from_millis(decided_ms)),
+    )
+    guard = state.pipeline.completeness
+    if guard is not None:
+        guard.reconcile()
+    try:
+        receipt = store.observe(observation)
+    except FeatureWriteFailedError:
+        if guard is not None:
+            guard.observation_unrecorded(HoleReason.REFUSED)
+        state.metrics.degraded.add(1, {"reason": REASON_WRITE_FAILED})
+        return None
+    except Exception as exc:
+        log.warning("feature_store_observe_failed", error=type(exc).__name__)
+        if guard is not None:
+            guard.observation_unrecorded(HoleReason.UNREACHABLE)
+        state.metrics.degraded.add(1, {"reason": REASON_REDIS})
+        return None
+    return receipt.verification
 
 
 def _authorization_unavailable(request: Request) -> JSONResponse:

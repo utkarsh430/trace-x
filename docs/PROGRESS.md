@@ -76,10 +76,9 @@ exit condition; each is owned by a Phase 3 step.
 * **`authorization_outcome` is post-decision information carried by a pre-decision contract**
   (ADR-0046 §7). Step 1 keeps a transaction's own outcome out of its own features. U7, decided on
   2026-09-14, makes authorization decisions their own dated events (ADR-0049, Proposed). Stage 2
-  step 7 is implementing it. Unit 2a declared feature set 3.0.0, in which a scoring request's
-  outcome reaches no feature, and the reference implementation serves it. Until unit 2b, the Redis
-  store and the gateway serve no outcome, so the served `declined_ratio_1h` is always insufficient
-  history, and run records are refused (`SERVED_FEATURES_CONFORM` is False).
+  step 7 is implementing it. Feature set 3.0.0, in which a scoring request's outcome reaches no
+  feature, is served by the reference implementation, the Redis store and the gateway (units 2a
+  and 2b). Until unit 3, replays neither deliver nor derive outcomes, so the gateway replay refuses.
 * **Phase 2's manual replay predates ADR-0044.** `benchmarks/gateway/triage-bands.md` was generated
   (`42f907c`) hours before completeness gating existed (`5c77025`), so its profile rules fired on a
   store that could not tell "not known" from "cannot tell". Replayed again by its own commit on a
@@ -674,7 +673,7 @@ both reports.
 | U4 | Whether the Skeptic agent pays for its cost | Phase 9 Arm F — `UNUSUAL_LOCATION_DEVICE` was built deliberately ambiguous to give this ablation something real to measure |
 | U5 | LightGBM vs XGBoost on measured PR-AUC | Phase 4 |
 | U6 | Whether Phase 13 (Go gateway) is worth doing | Phase 13 entry |
-| **U7** | **Decided 2026-09-14: authorization decisions are their own dated events.** A transaction's own outcome is post-decision and never enters its own features. Outcomes arrive as `tx.authorization.v1` events (field `authorization_outcome`). PostgreSQL records them first and decides duplicates and conflicts; the Redis store holds derived state only. An outcome is pending until its transaction is known with the same account, and pending outcomes never count. `declined_ratio_1h` reads only verified outcomes decided before `as_of` and known before the read, never the scored transaction's own (`CurrentObservation.PRIOR_KNOWN`, feature set 3.0.0). Historical sources replay the transaction first and the decision after it, through the declared delay model DM-1. Designed in ADR-0049 (Proposed). **Partly implemented (Stage 2 step 7):** the stream and its producers (unit 1), the declaration and the reference implementation (unit 2a). Until unit 2b, the served `declined_ratio_1h` is always insufficient history | Decided; implementation in Stage 2 step 7 |
+| **U7** | **Decided 2026-09-14: authorization decisions are their own dated events.** A transaction's own outcome is post-decision and never enters its own features. Outcomes arrive as `tx.authorization.v1` events (field `authorization_outcome`). PostgreSQL records them first and decides duplicates and conflicts; the Redis store holds derived state only. An outcome is pending until its transaction is known with the same account, and pending outcomes never count. `declined_ratio_1h` reads only verified outcomes decided before `as_of` and known before the read, never the scored transaction's own (`CurrentObservation.PRIOR_KNOWN`, feature set 3.0.0). Historical sources replay the transaction first and the decision after it, through the declared delay model DM-1. Designed in ADR-0049 (Proposed). **Partly implemented (Stage 2 step 7):** the stream and its producers (unit 1); feature set 3.0.0 in the reference implementation (unit 2a), the Redis store and the gateway (unit 2b). Outcome replay follows in unit 3 | Decided; implementation in Stage 2 step 7 |
 | **U9** | **Decided 2026-09-14: snake_case** for every data-platform identifier -- schema and table identifiers and the lake directories derived from them, streaming query and checkpoint names, Delta transaction app ids, Databricks job and task identifiers, and metric and manifest identifiers for the same logical name. CLAUDE.md §6 amended narrowly; no mapping layer; a consistency test pins it (ADR-0048) | Decided |
 | **U10** | **Decided 2026-09-14: R010 stays at `device_distinct_accounts_24h >= 5`.** The `eval-v1` replay delta -- 9 more legitimate and 3 more fraud high-risk decisions, all attributed to self-inclusion -- is expected semantic drift, not a regression. Not retuned on `eval-v1`, whose device-related label proxies would fit the ruleset to a flawed dataset. A threshold study follows on `eval-v2` (NEXT EXECUTABLE TASKS); any change is a separate, versioned ruleset decision | Decided |
 
@@ -815,14 +814,38 @@ Phase 3, in the wave order of `docs/PHASE3_PLAN.md` §5:
           False, so gateway replay and load-test records are refused. The Redis store serves no
           outcome yet, so the seven outcome fixtures fail as served on Redis, all as insufficient
           history. `P3.semantics-hardening` is back to IN_PROGRESS until they pass.
-      - **Unit 2b next: Redis and the gateway serve 3.0.0.**
-        - Redis outcome state: verified outcomes per account, pending outcomes with an expiry,
-          reconciliation when their transaction is recorded.
-        - Online apply after the durable record: 409 on an account mismatch; a degraded counter and
-          a completeness hole when the store fails.
-        - F9, F13 and F14 against real Redis. `SERVED_FEATURES_CONFORM` becomes True once every
-          fixture passes as served.
-      - **Then:** replay (the fourth stream, and derivation for eval-v1) and the `LPC-5`
+      - **Unit 2b done: the Redis store and the gateway serve 3.0.0.**
+        - Redis: each outcome is recorded once under its identity, with a verdict.
+          - A verified outcome joins the account's verified set, and its declines, scored by
+            outcome time.
+          - A pending one is verified or rejected inside its transaction's own atomic record.
+          - The read counts both sets over `(as_of - 1h, as_of)`, less the scored transaction's
+            own outcome, and stops vouching for the window where it has trimmed.
+        - Gateway: after the durable record, a recorded or duplicate delivery is applied online.
+          - An outcome the store rejects is answered 409 `authorization-account-mismatch`.
+          - A store failure is still 202, counted as degraded, and withdraws completeness.
+          - `authorization_outcome_total{delivery,verification}` counts every delivery.
+        - Evidence against real Redis and PostgreSQL. Neither suite runs in `make verify`.
+          - The Redis store passes every literal fixture as served, including the seven outcome
+            fixtures.
+          - The long-history differential test now also delivers outcomes: pending ones reconciled
+            by their transaction, rejected ones and redeliveries. It still agrees with the reference
+            on every feature and every receipt.
+          - The route fixtures F9, F10/F13 and F14 pass, as does a store failure withdrawing
+            completeness.
+        - `SERVED_FEATURES_CONFORM` is True again. The gateway replay still refuses, mechanically,
+          until unit 3 delivers or derives outcomes: a report without them would name 3.0.0 with no
+          outcome input.
+        - **Declared limits, for review:**
+          - An outcome is verified only against a transaction the store still holds. One arriving
+            after its transaction was folded away (decided a day or more later, or delivered beyond
+            the margin) stays pending as served, where a complete history verifies it.
+          - A pending outcome expires two hours past the later of its outcome time and the clock. A
+            transaction arriving after that leaves it pending.
+          - No released producer does either: DM-1 decides within seconds.
+          - Rebuilding outcome state from PostgreSQL after a store loss stays deferred (ADR-0049
+            §6).
+      - **Unit 3 next:** replay (the fourth stream, and derivation for eval-v1) and the `LPC-5`
         availability provider.
    8. Ablation controls.
    9. Diagnostic eval-v2 probe.

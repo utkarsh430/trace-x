@@ -60,12 +60,13 @@ number produced by a different feature set is not comparable to one produced by
 this one, and a version is how a reader can tell.
 """
 
-SERVED_FEATURES_CONFORM: Final = False
+SERVED_FEATURES_CONFORM: Final = True
 """Whether the online path the gateway runs actually serves `FEATURE_SET_VERSION`.
 
-False again from feature set 3.0.0 (ADR-0049 §5): `declined_ratio_1h` reads verified authorization
-outcomes, which the reference implementation serves and the Redis store and the gateway do not yet.
-It becomes True when they do and ADR-0049 §8's fixtures pass as served.
+True again from Stage 2 step 7 unit 2b (ADR-0049 §5, §6): the Redis store serves `declined_ratio_1h`
+from verified authorization outcomes and passes every literal fixture as served, and the gateway
+applies each durably recorded outcome online. It was False from feature set 3.0.0's declaration
+until then. A change that breaks either must set it back.
 
 False from ADR-0046's declaration until Phase 3 Step 1b made the Redis store and the gateway's
 score-time read conform to it: the store passes every literal fixture as served, recording and
