@@ -862,7 +862,35 @@ Phase 3, in the wave order of `docs/PHASE3_PLAN.md` §5:
           - every replayed request satisfies the gateway's request contract.
         - **Not yet run against a gateway.** The replay report and the rule re-validation on
           feature set 3.0.0 belong to step 13.
-      - **Unit 3b next:** the `LPC-5` availability provider (§4.6).
+      - **Unit 3b done: the `LPC-5` availability provider (§4.6).**
+        - `data/generator/lpc5/availability.py` evaluates every released feature for every TX row
+          with the reference implementation:
+          - in EVENT_TIME_COMPLETE mode from the generation's start;
+          - over the four streams, mapped as the ingress maps them.
+        - `eval/track_a/lpc5_control.py` passes it, so its runs judge S6 and are no longer invalid
+          for want of availability.
+        - The reference's whole-history context is quadratic. Each row is given only what its context
+          can read, and the reference builds the context from that unchanged:
+          - its account's observations up to the row;
+          - its card, device, IP and merchant within the widest window and its sketch buckets;
+          - the transactions its account's outcomes name.
+        - Tests, on dense generations with derived outcomes and under the eval-v2 gate:
+          - every feature of sampled rows equals the whole-history context, and the bounds leave
+            related observations out for most of those rows;
+          - a TX row is observed exactly as the generator adapter's canonical transaction is;
+          - no generated row is UNAVAILABLE.
+        - **Not yet measured at acceptance scale.** In a diagnostic run, per-row cost stayed flat
+          from a small generation to one ten times larger. Step 9's probe measures it on the
+          acceptance manifest.
+        - The eval-v1 negative control recorded in step 3 ran without availability, so S6 was not
+          judged in it.
+      - **Step 7 status.** U7/N12 is implemented:
+        - the stream and its producers;
+        - feature set 3.0.0 in every implementation;
+        - replay and availability.
+        - The outbox relay that publishes `tx.authorization.v1` to Kafka belongs to Phase 3 Step 4,
+          with the gateway's other publishing.
+        - Step 8, the ablation controls, is next.
    8. Ablation controls.
    9. Diagnostic eval-v2 probe.
    10. Final candidate.

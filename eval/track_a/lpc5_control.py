@@ -27,6 +27,7 @@ from data.generator.digest import DatasetDigest, canonical_bytes
 from data.generator.engine import GeneratedRow, coverage_mix, generate_dataset, plan_fraud
 from data.generator.lpc5 import controls, run
 from data.generator.lpc5 import declaration as d
+from data.generator.lpc5.availability import reference_availability
 from data.generator.lpc5.frame import knowledge
 from data.generator.population import build_universe
 
@@ -99,10 +100,12 @@ def main(argv: list[str] | None = None) -> int:
 
     started = time.monotonic()
     universe = build_universe(config)
+    know = knowledge(universe)
     digest = DatasetDigest()
     report = run.evaluate(
         _tee_transactions(generate_dataset(config, universe), digest),
-        knowledge(universe),
+        know,
+        availability=reference_availability(know.start_ms),
         mix=coverage_mix(plan_fraud(config, universe)[0]),
     )
     elapsed = time.monotonic() - started
