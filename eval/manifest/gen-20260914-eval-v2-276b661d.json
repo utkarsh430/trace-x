@@ -1,0 +1,28 @@
+{
+  "dataset_digest": "sha256:88f2142a266100a00ed2533086a0d65753cbfe8656cd2cb1dd54126fc0485185",
+  "dataset_version": "eval-v2",
+  "dirty_worktree": false,
+  "env_lock_digest": "sha256:b8c74723800f0505649f050bba317fd575e6e5dfa295bb45ed073ba5cb650e6f",
+  "finished_at": "2026-09-14T22:50:19.059505Z",
+  "fraud_scenario_config_digest": "sha256:d6d9aeb44ad6f6f8f4cac0148988002cfd8cdba9b3b7e4974fb67a84e7055b16",
+  "generator_version": "1.0.0",
+  "git_commit_sha": "a4b3d4c2370fdaec199e924fe149a61a388e1d5f",
+  "measured": {
+    "fraudulent_transactions": 5080,
+    "generation_rate_tx_per_s": 6178.5,
+    "generation_seconds": 161.852,
+    "output_bytes": 373983825,
+    "realised_fraud_rate": 0.00508,
+    "replaced_existing": false,
+    "sink": "parquet",
+    "transactions": 1000000
+  },
+  "python_version": "3.12.9",
+  "record_type": "GENERATOR",
+  "row_count": 1000000,
+  "run_id": "gen-20260914-eval-v2-276b661d",
+  "seed": 42,
+  "started_at": "2026-09-14T22:47:35.525873Z",
+  "track": "SYNTHETIC",
+  "validation_policy": "all"
+}
