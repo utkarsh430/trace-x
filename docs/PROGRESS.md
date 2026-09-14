@@ -1057,6 +1057,44 @@ Phase 3, in the wave order of `docs/PHASE3_PLAN.md` §5:
         - **Re-judging probe 2.** The report prints findings only, so the saved evidence cannot show
           what revision 4 still judges. Probe 2 is therefore regenerated once at seed 44 under revision
           4, as the decision allows.
+      - **Probe 2 re-judged under revision 4 (diagnostic).** One seed-44 regeneration at commit
+        `5b2bd91`, generator unchanged:
+        `eval/track_a/audits/stage-2-evidence/lpc5-eval-v2-probe-quarter-scale-rev4.txt`.
+        - **Verdict still FAIL,** on R7, R8, S1-U, S1-B, S2b and S7b. No value §6.7 declares is still
+          found.
+        - **Category A: none.** Each candidate was checked against the code:
+          - unusual-location amount roundness (S2b): the same lognormal sampler as legitimate spend,
+            restricted to its region, with no rounding step, so a chance tail among the S2b cells;
+          - anomalous-high-value decision latency (S2b): DM-1 draws one distribution for every
+            transaction;
+          - velocity and card-testing `leg_speed`: planted burst locations use the legitimate session
+            point, so burst volume, not representation, moves the speed;
+          - takeover `shared_merchant_link`: the takeover device is drawn from the universe's devices,
+            which links the account to their other users (ATO-4's consequences) at
+            popularity-weighted merchants;
+          - merchant collusion's `merchant_popularity` inside MC-4: the colluding merchant is drawn
+            uniformly, so it usually lies outside the popular head; the documented implausible share
+            needs a merchant with a small baseline.
+        - **Category B outside probe 2's recorded list, left judged:**
+          - takeover `shared_merchant_link`, availability and profile inside ATO-5, and its
+            `device_age` composition;
+          - unusual-location findings inside ULD-1, ULD-2 and ULD-3;
+          - card testing inside CT-3, CT-6, CT-7 and CT-8, and its `leg_speed`;
+          - velocity `leg_speed`, and daily counts inside VA-3;
+          - device-farm `device_age` and device-history availability outside its strata;
+          - impossible travel's gap inside IT-2;
+          - the ring's `device_accounts` composition;
+          - merchant collusion's popularity inside MC-4.
+        - **Category C:**
+          - the CT-3 near miss;
+          - the anomalous-high-value findings, the takeover's device-event hour, and single merchant
+            codes and countries inside IT-2 and MC-1;
+          - S2b on scenarios of twenty-odd rows;
+          - `rare` values short of thirty legitimate rows. `tx_count_24h` `10-19` and
+            `prior_declined_share_1h` `(0,0.4)` have so few that they may stay short at acceptance
+            scale.
+        - **Revision 4 is closed.** By the user's decision there is no revision 5 for B or C. Step 10
+          proceeds, and an acceptance FAIL on these findings is reported as it stands.
    10. Final candidate.
    11. Frozen `LPC-5` acceptance.
    12. Freeze the manifest and digests.

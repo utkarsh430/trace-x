@@ -1,7 +1,8 @@
-"""Diagnostic: run `LPC-5` over one generation; say whether a control failed for its named reasons.
+"""Run `LPC-5` over one generation; say whether a control failed for its named reasons.
 
-Not acceptance evidence (eval/track_a/criteria/lpc-5.md §1.3). This runner generates in memory and
-prints the report, either at a chosen scale or from a frozen manifest.
+Diagnostic, not acceptance evidence (eval/track_a/criteria/lpc-5.md §1.3), except the acceptance run
+on a frozen candidate below. This runner generates in memory and prints the report, either at a
+chosen scale or from a frozen manifest.
 
 With `--manifest`, it checks the transaction `dataset_digest`, row count and scenario-config digest
 against the manifest, as §1.2 requires of a control. A mismatch makes the run invalid (exit 2).
@@ -18,6 +19,12 @@ of `--candidate`, whose scenario-config digest is checked. Each control changes 
 criterion names (`controls.zero_rate_control`, `controls.ablation_control`), and a control whose
 run is invalid meets nothing. They are acceptance evidence only on the frozen candidate at
 acceptance scale (§16.4).
+
+With `--control eval-v2 --candidate`, it is the acceptance run of §1.2 on the frozen candidate
+(`eval/track_a/freeze_candidate.py`). It refuses a dirty tree, a changed configuration and a
+criterion other than the one frozen with the candidate. It digests every stream while the rows are
+read, and a stream whose digest or row count differs from the manifest stops the run before any
+check, as invalid (exit 2). Otherwise it exits 0 on PASS and 1 on FAIL.
 """
 
 from __future__ import annotations
@@ -28,8 +35,9 @@ import json
 import resource
 import sys
 import time
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from pathlib import Path
+from typing import Any
 
 from data.generator.config import CORRECTIONS, BaselineIdentityConfig, GeneratorConfig
 from data.generator.digest import DatasetDigest, canonical_bytes
@@ -39,6 +47,10 @@ from data.generator.lpc5 import declaration as d
 from data.generator.lpc5.availability import reference_availability
 from data.generator.lpc5.frame import knowledge
 from data.generator.population import build_universe
+from data.generator.record import git_commit_sha, is_dirty
+from eval.track_a import freeze_candidate
+
+from trace_core.domain.errors import DeterminismError
 
 
 def _config(args: argparse.Namespace) -> GeneratorConfig:
@@ -82,13 +94,58 @@ def _manifest_mismatches(
     ]
 
 
-def evaluate_config(config: GeneratorConfig, digest: DatasetDigest | None = None) -> run.Lpc5Report:
-    """`LPC-5` over one in-memory generation of `config`, with availability and its mix."""
+def stream_mismatches(
+    recorded: Mapping[str, Any], digests: Mapping[str, DatasetDigest]
+) -> list[str]:
+    """Every stream whose digest or row count differs from the candidate manifest's (§1.2)."""
+    observed = {
+        topic: {"digest": digest.hexdigest(), "rows": digest.row_count}
+        for topic, digest in digests.items()
+    }
+    return [
+        f"{topic}: manifest {recorded.get(topic)!r}, regenerated {observed.get(topic)!r}"
+        for topic in sorted({*recorded, *observed})
+        if recorded.get(topic) != observed.get(topic)
+    ]
+
+
+def _verify_streams(
+    rows: Iterable[GeneratedRow], recorded: Mapping[str, Any]
+) -> Iterator[GeneratedRow]:
+    """Digest every stream as the frame reads it, over the bytes `emit.write_rows` digests.
+
+    Raises at the end of the stream, before any check runs, when a digest or row count moved."""
+    digests: dict[str, DatasetDigest] = {}
+    for row in rows:
+        digest = digests.get(row.topic)
+        if digest is None:
+            digest = digests[row.topic] = DatasetDigest()
+        digest.update_bytes(canonical_bytes(row.event))
+        yield row
+    moved = stream_mismatches(recorded, digests)
+    if moved:
+        raise DeterminismError("; ".join(moved))
+
+
+def evaluate_config(
+    config: GeneratorConfig,
+    digest: DatasetDigest | None = None,
+    *,
+    recorded_streams: Mapping[str, Any] | None = None,
+) -> run.Lpc5Report:
+    """`LPC-5` over one in-memory generation of `config`, with availability and its mix.
+
+    `recorded_streams`, a candidate manifest's `streams`, makes a moved stream raise
+    `DeterminismError` before any check runs (§1.2)."""
     universe = build_universe(config)
     know = knowledge(universe)
-    rows = generate_dataset(config, universe)
+    rows: Iterable[GeneratedRow] = generate_dataset(config, universe)
+    if digest is not None:
+        rows = _tee_transactions(rows, digest)
+    if recorded_streams is not None:
+        rows = _verify_streams(rows, recorded_streams)
     return run.evaluate(
-        _tee_transactions(rows, digest) if digest is not None else rows,
+        rows,
         know,
         availability=reference_availability(know.start_ms),
         mix=coverage_mix(plan_fraud(config, universe)[0]),
@@ -112,6 +169,57 @@ def control_unmet(correction: str | None, report: run.Lpc5Report) -> list[str]:
     if correction is None:
         return controls.zero_rate_unmet(report)
     return controls.ablation_unmet(correction, report)
+
+
+def acceptance_refusals(manifest: Mapping[str, Any], config: GeneratorConfig) -> list[str]:
+    """Why an acceptance run may not start: provenance or criterion out of step (§0, §1.2)."""
+    refusals: list[str] = []
+    if config.baseline_identity is None:
+        refusals.append("the candidate has the eval-v2 gate off")
+    recorded = manifest.get("fraud_scenario_config_digest")
+    if recorded != config.digest():
+        refusals.append(f"configuration digest: manifest {recorded!r}, now {config.digest()!r}")
+    current = freeze_candidate.criterion()
+    if manifest.get("criterion") != current:
+        refusals.append(f"criterion: frozen with {manifest.get('criterion')!r}, now {current!r}")
+    if current["sha256"] != d.CRITERION_SHA256:
+        refusals.append("the criterion document does not match the declaration's digest")
+    if not manifest.get("streams"):
+        refusals.append("the manifest records no stream digests")
+    if is_dirty():
+        refusals.append("the worktree is dirty, so the run could not be cited")
+    return refusals
+
+
+def _run_acceptance(path: Path, limit: int) -> int:
+    out = sys.stdout
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    config = GeneratorConfig.from_mapping(manifest["config"])
+    refusals = acceptance_refusals(manifest, config)
+    if refusals:
+        out.write("LPC-5 acceptance run: refused (invalid)\n")
+        for item in refusals:
+            out.write(f"  {item}\n")
+        return 2
+    out.write(
+        f"LPC-5 acceptance run (§1.2): candidate={path} run_id={manifest.get('run_id')} "
+        f"rows={config.row_count} commit={git_commit_sha()} criterion revision {d.REVISION}\n"
+    )
+    started = time.monotonic()
+    try:
+        report = evaluate_config(config, recorded_streams=manifest["streams"])
+    except DeterminismError as exc:
+        out.write(f"candidate stream digests: MISMATCH (invalid), before any check: {exc}\n")
+        return 2
+    elapsed = time.monotonic() - started
+    peak_mib = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024 * 1024)
+    out.write(f"candidate stream digests: verified ({len(manifest['streams'])} streams)\n")
+    out.write(report.format(limit=limit) + "\n")
+    out.write(f"instances per scenario: {dict(sorted(report.instance_counts.items()))}\n")
+    disclosure = (manifest.get("coverage_floor") or {}).get("disclosure")
+    out.write(f"§14.4 disclosure: {disclosure or 'G2 added no instances'}\n")
+    out.write(f"wall {elapsed:.0f} s, peak rss {peak_mib:.0f} MiB (macOS reports bytes)\n")
+    return 0 if report.passed else 1
 
 
 def _run_controls(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
@@ -177,6 +285,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--fraud-rate", type=float, default=0.005)
     parser.add_argument("--limit", type=int, default=8, help="findings shown per check")
     args = parser.parse_args(argv)
+    if args.candidate is not None and args.control in ("eval-v1", "eval-v2"):
+        if args.control == "eval-v1" or args.manifest is not None:
+            parser.error("--candidate takes --control eval-v2 (acceptance), zero-rate or ablation")
+        return _run_acceptance(args.candidate, args.limit)
     if args.control in ("zero-rate", "ablation"):
         if args.manifest is not None:
             parser.error("--manifest regenerates eval-v1; take §14.2 and §14.3 from --candidate")
