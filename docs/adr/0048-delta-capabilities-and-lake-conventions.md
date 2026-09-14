@@ -1,6 +1,6 @@
 # ADR-0048: What Delta 4.0.1 actually does, and the lake conventions built on it
 
-- **Status:** Proposed (Phase 3 Step 3; revised after critic review, integrated by the lead). The naming decision below is open (U9).
+- **Status:** Proposed (Phase 3 Step 3; revised after critic review, integrated by the lead). The naming decision below was made by the user on 2026-09-14 (U9).
 - **Date:** 2026-09-13
 - **Phase:** 3 (Step 3 of `docs/PHASE3_PLAN.md`)
 - **Supersedes / Superseded by:** — . Refines how ADR-0005's tier guarantees are enforced; it does
@@ -246,7 +246,7 @@ behind while it runs.
 7. **`docs/DATA_ENGINEERING.md` §3** documents checkpoints at `_checkpoints/{query}/`; the convention
    is `_checkpoints/<query>/v<N>/`.
 
-### Open decision: table and query names (user decision requested)
+### Decided: data-platform identifiers are snake_case (U9)
 
 CLAUDE.md §6 says file paths are kebab-case. Table and query names here are **lowercase snake_case**
 (`silver.late_events`, `bronze_ingest`) for three reasons:
@@ -259,7 +259,21 @@ CLAUDE.md §6 says file paths are kebab-case. Table and query names here are **l
 **Recommendation:** keep snake_case for these identifiers and record them as an exception to the
 file-path rule, since the directory name is derived from an identifier rather than chosen as a path.
 The alternative is kebab-case directories with snake_case catalog names and an explicit, tested
-mapping. Changing CLAUDE.md needs the user's approval, so this stays open.
+mapping. Changing CLAUDE.md needed the user's approval.
+
+**Decision (the user, 2026-09-14): snake_case**, the canonical spelling of every data-platform
+identifier:
+- Delta and Unity Catalog schema and table identifiers, and the physical lake directories derived
+  from them (`silver.late_events`, `silver/late_events/`);
+- Structured Streaming query names and checkpoint logical identifiers (`bronze_ingest`);
+- Delta transaction app ids;
+- Databricks job and task identifiers derived from pipeline names;
+- metric and manifest identifiers that represent the same logical name (`gold_tx_features`).
+
+CLAUDE.md §6 is amended narrowly: kebab-case applies to human-authored repository filesystem paths.
+No snake_case to kebab-case mapping layer is introduced to preserve the repository convention.
+`tests/unit/test_lake_identifier_consistency.py` asserts that a canonical identifier and the
+directory, catalog name, checkpoint path and app id derived from it cannot silently diverge.
 
 ## Alternatives Considered
 

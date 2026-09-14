@@ -469,6 +469,12 @@ and R002 keep Phase 2's treatment of earlier outcomes, and `P3.semantics-hardeni
   example, `account_tx_count_1m ≥ 5` fires on the fifth transaction in a minute rather than the sixth.
   The load gate, the manual replay and rule validation are re-run to measure what that does to
   legitimate traffic.
+- Measured on the `eval-v1` replay, in a controlled comparison with the Phase 2 code: R010
+  (`device_distinct_accounts_24h >= 5`) adds 9 legitimate and 3 fraud high-risk decisions, every one
+  attributed to self-inclusion (`eval/replay/attribute_rule_changes.py`). This is expected semantic
+  drift, not a regression. R010 stays at 5 (decision U10); its threshold is studied on `eval-v2` once
+  that dataset is frozen and its label-proxy checks pass, and any change is a separate, versioned
+  ruleset decision.
 - The online store holds more: every observation raw for 25 hours under its own identity key, then a
   bounded folded profile per account. That costs memory and hot-path CPU: a score decodes its
   account's last 25 hours in the gateway, so the cost grows with the account's velocity. The Phase 2

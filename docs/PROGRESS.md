@@ -388,7 +388,7 @@ both reports.
 ## WORK IN PROGRESS
 
 * **Step 1 — feature semantics and online-store correctness (lead): complete.** `P3.semantics-hardening`
-  is PASS, with the user decisions it surfaced listed under U7, U9 and U10.
+  is PASS. U10 was decided on 2026-09-14 (R010 unchanged); U7 stays open.
   * **Step 1a is committed** (`1ecd6a5`). ADR-0046 (Proposed) declares the semantics. The reference
     implements both evaluation modes and passes the hand-derived literal fixtures; 58 mutants and the
     mode-agreement properties keep the fixtures honest. The durable hole ledger (migration 0004) and
@@ -444,8 +444,8 @@ both reports.
         HIGH-or-CRITICAL decisions from 19 to 28 of 59,678. `eval/replay/attribute_rule_changes.py`
         attributes all of it to self-inclusion: exactly those transactions reach R010's five distinct
         accounts on their device only when their own account counts, and the ones that reach it
-        either way match the 1.0.0 run's R010 counts. R010's threshold is unchanged; changing it is a
-        ruleset decision (U10);
+        either way match the 1.0.0 run's R010 counts. This is expected semantic drift, not a
+        regression: R010 stays at 5 by decision U10, and its threshold is studied on `eval-v2`;
       * no longer fires R017 (4 fraud and 2 legitimate before): Q4c's home needs three located
         observations, and most accounts in the prefix have fewer;
       * fires R008 on 4 fraud transactions rather than 6, consistent with ADR-0046 §4 no longer
@@ -491,9 +491,9 @@ both reports.
     * where the mirrored §4.3 timing constants live (Step 6);
     * the `tx.scored.v1` byte reservation, budgeted but undeclared until that topic is released;
     * every broker started from this image sharing its default cluster id.
-* **Step 3 — Delta spike and lake conventions: integrated on the local branch
-  `phase/03-step3-delta`, not merged** (ADR-0048, Proposed). It waits for U9, because its table and
-  query names are snake_case. Built in the Delta agent's worktree with every first-pass critic finding
+* **Step 3 — Delta spike and lake conventions: integrated** (ADR-0048, Proposed). U9 was decided on
+  2026-09-14: data-platform identifiers are snake_case, CLAUDE.md §6 is amended narrowly, and
+  `tests/unit/test_lake_identifier_consistency.py` pins that derived identifiers cannot diverge. Built in the Delta agent's worktree with every first-pass critic finding
   fixed; a single-agent self-review took the place of the critic's second pass.
   * **Observed on the pinned Delta 4.0.1**, each asserted by `tests/stream/test_delta_capabilities.py`:
     * how idempotent commits behave;
@@ -587,8 +587,8 @@ both reports.
 | U5 | LightGBM vs XGBoost on measured PR-AUC | Phase 4 |
 | U6 | Whether Phase 13 (Go gateway) is worth doing | Phase 13 entry |
 | **U7** | How authorization outcomes reach features. The scored transaction's own outcome is post-decision and is excluded (ADR-0046 §7). Earlier transactions' outcomes are still taken from their scoring requests. Recommended: an authorization-result event dated when the outcome is known | User decision (new event contract) |
-| **U9** | Lake table and streaming-query identifiers in snake_case, which Unity Catalog SQL needs unquoted, versus CLAUDE.md §6's kebab-case file paths. A rule interpretation, so it needs user approval. ADR-0048 recommends snake_case, recorded as an exception to the file-path rule, over kebab-case directories with a tested mapping. Step 3 is integrated on `phase/03-step3-delta` and merges once this is decided | User decision, before Step 3 lands |
-| **U10** | Whether R010's threshold (`device_distinct_accounts_24h >= 5`) should change now that the scored transaction's own account counts (ADR-0046 §2). On the `eval-v1` replay prefix it adds 9 legitimate and 3 fraud HIGH-or-CRITICAL decisions, all attributed to self-inclusion (`eval/replay/attribute_rule_changes.py`). Kept as declared until then | User decision: a ruleset change, separate from Step 1 |
+| **U9** | **Decided 2026-09-14: snake_case** for every data-platform identifier -- schema and table identifiers and the lake directories derived from them, streaming query and checkpoint names, Delta transaction app ids, Databricks job and task identifiers, and metric and manifest identifiers for the same logical name. CLAUDE.md §6 amended narrowly; no mapping layer; a consistency test pins it (ADR-0048) | Decided |
+| **U10** | **Decided 2026-09-14: R010 stays at `device_distinct_accounts_24h >= 5`.** The `eval-v1` replay delta -- 9 more legitimate and 3 more fraud high-risk decisions, all attributed to self-inclusion -- is expected semantic drift, not a regression. Not retuned on `eval-v1`, whose device-related label proxies would fit the ruleset to a flawed dataset. A threshold study follows on `eval-v2` (NEXT EXECUTABLE TASKS); any change is a separate, versioned ruleset decision | Decided |
 
 ---
 
@@ -596,10 +596,13 @@ both reports.
 
 Phase 3, in the wave order of `docs/PHASE3_PLAN.md` §5:
 
-1. **User decisions Step 1 surfaced:** U10 (R010's threshold now that self-inclusion counts the scored
-   account), acceptance of ADR-0046, and the open U7 and U9.
-2. **Merge Step 3** from `phase/03-step3-delta` once U9 is decided.
-3. **Step E stage 1d**, the label-proxy audit; stage 2 after U7.
+1. **User decisions still open:** U7, and acceptance of ADR-0046, ADR-0047 and ADR-0048 together with
+   ADR-0048's proposed plan corrections.
+2. **Step E stage 1d**, the label-proxy audit; stage 2 after U7.
+3. **R010 threshold study (U10)**, once `eval-v2` is frozen and its label-proxy checks pass. Compare
+   candidate thresholds on fraud recall, false-positive rate, legitimate and fraud high-risk counts,
+   the business and risk trade-off, and confidence intervals or sample counts, with attribution
+   confirming R010 is responsible. Any change is a separate, versioned ruleset decision.
 4. **Confirm the first `test-stream` CI run on GitHub** executed Spark: it has only been reproduced
    locally so far (macOS session, and a Linux container for the hashed install).
 

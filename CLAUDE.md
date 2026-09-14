@@ -130,6 +130,15 @@ the next evaluation report.
 - Money is integer minor units (`amount_minor`). **Never a float.**
 - Naming: `snake_case` Python, `camelCase` TypeScript, `SCREAMING_SNAKE` env vars,
   `kebab-case` file paths and topic names.
+- **Data-platform identifiers are `snake_case`.** The kebab-case path convention applies to
+  human-authored repository filesystem paths. Persisted or externally addressable data-platform
+  identifiers follow `snake_case` when they must stay compatible and identical across Spark, Delta
+  Lake, Unity Catalog, Databricks, checkpoints and transaction identifiers: schema and table
+  identifiers, Structured Streaming query names, checkpoint logical identifiers, Delta transaction
+  app ids, Databricks job and task identifiers derived from pipeline names, and the metric and
+  manifest identifiers that represent the same logical name (`silver.late_events`, `bronze_ingest`,
+  `gold_tx_features`). Physical lake directories derived from table identifiers keep the same
+  spelling (`silver/late_events/`). No mapping layer between spellings (ADR-0048, U9).
 
 ---
 
