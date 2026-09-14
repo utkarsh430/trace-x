@@ -74,7 +74,15 @@ any code references a topic that is not RELEASED (ADR-0028).
 | `action.proposed.v1` | `investigation_id` | 3 / 6 | 90 d | delete | PLANNED (Phase 8) |
 | `action.executed.v1` | `action_id` | 3 / 6 | ∞ | compact | PLANNED (Phase 8) |
 | `audit.v1` | `entity_id` | 3 / 6 | ∞ | compact | PLANNED (Phase 5) |
-| `<topic>.dlq` | original key | 1 / 3 | 30 d | delete | created with its parent topic |
+
+**Declared, never auto-created.** `deploy/kafka/topics.yaml` declares each RELEASED topic's key, its
+deduplication identity, the contract settings (`cleanup.policy`, `message.timestamp.type=LogAppendTime`
+and the retention above) and, kept apart, the local-development partitions and byte caps. `make
+kafka-topics` creates what is missing and `make kafka-topics-verify` fails on any drift. Brokers run
+with automatic topic creation off, so publishing to an undeclared topic is an error (ADR-0047).
+
+**No `<topic>.dlq` topics.** A record Spark cannot parse or validate goes to a Delta quarantine table;
+a DLQ topic arrives only with a non-Spark consumer (ADR-0047).
 
 **Keying rule: the key is the entity whose *ordering* matters, never a load-balancing choice.**
 Transactions key on `account_id` because per-account velocity is order-sensitive; device events key on
@@ -123,20 +131,25 @@ An incompatible change without a version bump **fails the build**.
   deployment detail.
 - **Ordering is guaranteed per partition key only** — per `account_id`, never globally. No consumer may
   assume cross-account ordering.
-- **Deduplication** is by `event_id`: Redis (bounded TTL) on the hot path, and
-  `dropDuplicatesWithinWatermark(["event_id"])` in Spark on the warm path.
+- **Deduplication** is by each topic's declared identity (`deploy/kafka/topics.yaml`, PHASE3_PLAN
+  §3 Q2): `payload.transaction_id` for `tx.raw.v1` -- a producer retry carries a new `event_id` and
+  must still collapse -- `envelope.event_id` for identity and device events, and
+  `envelope.idempotency_key` for `investigation.requested.v1`. The online store deduplicates on the
+  same identities (ADR-0046 §1), and Spark within its watermark.
 - **Out-of-order events** are normal and handled by event-time windowing with a 10-minute watermark.
 - **Late events** beyond the watermark are routed to a `late_events` Delta table and counted. **They
   are never silently dropped** — a late event that vanishes is indistinguishable from a bug.
-- **Poison messages** move to `<topic>.dlq` after 3 failures, with the full envelope, the error, and
-  the consumer version. A DLQ message never blocks its partition.
+- **Poison messages** never block their partition. A record Spark cannot parse or validate goes to a
+  Delta quarantine table with its raw bytes, the error and the consumer version (ADR-0047).
 
 ---
 
 ## 6. Validation rules
 
 1. Every message validates against its schema **at produce time**. An invalid message is never
-   published — producers fail fast rather than poisoning consumers.
+   published — producers fail fast rather than poisoning consumers. The one producer factory,
+   `trace_core.contracts.publish`, enforces it; its only exception is the fault overlay's deliberately
+   invalid records, refused except towards a loopback broker (ADR-0047).
 2. Consumers re-validate on receipt. The network is not trusted, and neither is a peer service version.
 3. `occurred_at` more than 24 h in the future is rejected as clock skew; more than 90 d in the past is
    accepted but flagged.
@@ -144,7 +157,9 @@ An incompatible change without a version bump **fails the build**.
 5. Attacker-controllable string fields (`merchant_name`, `user_agent`, `memo`, `device_label`) carry
    maximum lengths and are stamped `trust_tier=UNTRUSTED` in Bronze — a tag that never leaves them.
 6. `trace_id` is propagated as a Kafka header **and** in the body: headers survive Spark's
-   transformations, bodies survive header-stripping intermediaries.
+   transformations, bodies survive header-stripping intermediaries. The producer factory copies the
+   header from `envelope.trace_id`; no caller can set a different one. A backfill replay also marks
+   every record `trace-replay-mode: backfill` (ADR-0047).
 7. Schema files are immutable once merged. Correcting a released schema means a new version.
 
 ---

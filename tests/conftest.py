@@ -6,6 +6,8 @@ say so LOUDLY. A silent skip is a false pass.
 
 from __future__ import annotations
 
+import functools
+import os
 import re
 import shutil
 import subprocess
@@ -25,6 +27,7 @@ for path in (ROOT / "packages", ROOT):
         sys.path.insert(0, str(path))
 
 
+@functools.cache
 def _docker_available() -> bool:
     if not shutil.which("docker"):
         return False
@@ -37,6 +40,14 @@ def _docker_available() -> bool:
         return r.returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
+
+
+def _in_ci() -> bool:
+    """GitHub Actions, like most CI systems, sets `CI=true`."""
+    return os.environ.get("CI", "").strip().lower() in {"1", "true", "yes"}
+
+
+_NEEDS_DOCKER = frozenset({"integration", "chaos", "e2e"})
 
 
 @pytest.fixture(scope="session")
@@ -73,7 +84,8 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         )
         for item in stream_items:
             item.add_marker(pytest.mark.skip(reason=reason))
-    if _docker_available():
+    if _docker_available() or _in_ci():
+        # In CI a missing Docker fails each test at setup instead (`pytest_runtest_setup`).
         return
     reason = (
         "SKIPPED (NOT PASSED): Docker is not available. Integration and chaos tests "
@@ -82,16 +94,33 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     )
     mark = pytest.mark.skip(reason=reason)
     for item in items:
-        if {"integration", "chaos", "e2e"} & set(item.keywords):
+        if _NEEDS_DOCKER & set(item.keywords):
             item.add_marker(mark)
+
+
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    """In CI, a test that needs Docker FAILS without it rather than skipping.
+
+    A loud skip is right on a laptop without Docker and wrong as acceptance evidence: a CI job
+    whose every integration test skipped reports green while proving nothing. The event-transport
+    ADR asked for this before any Kafka fixture runs; it holds for every Docker-backed layer.
+    """
+    if _in_ci() and _NEEDS_DOCKER & set(item.keywords) and not _docker_available():
+        pytest.fail(
+            "FAILED (CI): Docker is not available, so this integration/chaos/e2e test cannot "
+            "exercise the real services it exists for (docs/TESTING.md §4). Provision Docker "
+            "for this job; in CI a skip is not evidence.",
+            pytrace=False,
+        )
 
 
 def pytest_report_header(config: pytest.Config) -> list[str]:
     lines = [f"trace-x: repo={ROOT.name}"]
     if not _docker_available():
+        consequence = "FAIL (CI)" if _in_ci() else "SKIP, not pass"
         lines.append(
             "trace-x: WARNING - Docker unavailable; "
-            "integration/chaos/e2e tests will SKIP, not pass."
+            f"integration/chaos/e2e tests will {consequence}."
         )
     return lines
 

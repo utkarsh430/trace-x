@@ -41,7 +41,10 @@ unimplemented regardless of how much code exists.
 4. **No test asserts a specific benchmark number.** Tests assert *relationships* (calibrated beats
    uncalibrated; ML beats rules-only) and *properties* (termination, idempotency), never magic values.
 5. **A skipped test must say so loudly.** Resource-gated tests (`external`, `cloud`, `integration`)
-   print an explicit reason. A silent skip is a false pass.
+   print an explicit reason. A silent skip is a false pass. In CI a loud skip is still not evidence:
+   `tests/conftest.py` fails every Docker-backed test at setup when Docker is missing, and `-m stream`
+   fails when no stream test executed. A test that finds a service for itself -- the Redis and
+   PostgreSQL suites -- still skips where that service is absent, which today includes CI (PROGRESS).
 6. **Coverage gates:** ≥85% on `domain/`, `policy/`, `actions/`, `rules/`; ≥70% overall.
 
 ---

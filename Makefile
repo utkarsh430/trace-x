@@ -85,6 +85,17 @@ up-streaming: ## Start core + streaming (kafka, spark) -- needs ~10 GB free
 	@$(MAKE) --no-print-directory up
 	@$(COMPOSE) --profile streaming up -d --wait
 
+.PHONY: kafka-topics kafka-topics-verify kafka-topics-budget
+
+kafka-topics: ## Create missing Kafka topics from deploy/kafka/topics.yaml, then verify (local broker only)
+	@$(VPY) scripts/kafka_topics.py apply --environment local $(ARGS)
+
+kafka-topics-verify: ## Compare the local broker with deploy/kafka/topics.yaml; non-zero on any drift
+	@$(VPY) scripts/kafka_topics.py verify --environment local $(ARGS)
+
+kafka-topics-budget: ## Print the local Kafka disk bound derived from deploy/kafka/topics.yaml
+	@$(VPY) scripts/kafka_topics.py budget --environment local
+
 up-full: ## Start every profile -- needs ~15 GB free and 8 GB Docker RAM
 	@$(MAKE) --no-print-directory up
 	@$(COMPOSE) --profile streaming --profile graph --profile ml --profile obs \

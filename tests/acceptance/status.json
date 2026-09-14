@@ -289,12 +289,13 @@
       "id": "P3.kafka-ingest",
       "phase": "3",
       "name": "Declared Kafka topics, a correct producer, and conservation into Bronze",
-      "status": "NOT_STARTED",
+      "status": "IN_PROGRESS",
       "evidence": {
         "command": "pytest -m 'stream and integration' tests/integration/test_kafka_ingest.py",
         "verified_at": null,
         "result": null
-      }
+      },
+      "notes": "Step 2 integrated (ADR-0047, Proposed): topics declared in deploy/kafka/topics.yaml and created and drift-verified only by scripts/kafka_topics.py; one producer factory (idempotent, murmur2 partitioning, schema-validated, EventPublishError unless every accepted record is delivered); a seeded fault overlay that keeps its publish schedule. tests/integration/test_kafka_platform.py passed 11 against a real broker. Remaining for this capability: the gateway's publishing and outbox relay (Step 4) and Bronze ingest (Step 5)."
     },
     {
       "id": "P3.observation-log",

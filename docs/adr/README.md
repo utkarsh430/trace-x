@@ -58,6 +58,7 @@ been thought through.
 | [0044](0044-online-store-correctness-topology.md) | Feature state cannot silently evict: two Redis instances, a declaration-driven write plan, and a completeness epoch | 2 | Accepted |
 | [0045](0045-phase3-toolchain-contract.md) | The Phase 3 toolchain contract: hashed installs, verified JVM jars, and Java 17 enforced by the repository | 3 | Accepted |
 | [0046](0046-feature-semantics-precision.md) | Feature semantics made precise: one declared meaning per feature, and an idempotent, order-independent online store | 3 | Proposed |
+| [0047](0047-event-transport.md) | Event transport: declared topics, one producer factory, and a scheduled fault overlay | 3 | Proposed |
 
 ## Notes on status
 

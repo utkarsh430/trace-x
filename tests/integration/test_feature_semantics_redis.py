@@ -8,7 +8,8 @@ HyperLogLogs and hashes are asked identical questions and must give the literal 
 scored by the one atomic record-and-read -- so a fixture that passes here passes for the code that
 serves. `integration`-marked: this uses a real Redis, never a fake -- a fake would agree with the
 reference by construction and prove nothing about the store that runs (docs/TESTING.md §4). It
-runs in CI's `test-integration` job, not in `make verify`.
+does not run in `make verify`, and it skips loudly wherever no Redis is listening -- today that
+includes CI's `test-integration` job, which provisions none (docs/PROGRESS.md, debt).
 
 The Phase 2 store failed 34 of these fixtures, recorded as strict expected failures with their
 exact diverging feature sets until the Step 1 store made them pass (ADR-0046 §5; git history).

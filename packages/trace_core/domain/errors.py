@@ -168,6 +168,35 @@ class ToolchainMismatchError(TraceXError):
     """
 
 
+class EventPublishError(TraceXError):
+    """Events handed to the Kafka producer could not be confirmed as delivered.
+
+    Raised by `trace_core.contracts.publish` when a flush leaves messages still
+    queued, when any delivery report came back failed, when an event was shed or
+    refused, or when the idempotent producer reported a fatal error. It replaces a
+    close that flushed for a fixed time and let whatever was still queued vanish
+    with the process, so a seed run could report success over a topic missing its
+    tail. Unconfirmed is reported as unconfirmed, never as delivered.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        outstanding: int = 0,
+        failed: dict[str, int] | None = None,
+        shed: dict[str, int] | None = None,
+        refused: dict[str, int] | None = None,
+        fatal: str | None = None,
+    ) -> None:
+        self.outstanding = outstanding
+        self.failed = dict(failed or {})
+        self.shed = dict(shed or {})
+        self.refused = dict(refused or {})
+        self.fatal = fatal
+        super().__init__(message)
+
+
 # ------------------------------------------- declared now, used later ------
 # Declared here so the taxonomy is complete and downstream phases extend it
 # rather than inventing a parallel hierarchy.

@@ -466,9 +466,31 @@ both reports.
 * **Execution is single-agent from 2026-09-13**, at the user's instruction, to conserve usage.
   Implementation, integration and critic-style self-review run in sequence, and the lead integrates
   the worktrees below itself.
-* **Step 2 — Kafka platform.** Implemented in its worktree, with every first-pass critic finding
-  fixed; the second critic pass did not run. Awaits the lead's self-review and integration: docs,
-  Makefile targets and the integration collection guard.
+* **Step 2 — Kafka platform: integrated** (ADR-0047, Proposed). Built in the Kafka agent's worktree
+  with every first-pass critic finding fixed; the lead merged it, checked the paced-replay fix the
+  critic had blocked on, and added what integration needed. A single-agent self-review took the
+  place of the critic's second pass, which did not run.
+  * **Topics:** `deploy/kafka/topics.yaml` declares every released topic, and `scripts/kafka_topics.py`
+    (`make kafka-topics`, `kafka-topics-verify`, `kafka-topics-budget`) is the only thing that creates
+    them. It verifies drift, and derives the local disk bound, reservations included.
+  * **Producer:** `trace_core.contracts.publish` is the one factory. It is idempotent and
+    Java-partitioned (murmur2, pinned to Kafka's vectors), validates every event against its schema
+    and keys it from the release ledger, and raises `EventPublishError` unless every accepted record
+    was delivered. The generator's Kafka sink is built on it.
+  * **Fault overlay:** `eval/replay/faults.py` injects seeded faults on a publish schedule that keeps
+    fault-free records on time, and refuses the unpaced replay that made them late.
+  * **Broker:** the compose broker is pinned by digest, keeps its log on its volume, has an internal
+    listener, and runs a healthcheck that can fail.
+  * **CI guard:** `tests/conftest.py` fails Docker-backed tests at setup when Docker is missing in CI.
+  * **Docs:** EVENT_CONTRACTS (declared topics, per-topic dedup identities, no DLQ topics, the factory
+    owning `trace_id`), ARCHITECTURE, LOCAL_DEVELOPMENT, OPERATIONS and TESTING.
+  * **Evidence:** `make verify` with the new unit tests, and
+    `tests/integration/test_kafka_platform.py` passed 11 against its own broker.
+  * **Open, from the Kafka work:**
+    * how Silver treats unknown enum values (Step 5);
+    * where the mirrored §4.3 timing constants live (Step 6);
+    * the `tx.scored.v1` byte reservation, budgeted but undeclared until that topic is released;
+    * every broker started from this image sharing its default cluster id.
 * **Step 3 — Delta spike and lake conventions.** Implemented in its worktree, with every first-pass
   critic finding fixed; the second critic pass did not run. Awaits the lead's self-review and
   integration. The snake_case naming of lake tables needs a user decision (U9).
@@ -501,6 +523,7 @@ both reports.
 | **D13** | `identity.events.v1` / `device.events.v1` are produced but nothing consumes them yet | The contracts are exercised by the generator only | Phase 3 Steps 4–6 |
 | ~~D1, D2, D3, D6, D7~~ | ~~Migrations, CI, OTel, lockfile, compose targets~~ | **RESOLVED in Phase 0** | done |
 | ~~D10~~ | ~~No declarative SQLAlchemy models, so autogenerate is unused~~ | Still true and still correct: migrations 0001 and 0002 are hand-written because they are security-critical grants. Re-evaluate when ordinary application tables arrive | Phase 2 |
+| **D14** | CI provisions no Redis or PostgreSQL, so the Redis conformance suite, the Redis store tests, the hole-ledger tests and the other service-backed integration tests skip there, loudly. Their evidence is local runs | CI cannot catch a regression in the online store or the ledger | Before Phase 3 exit: provision the services in `test-integration.yml`, or start throwaway containers in those fixtures as the capacity test does |
 
 ---
 
@@ -541,8 +564,8 @@ Phase 3, in the wave order of `docs/PHASE3_PLAN.md` §5:
 
 1. **User decisions Step 1 surfaced:** U10 (R010's threshold now that self-inclusion counts the scored
    account), acceptance of ADR-0046, and the open U7 and U9.
-2. **Integrate Steps 2 and 3** from their worktrees: self-review, the requested doc edits,
-   `make verify`, commit.
+2. **Integrate Step 3** (Delta) from its worktree: self-review, the requested doc edits, `make verify`,
+   commit. U9 (lake naming) is needed before it lands.
 3. **Step E stage 1d**, the label-proxy audit; stage 2 after U7.
 4. **Confirm the first `test-stream` CI run on GitHub** executed Spark: it has only been reproduced
    locally so far (macOS session, and a Linux container for the hashed install).
@@ -575,5 +598,5 @@ After the start-up fix, `make verify` at 2026-09-14T03:54:36Z again reported VER
 unit tests and both restart chaos tests passed on that code.
 At the Step 1 close-out, `make verify` at 2026-09-14T04:41:22Z again reported VERIFY OK, 11 passed.
 
-**Acceptance status: 21 PASS · 0 IN_PROGRESS · 45 NOT_STARTED · 0 FAIL · 0 BLOCKED** across 66 tracked
+**Acceptance status: 21 PASS · 1 IN_PROGRESS · 44 NOT_STARTED · 0 FAIL · 0 BLOCKED** across 66 tracked
 capabilities. `tests/acceptance/status.json` is the authoritative machine-readable record.

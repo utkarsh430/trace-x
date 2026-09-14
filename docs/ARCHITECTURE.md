@@ -167,9 +167,10 @@ records Redpanda as a documented alternative if the RAM ceiling binds).
 | `action.proposed.v1` | `investigation_id` | 3 / 6 | 90 d | worker → policy |
 | `action.executed.v1` | `action_id` | 3 / 6 | ∞ compacted | executor → audit |
 | `audit.v1` | `entity_id` | 3 / 6 | ∞ | all → audit sink |
-| `*.dlq` | original key | 1 / 3 | 30 d | poison messages, with full context |
 
-Envelope, keying and evolution rules: `docs/EVENT_CONTRACTS.md`.
+Topics are declared in `deploy/kafka/topics.yaml` and created only by `make kafka-topics`; the broker
+never creates one. There are no `.dlq` topics: a record Spark cannot parse or validate goes to a Delta
+quarantine table (ADR-0047). Envelope, keying and evolution rules: `docs/EVENT_CONTRACTS.md`.
 
 ---
 
@@ -479,7 +480,8 @@ and the replay store, and is the one to compare against the p99 budget. Recordin
 in the online store is part of scoring since ADR-0046: one atomic read-and-record. They were briefly one
 metric that spanned scoring plus triage plus the observe-write, which on a workload where most
 requests open an investigation reported a Postgres transaction as scoring time.
-Streaming: consumer lag, batch duration, `late_events_total`, `dedup_dropped_total`,
+Streaming: `event_publish_outcomes_total{topic,outcome}`, `event_publisher_errors_total{error,fatal}`,
+consumer lag, batch duration, `late_events_total`, `dedup_dropped_total`,
 `feature_parity_drift{feature}`. Agents: `investigation_duration_seconds`,
 `agent_invocations_total{agent,outcome}`, `tool_calls_total{tool,transport,status}`,
 `tool_authorization_denied_total`, `llm_tokens_total{agent,dir}`, `investigation_cost_usd`,
@@ -625,7 +627,7 @@ zero unauthorized tool calls.
 | Worker crash mid-investigation | queue lease expiry | Another worker resumes from the LangGraph checkpoint, not from scratch |
 | Action execution fails | verification read-back | Compensate → `ESCALATED` → page |
 | Duplicate event | `event_id` dedup (Redis + Spark) | Idempotent; counted |
-| Poison message | 3 failures | → DLQ with full context; never blocks the partition |
+| Poison message | Spark parse or schema failure | → Delta quarantine with the raw bytes, the error and the consumer version; never blocks the partition (ADR-0047) |
 | Audit chain broken | verifier job | **Page immediately.** Treated as a security incident |
 
 **Fail-safe direction is explicit and asymmetric.** Scoring fails **open** (approve + flag) because

@@ -175,6 +175,26 @@ their LangGraph checkpoints. Verify no duplicate action execution via idempotenc
 **Action:** restore Kafka; drain the WAL. Confirm dedup absorbed replays. Check `late_events` growth —
 buffered events may now be late and must land there, not vanish.
 
+### Kafka topic missing or drifted
+
+**Detect:** `make kafka-topics-verify` exits 1 and names each differing setting, undeclared setting or
+undeclared topic; a publisher fails at its first publish because a topic does not exist.
+**Behaviour:** nothing is created or altered automatically. The broker's automatic topic creation is
+off, and `apply` never changes an existing partition count or configuration (ADR-0047).
+**Action:** locally, `make kafka-topics` creates a missing topic. A different partition count or
+cleanup policy is refused by design: recreate or version the topic deliberately, never alter it in
+place, because changing a partition count reorders history.
+
+### Publishing unconfirmed
+
+**Detect:** `EventPublishError` at close; `event_publish_outcomes_total` with `outcome` `failed`, `shed`
+or `refused`; `event_publisher_errors_total{fatal="true"}`.
+**Behaviour:** the run is not recorded as complete. A seed run writes no run record claiming its
+dataset reached the topic.
+**Action:** read the error's per-topic accounting (accepted, delivered, failed, still queued), fix the
+cause -- broker down, topic missing, message timeout -- and publish again. Consumers deduplicate on
+each topic's declared identity, so publishing again is safe.
+
 ### Spark job crash
 **Detect:** supervisor restart, consumer lag.
 **Behaviour:** resumes from checkpoint; online store serves stale-but-flagged features.

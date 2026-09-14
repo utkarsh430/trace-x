@@ -80,6 +80,7 @@ not fit in 8 GB alongside a laptop's other work.
 ```bash
 make up                  # core
 make up-streaming        # core + streaming
+make kafka-topics        # then create the declared topics: the broker never creates one
 make up-full             # everything — needs ~15 GB free and 8 GB Docker RAM
 ```
 
@@ -292,7 +293,8 @@ make seed ARGS="--rows 50000 --dataset-version dev-v1"
 # No database: events only. Says so in the run record rather than leaving it implicit.
 make seed ARGS="--rows 10000 --no-groundtruth --out /tmp/tx"
 
-# Publish to Kafka instead of files (needs the `stream` extra and a broker).
+# Publish to Kafka instead of files (needs the `stream` extra, a broker and `make kafka-topics`).
+# The run fails, and writes no run record, unless every event is confirmed delivered.
 make seed ARGS="--sink kafka --bootstrap localhost:9092"
 ```
 
