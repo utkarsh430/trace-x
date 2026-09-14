@@ -277,6 +277,7 @@ class _Tx:
     longitude: float | None
     channel: str | None
     entry_mode: str | None
+    transaction_id: str = ""
 
 
 def _millis(timestamp: str) -> int:
@@ -296,6 +297,18 @@ def _has(
     if account_times is None:
         return False
     return _fired_in(account_times.get(category, _EMPTY), at_ms - window_ms, at_ms)
+
+
+def _declined_before(series: list[tuple[int, str]] | None, own: str, at_ms: int) -> bool:
+    """Whether another transaction's DECLINED outcome was decided in `[at_ms - 1 h, at_ms)`."""
+    if not series:
+        return False
+    index = bisect.bisect_left(series, (at_ms - HOUR_MS, ""))
+    while index < len(series) and series[index][0] < at_ms:
+        if series[index][1] != own:
+            return True
+        index += 1
+    return False
 
 
 def _stuffing_burst(logins: list[tuple[int, str]] | None, at_ms: int) -> bool:
@@ -324,6 +337,7 @@ def _tally(
     rows: Iterable[GeneratedRow],
     home_devices: Mapping[str, Collection[str]] | None,
     home_points: Mapping[str, tuple[float, float]] | None = None,
+    outcomes: Mapping[str, tuple[str, int, str]] | None = None,
 ) -> _Tally:
     """One pass over the rows: `LPC-1` signals always, `LPC-2` transaction signals
     when `home_devices` is given, `LPC-3` artefact signals when `home_points` is."""
@@ -360,8 +374,12 @@ def _tally(
             cluster = (
                 f"scenario:{label.scenario_instance_id}" if label.is_fraud else f"account:{account}"
             )
-            outcome = payload.get("authorization_outcome")
-            if with_transactions and outcome is None:
+            if outcomes is not None:
+                decided = outcomes.get(str(payload.get("transaction_id", "")))
+                outcome = decided[0] if decided is not None else None
+            else:
+                outcome = payload.get("authorization_outcome")
+            if with_transactions and outcome is None and outcomes is None:
                 raise ValueError(
                     f"transaction {payload.get('transaction_id')} has no authorization_outcome; "
                     f"LPC-2 cannot judge declines without it"
@@ -389,12 +407,13 @@ def _tally(
                     longitude,
                     channel,
                     entry_mode,
+                    transaction_id=str(payload.get("transaction_id", "")),
                 )
             )
             reference(account, device, at_ms)
             if at_ms < first_payment.get((account, device), at_ms + 1):
                 first_payment[(account, device)] = at_ms
-            if outcome == "DECLINED":
+            if outcomes is None and outcome == "DECLINED":
                 declined_times[account].append(at_ms)
             if with_artefacts and latitude is not None and longitude is not None:
                 place = (account, latitude, longitude)
@@ -425,6 +444,15 @@ def _tally(
         series_by_ip.sort()
     for series_declined in declined_times.values():
         series_declined.sort()
+    # LPC-5 §5.2 (U7): with outcome rows given, the decline signals read those rows. The account
+    # is the outcome row's own, and the time is when the outcome was decided.
+    declined_outcomes: dict[str, list[tuple[int, str]]] = defaultdict(list)
+    if outcomes is not None:
+        for transaction_id, (value, decided_ms, outcome_account) in outcomes.items():
+            if value == "DECLINED":
+                declined_outcomes[outcome_account].append((decided_ms, transaction_id))
+        for series_outcomes in declined_outcomes.values():
+            series_outcomes.sort()
 
     if with_artefacts:
         names = LPC3_SIGNALS
@@ -476,9 +504,14 @@ def _tally(
             )
             fired["TX_WHOLE_SECOND"] = t % 1000 == 0
             fired["TX_DECLINED"] = tx.outcome == "DECLINED"
-            fired["TX_DECLINED_PRIOR_1H"] = _fired_in(
-                declined_times.get(tx.account_id, _EMPTY), t - HOUR_MS, t
-            )
+            if outcomes is None:
+                fired["TX_DECLINED_PRIOR_1H"] = _fired_in(
+                    declined_times.get(tx.account_id, _EMPTY), t - HOUR_MS, t
+                )
+            else:
+                fired["TX_DECLINED_PRIOR_1H"] = _declined_before(
+                    declined_outcomes.get(tx.account_id), tx.transaction_id, t
+                )
 
         if home_points is not None and tx.latitude is not None and tx.longitude is not None:
             home_point = home_points.get(tx.account_id)
@@ -600,13 +633,20 @@ def evaluate_both(
 
 
 def evaluate_all(
-    rows: Iterable[GeneratedRow], population: PopulationView
+    rows: Iterable[GeneratedRow],
+    population: PopulationView,
+    *,
+    outcomes: Mapping[str, tuple[str, int, str]] | None = None,
 ) -> tuple[LabelProxyReport, LabelProxyReport, LabelProxyReport]:
     """`LPC-1`, `LPC-2` and `LPC-3` from one pass over the rows.
 
     The `LPC-1` and `LPC-2` reports are identical to `evaluate_both`'s.
+
+    `outcomes` maps a transaction id to (authorization outcome, decided ms, the outcome row's
+    account). With it, the two decline signals read the outcome stream, as `LPC-5` §5.2 declares
+    for U7. Without it they read the transaction field, as LPC-2 was declared.
     """
-    tally = _tally(rows, population.home_devices, population.home_points)
+    tally = _tally(rows, population.home_devices, population.home_points, outcomes)
     lpc2 = _lpc2_report(tally)
     lpc3 = LabelProxyReport(
         criterion=LPC3_ID,

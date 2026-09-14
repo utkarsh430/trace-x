@@ -93,6 +93,11 @@ class GeneratedRow:
     One latency distribution applies to every transaction -- approved or declined,
     legitimate or planted -- because a latency that differed by outcome or label
     would become a proxy the moment it was emitted. None when the gate is off."""
+    planned_ordinal: int | None = None
+    """Planted rows only: the index of this row's planned event within its scenario instance.
+
+    Never serialised. LPC-5's generator-rule checks recompute a planted amount from the instance and
+    this index (eval/track_a/criteria/lpc-5.md §11, G1)."""
 
 
 def _iso(millis: int) -> str:
@@ -884,6 +889,7 @@ def generate_dataset(
                 ),
                 scenario_instance=instance,
                 authorization_decided_ms=decided_at(occurred_ms),
+                planned_ordinal=ordinal,
             )
             position += 1
         else:
@@ -899,6 +905,7 @@ def generate_dataset(
                 event=side_event,
                 label=None,
                 scenario_instance=instance,
+                planned_ordinal=ordinal,
             )
 
 

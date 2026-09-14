@@ -536,6 +536,25 @@ both reports.
   * **Drafts and evidence.** The eval-v2 draft ADR is now `eval/track_a/drafts/eval-v2-adr-draft.md`,
     and the Stage 1d probes and outputs are archived in `eval/track_a/audits/stage-1d-evidence/`,
     outside lint and type scope.
+  * **`LPC-5` implemented (Stage 2 step 2)** in `data/generator/lpc5/`:
+    - `declaration` pins revision 2 and checks every citation against the catalogue;
+    - `frame` and `attributes` compute §4;
+    - `judge` holds the statistical checks, and `rules` the exact and per-instance checks;
+    - `controls` evaluates §14, and `run.evaluate` produces the report;
+    - `data/generator/outcomes.py` is the one ADR-0049 outcome-row builder (DM-1), shared with
+      the generator.
+
+    Self-tests on hand-built rows cover every check at its stated boundaries, plus a smoke run on a
+    small eval-v1-configured generation.
+
+    **Until ADR-0049 is implemented (step 7), every run is invalid or fails for two known
+    reasons:**
+    - no availability provider exists for feature set 3.0.0 (§4.6);
+    - `tx.authorization.v1` has no released schema, which S2c rule 1 flags.
+
+    **Evaluation also changed:** LPC-2's decline signals can now read outcome rows, as `LPC-5`
+    §5.2 declares, and planted rows carry their planned-event ordinal. This is metadata only and
+    never serialised.
   * **LPC-4 module retired.** The partial, untested `label_proxy_audit.py` is gone: `LPC-5` §5.4
     carries R7–R9, so Stage 2 step 4 folds into step 2.
   * **Main checkout.** It still holds uncommitted copies of the same Step E files, from an
@@ -581,7 +600,7 @@ both reports.
       - G6: merchant-collusion amounts are account-conditioned; the signal is relational.
       - G7: credential stuffing gains `AUTHENTICATION_ANOMALY` and loses `IDENTITY_CHANGE`; card testing
         loses `DEVICE_SHARING`, because its mechanism no longer creates sharing.
-    - **Fully mechanical.** An INTRINSIC_BEHAVIOURAL_SIGNAL allowlist of 57 cited entries, each with a
+    - **Fully mechanical.** An INTRINSIC_BEHAVIOURAL_SIGNAL allowlist of cited entries (55 in revision 2), each with a
       value set, exemption, composition rule, minimum effect and consequences; the S0–S8 checks; a
       declared amount mechanism (G1) and coverage floor (G2); and eval-v1, zero-rate and per-correction
       ablation controls.
@@ -654,9 +673,9 @@ Phase 3, in the wave order of `docs/PHASE3_PLAN.md` §5:
    corrections.
 2. **Step E Stage 2, in the approved order.**
    1. Done: amend and freeze `LPC-5` (revision 2).
-   2. Next: integrate the Step E worktree onto this branch, then `LPC-5` unit and self-tests.
-   3. Show that eval-v1 fails the intended checks.
-   4. Complete and test LPC-4.
+   2. Done: integrate the Step E worktree; implement `LPC-5` with its §16 self-tests.
+   3. Next: show that eval-v1 fails the intended checks.
+   4. Folded into step 2: `LPC-5` §5.4 carries R7–R9, and the partial LPC-4 module is retired.
    5. Record the Q1 extension.
    6. M4–M6 and N1–N11 behind the gate.
    7. U7/N12 (ADR-0049).
