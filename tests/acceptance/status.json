@@ -368,13 +368,13 @@
       "id": "P3.eval-v2",
       "phase": "3",
       "name": "eval-v2: legitimate identity/device activity, own manifest and digest, and presence is not a label proxy",
-      "status": "NOT_STARTED",
+      "status": "IN_PROGRESS",
       "evidence": {
         "command": "pytest -m slow tests/integration/test_eval_v2.py",
         "verified_at": null,
         "result": null
       },
-      "notes": "Lead-added tracker for the user-approved Q5 requirements (docs/PHASE3_PLAN.md §3); not a separately approved capability."
+      "notes": "Lead-added tracker for the user-approved Q5 requirements (docs/PHASE3_PLAN.md §3); not a separately approved capability. IN_PROGRESS (Phase 3 Step E Stage 2, 2026-09-14): LPC-5 frozen at revision 4; the eval-v2 candidate is frozen (eval/track_a/eval-v2.candidate.manifest.json, run_id gen-20260914-eval-v2-7dac6635) and its regeneration reproduced every recorded value. Pending: step 11, LPC-5 acceptance on the candidate and the §14 controls at acceptance scale. No PASS before that evidence exists."
     },
     {
       "id": "P4.training",

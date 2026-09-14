@@ -1,0 +1,191 @@
+{
+  "$comment": "The eval-v2 candidate's reproduction contract for LPC-5 acceptance (Stage 2 step 10). The dataset is not committed; the acceptance run regenerates it and must reproduce every stream digest and row count here before any check runs (LPC-5 \u00a71.2). A criterion revision after this freeze invalidates the candidate (LPC-5 \u00a70).",
+  "acceptance": "python -m eval.track_a.lpc5_control --control eval-v2 --candidate eval/track_a/eval-v2.candidate.manifest.json",
+  "config": {
+    "account_count": 40000,
+    "baseline_identity": {
+      "abandoned_burst_rate_per_account_day": 0.004,
+      "address_change_rate_per_account_year": 0.12,
+      "attribute_change_rate_per_device_year": 2.0,
+      "change_before_first_seen_share": 0.5,
+      "coverage_floor_instances": 20,
+      "decline_propensity_sigma": 1.0,
+      "decline_retry_share_per_transaction": 0.01,
+      "decline_share_per_transaction": 0.02,
+      "disabled_corrections": [],
+      "email_change_rate_per_account_year": 0.1,
+      "fingerprint_change_rate_per_device_year": 0.3,
+      "fixed_price_merchant_share": 0.3,
+      "fixed_price_purchase_share": 0.8,
+      "household_account_share": 0.1,
+      "login_away_ip_share": 0.05,
+      "login_rate_dispersion_sigma": 0.8,
+      "login_rate_per_account_day": 0.4,
+      "mfa_enrolled_on_new_device_share": 0.3,
+      "mfa_enrolled_rate_per_account_year": 0.1,
+      "mfa_reset_on_new_device_share": 0.25,
+      "mfa_reset_rate_per_account_year": 0.1,
+      "micro_session_share_per_transaction": 0.03,
+      "new_device_payment_share": 0.5,
+      "new_device_rate_per_account_year": 1.0,
+      "password_change_rate_per_account_year": 0.8,
+      "phone_change_rate_per_account_year": 0.1,
+      "reset_after_burst_share": 0.5,
+      "secondary_device_account_share": 0.3,
+      "secondary_device_transaction_share": 0.1,
+      "transaction_away_ip_share": 0.05,
+      "travel_trips_per_account_year": 1.0,
+      "typo_burst_share_per_login": 0.06,
+      "typo_burst_size_weights": [
+        0.7,
+        0.2,
+        0.07,
+        0.02,
+        0.01
+      ]
+    },
+    "cards_per_account": 1,
+    "currency": "GBP",
+    "device_count": 48000,
+    "end_at": "2026-03-01T00:00:00Z",
+    "fraud_rate": 0.005,
+    "geo_jitter_km": 12.0,
+    "habitual_merchant_ratio": 0.75,
+    "ip_count": 20000,
+    "merchant_count": 3000,
+    "merchant_zipf_exponent": 1.1,
+    "row_count": 1000000,
+    "seed": 42,
+    "start_at": "2026-01-01T00:00:00Z"
+  },
+  "coverage_floor": {
+    "disclosure": "G2 added instances to patterns below 20: this dataset's scenario mix is a coverage floor, not natural prevalence (LPC-5 \u00a714.4).",
+    "instances_added": 3
+  },
+  "criterion": {
+    "id": "LPC-5",
+    "revision": 4,
+    "sha256": "96dad012376f2b30aaca9450ed14c21a5803f9f3042e4bbb4f21ee672190ee28"
+  },
+  "dataset_digest": "sha256:88f2142a266100a00ed2533086a0d65753cbfe8656cd2cb1dd54126fc0485185",
+  "dataset_version": "eval-v2",
+  "dirty_worktree": false,
+  "env_lock_digest": "sha256:b8c74723800f0505649f050bba317fd575e6e5dfa295bb45ed073ba5cb650e6f",
+  "fraud_scenario_config_digest": "sha256:d6d9aeb44ad6f6f8f4cac0148988002cfd8cdba9b3b7e4974fb67a84e7055b16",
+  "fraudulent_transactions": 5080,
+  "frozen_at": "2026-09-14T19:50:07.121036Z",
+  "gate": {
+    "corrections_applied": [
+      "T1",
+      "T2",
+      "T3",
+      "M1",
+      "M2",
+      "M3",
+      "M4",
+      "M5",
+      "M6",
+      "N1",
+      "N2",
+      "N3",
+      "N4",
+      "N5",
+      "N6",
+      "N7",
+      "N8",
+      "N9",
+      "N10",
+      "N11",
+      "N12"
+    ],
+    "corrections_disabled": []
+  },
+  "generator_version": "1.0.0",
+  "git_commit_sha": "55e83cfa4c5e27f1b300695028664e866ebf5641",
+  "python_version": "3.12.9",
+  "realised_fraud_rate": 0.00508,
+  "regenerate": "python -m eval.track_a.freeze_candidate --check",
+  "row_count": 1000000,
+  "run_id": "gen-20260914-eval-v2-7dac6635",
+  "scenarios": {
+    "ACCOUNT_TAKEOVER": {
+      "added_by_g2": 0,
+      "fraudulent_transactions": 422,
+      "instances_with_a_transaction": 90,
+      "planned_by_mix": 90
+    },
+    "ANOMALOUS_HIGH_VALUE": {
+      "added_by_g2": 0,
+      "fraudulent_transactions": 92,
+      "instances_with_a_transaction": 92,
+      "planned_by_mix": 92
+    },
+    "CARD_TESTING": {
+      "added_by_g2": 0,
+      "fraudulent_transactions": 776,
+      "instances_with_a_transaction": 50,
+      "planned_by_mix": 50
+    },
+    "CREDENTIAL_STUFFING": {
+      "added_by_g2": 0,
+      "fraudulent_transactions": 93,
+      "instances_with_a_transaction": 28,
+      "planned_by_mix": 28
+    },
+    "DEVICE_FARM": {
+      "added_by_g2": 0,
+      "fraudulent_transactions": 598,
+      "instances_with_a_transaction": 38,
+      "planned_by_mix": 38
+    },
+    "FRAUD_RING": {
+      "added_by_g2": 0,
+      "fraudulent_transactions": 760,
+      "instances_with_a_transaction": 35,
+      "planned_by_mix": 35
+    },
+    "IMPOSSIBLE_TRAVEL": {
+      "added_by_g2": 0,
+      "fraudulent_transactions": 116,
+      "instances_with_a_transaction": 58,
+      "planned_by_mix": 58
+    },
+    "MERCHANT_COLLUSION": {
+      "added_by_g2": 3,
+      "fraudulent_transactions": 519,
+      "instances_with_a_transaction": 20,
+      "planned_by_mix": 17
+    },
+    "UNUSUAL_LOCATION_DEVICE": {
+      "added_by_g2": 0,
+      "fraudulent_transactions": 99,
+      "instances_with_a_transaction": 99,
+      "planned_by_mix": 99
+    },
+    "VELOCITY_ATTACK": {
+      "added_by_g2": 0,
+      "fraudulent_transactions": 1605,
+      "instances_with_a_transaction": 60,
+      "planned_by_mix": 60
+    }
+  },
+  "streams": {
+    "device.events.v1": {
+      "digest": "sha256:167bfc01e6853a815a7b0df80bbacaceefe183b13e44182e04cdc11d2f2ca1a0",
+      "rows": 38321
+    },
+    "identity.events.v1": {
+      "digest": "sha256:031203848c0de6483d52d40e3dcde65efa8e24de7b83da697aa54ffe4587f91d",
+      "rows": 1055948
+    },
+    "tx.authorization.v1": {
+      "digest": "sha256:0c89c7950c77ba57b2296d58439d8029087a5a41e171134e12010a275db95dd2",
+      "rows": 1000000
+    },
+    "tx.raw.v1": {
+      "digest": "sha256:88f2142a266100a00ed2533086a0d65753cbfe8656cd2cb1dd54126fc0485185",
+      "rows": 1000000
+    }
+  },
+  "validation_policy": "all"
+}

@@ -1095,7 +1095,16 @@ Phase 3, in the wave order of `docs/PHASE3_PLAN.md` §5:
             scale.
         - **Revision 4 is closed.** By the user's decision there is no revision 5 for B or C. Step 10
           proceeds, and an acceptance FAIL on these findings is reported as it stands.
-   10. Final candidate.
+   10. **Final candidate: frozen (2026-09-14).** `eval/track_a/eval-v2.candidate.manifest.json`,
+       run_id `gen-20260914-eval-v2-7dac6635`, generated at commit `55e83cf` on a clean tree.
+       - It uses eval-v1's scale, window and seed 42, with the eval-v2 gate at its declared defaults
+         and every correction applied.
+       - It records the configuration digest, the four streams' digests and row counts, the
+         transaction digest, and `LPC-5` revision 4 with its sha256.
+       - G2 added three merchant-collusion instances. Every report on eval-v2 therefore states that
+         its scenario mix is a coverage floor, not natural prevalence (§14.4).
+       - `python -m eval.track_a.freeze_candidate --check` regenerated the candidate and reproduced
+         every recorded value. Evidence: `eval/track_a/audits/stage-2-evidence/eval-v2-candidate-freeze.txt`.
    11. Frozen `LPC-5` acceptance.
    12. Freeze the manifest and digests.
    13. Re-run replay validation, rules validation, the R010 study and the Phase 2 manual comparison.
