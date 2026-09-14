@@ -78,7 +78,7 @@ exit condition; each is owned by a Phase 3 step.
   2026-09-14, makes authorization decisions their own dated events (ADR-0049, Proposed). Stage 2
   step 7 is implementing it. Feature set 3.0.0, in which a scoring request's outcome reaches no
   feature, is served by the reference implementation, the Redis store and the gateway (units 2a
-  and 2b). Until unit 3, replays neither deliver nor derive outcomes, so the gateway replay refuses.
+  and 2b). Replays deliver or derive outcomes since unit 3a.
 * **Phase 2's manual replay predates ADR-0044.** `benchmarks/gateway/triage-bands.md` was generated
   (`42f907c`) hours before completeness gating existed (`5c77025`), so its profile rules fired on a
   store that could not tell "not known" from "cannot tell". Replayed again by its own commit on a
@@ -673,7 +673,7 @@ both reports.
 | U4 | Whether the Skeptic agent pays for its cost | Phase 9 Arm F — `UNUSUAL_LOCATION_DEVICE` was built deliberately ambiguous to give this ablation something real to measure |
 | U5 | LightGBM vs XGBoost on measured PR-AUC | Phase 4 |
 | U6 | Whether Phase 13 (Go gateway) is worth doing | Phase 13 entry |
-| **U7** | **Decided 2026-09-14: authorization decisions are their own dated events.** A transaction's own outcome is post-decision and never enters its own features. Outcomes arrive as `tx.authorization.v1` events (field `authorization_outcome`). PostgreSQL records them first and decides duplicates and conflicts; the Redis store holds derived state only. An outcome is pending until its transaction is known with the same account, and pending outcomes never count. `declined_ratio_1h` reads only verified outcomes decided before `as_of` and known before the read, never the scored transaction's own (`CurrentObservation.PRIOR_KNOWN`, feature set 3.0.0). Historical sources replay the transaction first and the decision after it, through the declared delay model DM-1. Designed in ADR-0049 (Proposed). **Partly implemented (Stage 2 step 7):** the stream and its producers (unit 1); feature set 3.0.0 in the reference implementation (unit 2a), the Redis store and the gateway (unit 2b). Outcome replay follows in unit 3 | Decided; implementation in Stage 2 step 7 |
+| **U7** | **Decided 2026-09-14: authorization decisions are their own dated events.** A transaction's own outcome is post-decision and never enters its own features. Outcomes arrive as `tx.authorization.v1` events (field `authorization_outcome`). PostgreSQL records them first and decides duplicates and conflicts; the Redis store holds derived state only. An outcome is pending until its transaction is known with the same account, and pending outcomes never count. `declined_ratio_1h` reads only verified outcomes decided before `as_of` and known before the read, never the scored transaction's own (`CurrentObservation.PRIOR_KNOWN`, feature set 3.0.0). Historical sources replay the transaction first and the decision after it, through the declared delay model DM-1. Designed in ADR-0049 (Proposed). **Partly implemented (Stage 2 step 7):** the stream and its producers (unit 1); feature set 3.0.0 in the reference implementation (unit 2a), the Redis store and the gateway (unit 2b); outcome replay (unit 3a). The `LPC-5` availability provider follows | Decided; implementation in Stage 2 step 7 |
 | **U9** | **Decided 2026-09-14: snake_case** for every data-platform identifier -- schema and table identifiers and the lake directories derived from them, streaming query and checkpoint names, Delta transaction app ids, Databricks job and task identifiers, and metric and manifest identifiers for the same logical name. CLAUDE.md §6 amended narrowly; no mapping layer; a consistency test pins it (ADR-0048) | Decided |
 | **U10** | **Decided 2026-09-14: R010 stays at `device_distinct_accounts_24h >= 5`.** The `eval-v1` replay delta -- 9 more legitimate and 3 more fraud high-risk decisions, all attributed to self-inclusion -- is expected semantic drift, not a regression. Not retuned on `eval-v1`, whose device-related label proxies would fit the ruleset to a flawed dataset. A threshold study follows on `eval-v2` (NEXT EXECUTABLE TASKS); any change is a separate, versioned ruleset decision | Decided |
 
@@ -845,8 +845,24 @@ Phase 3, in the wave order of `docs/PHASE3_PLAN.md` §5:
           - No released producer does either: DM-1 decides within seconds.
           - Rebuilding outcome state from PostgreSQL after a store loss stays deferred (ADR-0049
             §6).
-      - **Unit 3 next:** replay (the fourth stream, and derivation for eval-v1) and the `LPC-5`
-        availability provider.
+      - **Unit 3a done: replays deliver or derive outcomes.**
+        - The gateway replay posts `tx.authorization.v1` as a fourth stream, after transactions at
+          one instant, and sends transactions without their outcome field.
+        - A dataset without the stream (eval-v1) derives its outcomes through the generator's own
+          DM-1 builder, with the seed of the source manifest named by `--source-manifest`.
+          - A manifest for another dataset version is refused.
+          - `REVERSED` and `UNKNOWN` derive nothing and are counted in the report, beside DM-1, the
+            seed and the feature set version.
+        - The refusal is narrowed: a dataset with neither the stream nor a manifest is refused
+          before anything is read.
+        - F6 is tested on real generated streams written to Parquet:
+          - every outcome follows its transaction at exactly DM-1;
+          - a rerun is identical, and DM-1 reads only the seed and the id;
+          - a dataset that carries the stream is replayed from it;
+          - every replayed request satisfies the gateway's request contract.
+        - **Not yet run against a gateway.** The replay report and the rule re-validation on
+          feature set 3.0.0 belong to step 13.
+      - **Unit 3b next:** the `LPC-5` availability provider (§4.6).
    8. Ablation controls.
    9. Diagnostic eval-v2 probe.
    10. Final candidate.

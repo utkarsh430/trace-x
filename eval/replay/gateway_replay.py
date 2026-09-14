@@ -4,7 +4,7 @@
 ROADMAP Phase 2, MANUAL VALIDATION: *"Replay a generated stream through the
 gateway; confirm known-fraud transactions land in HIGH/CRITICAL bands."*
 
-**All three ingress streams, interleaved by event time.** An earlier version of
+**All four released streams, interleaved by event time.** An earlier version of
 this harness replayed `tx.raw.v1` alone. That is not a smaller version of the
 check, it is a different one: `failed_logins_1h` and `hours_since_identity_change`
 are computed from `identity.events.v1`, so replaying transactions only holds
@@ -14,7 +14,12 @@ unreachable, and two of the ten fraud scenarios are *defined* by non-transaction
 events (docs/FRAUD_SCENARIOS.md). A validation that cannot fail for those
 scenarios was not validating them.
 
-Ordering is therefore load-bearing. The three streams are merged on
+Feature set 3.0.0 adds the fourth: `declined_ratio_1h` reads authorization outcomes as their own
+dated events (ADR-0049), so a replay without them holds it absent and R002 abstains. A dataset
+without the stream -- eval-v1 -- has its outcomes derived by DM-1 with the source manifest's seed
+(`--source-manifest`), through the generator's own builder; the frozen dataset is untouched.
+
+Ordering is therefore load-bearing. The streams are merged on
 `occurred_at` and replayed in that order, because a credential-stuffing burst
 that arrives after the transaction it explains explains nothing.
 
@@ -41,7 +46,7 @@ silently dropped old event is indistinguishable from a bug -- but the flag sets
 degradation flag on all of them carries no information and, worse, hides a
 genuine one among it. So the replay projects every event forward by ONE
 deterministic constant, chosen so the last event lands just before now. Every
-relative gap and the ordering across all three streams are preserved exactly,
+relative gap and the ordering across all the streams are preserved exactly,
 which is all the event-time windows depend on. The frozen artifact is never
 modified; the shift exists only in this projection and is recorded in the run's
 provenance.
@@ -66,11 +71,14 @@ import os
 import sys
 import uuid
 from collections import Counter
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
+from trace_core.contracts.topics import TX_AUTHORIZATION_V1
 from trace_core.domain.errors import NonConformantFeatureSetError
+from trace_core.domain.time import to_millis
 from trace_core.features.spec import FEATURE_SET_VERSION, require_served_conformance
 
 ROOT: Final = Path(__file__).resolve().parents[2]
@@ -80,21 +88,42 @@ sys.path.insert(0, str(ROOT))
 REPORT: Final = ROOT / "benchmarks" / "gateway" / "triage-bands.md"
 TRIAGE_BANDS: Final = frozenset({"HIGH", "CRITICAL"})
 
-OUTCOMES_REPLAYED: Final = False
-"""Whether this replay delivers `tx.authorization.v1`, or derives it for a historical source
-(ADR-0049 §7). Until it does, every replayed `declined_ratio_1h` would read no outcome, so no report
-is written: one would name the feature set with no outcome input."""
-
 STREAMS: Final[dict[str, str]] = {
     "tx.raw.v1": "/v1/transactions",
     "identity.events.v1": "/v1/events/identity",
     "device.events.v1": "/v1/events/device",
+    TX_AUTHORIZATION_V1: "/v1/events/authorization",
 }
-"""Every released Phase 2 ingress contract, and where it is posted.
+"""Every released ingress contract, and where it is posted.
 
 Keyed by topic so adding a released stream here is the only change needed; a
 stream that exists but is not replayed is a rule that cannot fire.
 """
+
+REPLAY_ORDER: Final[dict[str, int]] = {
+    "device.events.v1": 0,
+    "identity.events.v1": 1,
+    "tx.raw.v1": 2,
+    TX_AUTHORIZATION_V1: 3,
+}
+"""The order at one instant: an outcome after transactions (ADR-0049 §7). The other streams keep the
+order they were always replayed in."""
+
+
+@dataclass(frozen=True)
+class OutcomeSource:
+    """Where the replayed authorization outcomes came from, for the report (ADR-0049 §7)."""
+
+    derived: bool
+    """True when the dataset has no `tx.authorization.v1` stream and outcomes were derived from its
+    transactions' outcome column."""
+    count: int
+    """Outcomes replayed."""
+    seed: int | None = None
+    """The source manifest's seed DM-1 was keyed by, when derived."""
+    delay_model: str | None = None
+    omitted: dict[str, int] = field(default_factory=dict)
+    """Loaded transactions whose outcome column derives nothing, by value."""
 
 
 @dataclass
@@ -159,15 +188,37 @@ def _iso(value: dt.datetime) -> str:
     return value.isoformat().replace("+00:00", "Z")
 
 
-def load_streams(dataset_dir: Path, *, limit: int) -> list[tuple[dt.datetime, str, dict[str, Any]]]:
+def load_streams(
+    dataset_dir: Path, *, limit: int, seed: int | None = None
+) -> tuple[list[tuple[dt.datetime, str, dict[str, Any]]], OutcomeSource]:
     """Load every released stream and merge them on event time.
 
     `limit` bounds the TRANSACTIONS; identity and device events are taken for
     the whole time span those transactions cover, because they exist to give the
     transactions context and truncating them independently would remove exactly
     the context being tested.
+
+    Authorization outcomes come from the dataset's `tx.authorization.v1` stream when it has one.
+    Otherwise each loaded transaction whose outcome column is APPROVED or DECLINED derives one,
+    dated by DM-1 with `seed`, the source manifest's, through the generator's own builder: a derived
+    outcome is exactly the event the generator would have emitted (ADR-0049 §7). Any other value
+    derives nothing and is counted. The frozen dataset is never modified.
     """
     import pyarrow.parquet as pq
+    from data.generator import outcomes as dm1
+
+    def records(topic: str) -> Iterator[dict[str, Any]]:
+        path = dataset_dir / f"{topic}.parquet"
+        handle = pq.ParquetFile(path)
+        columns = handle.schema_arrow.names
+        if set(columns) != {"envelope", "payload"}:
+            raise SystemExit(
+                f"{path} carries columns {columns}. The replay input must be the released "
+                f"envelope and payload only -- anything else risks handing the runtime a "
+                f"field ground truth lives in (CLAUDE.md §11)."
+            )
+        for batch in handle.iter_batches(batch_size=10_000):
+            yield from batch.to_pylist()
 
     merged: list[tuple[dt.datetime, str, dict[str, Any]]] = []
     horizon: dt.datetime | None = None
@@ -179,35 +230,70 @@ def load_streams(dataset_dir: Path, *, limit: int) -> list[tuple[dt.datetime, st
                 f"{path} is missing. Run `make seed` to generate the frozen dataset; this "
                 f"harness replays the released streams and will not silently skip one."
             )
-        handle = pq.ParquetFile(path)
-        columns = handle.schema_arrow.names
-        if set(columns) != {"envelope", "payload"}:
-            raise SystemExit(
-                f"{path} carries columns {columns}. The replay input must be the released "
-                f"envelope and payload only -- anything else risks handing the runtime a "
-                f"field ground truth lives in (CLAUDE.md §11)."
-            )
         taken = 0
-        for batch in handle.iter_batches(batch_size=10_000):
-            for record in batch.to_pylist():
-                occurred = _parse(record["envelope"]["occurred_at"])
-                if topic == "tx.raw.v1":
-                    if taken >= limit:
-                        break
-                    taken += 1
-                    horizon = occurred if horizon is None else max(horizon, occurred)
-                merged.append((occurred, topic, record))
-            if topic == "tx.raw.v1" and taken >= limit:
-                break
+        for record in records(topic):
+            occurred = _parse(record["envelope"]["occurred_at"])
+            if topic == "tx.raw.v1":
+                if taken >= limit:
+                    break
+                taken += 1
+                horizon = occurred if horizon is None else max(horizon, occurred)
+            merged.append((occurred, topic, record))
 
     if horizon is None:
         raise SystemExit("no transactions were loaded; there is nothing to replay")
 
+    omitted: Counter[str] = Counter()
+    derived = not (dataset_dir / f"{TX_AUTHORIZATION_V1}.parquet").exists()
+    if not derived:
+        merged.extend(
+            (_parse(record["envelope"]["occurred_at"]), TX_AUTHORIZATION_V1, record)
+            for record in records(TX_AUTHORIZATION_V1)
+        )
+    elif seed is None:
+        raise SystemExit(
+            f"{dataset_dir} has no {TX_AUTHORIZATION_V1} stream, and deriving its outcomes needs "
+            f"the source manifest's seed (ADR-0049 §7)."
+        )
+    else:
+        for occurred, topic, record in list(merged):
+            if topic != "tx.raw.v1":
+                continue
+            envelope, payload = record["envelope"], record["payload"]
+            value = payload.get("authorization_outcome")
+            if value not in dm1.OUTCOMES:
+                omitted[str(value)] += 1
+                continue
+            event = dm1.outcome_event(
+                seed,
+                transaction_id=str(payload["transaction_id"]),
+                account_id=str(payload["account_id"]),
+                authorization_outcome=str(value),
+                transaction_occurred_at=str(envelope["occurred_at"]),
+                transaction_occurred_ms=to_millis(occurred),
+                producer=str(envelope.get("producer") or ""),
+                trace_id=str(envelope.get("trace_id") or ""),
+                correlation_id=str(envelope.get("correlation_id") or ""),
+            )
+            merged.append((_parse(event["envelope"]["occurred_at"]), TX_AUTHORIZATION_V1, event))
+
     # Context events beyond the last replayed transaction describe a future the
     # gateway never sees, so they are dropped rather than replayed into it.
     merged = [row for row in merged if row[0] <= horizon]
-    merged.sort(key=lambda row: (row[0], row[1]))
-    return merged
+    merged.sort(key=lambda row: (row[0], REPLAY_ORDER[row[1]]))
+    source = OutcomeSource(
+        derived=derived,
+        count=sum(1 for row in merged if row[1] == TX_AUTHORIZATION_V1),
+        seed=seed if derived else None,
+        delay_model=(
+            f"DM-1: {dm1.DM1_FLOOR_MS} ms + |N({dm1.DM1_MEAN_MS:g} ms, {dm1.DM1_SD_MS:g} ms)|, "
+            f"keyed by the seed and the transaction id"
+            if derived
+            else None
+        ),
+        omitted=dict(sorted(omitted.items())),
+    )
+    return merged, source
 
 
 def shift_to_now(
@@ -215,7 +301,7 @@ def shift_to_now(
 ) -> tuple[list[tuple[dt.datetime, str, dict[str, Any]]], dt.timedelta]:
     """Project every event forward by ONE constant. Ordering and gaps preserved.
 
-    One constant across all three streams, so cross-stream ordering -- the whole
+    One constant across all four streams, so cross-stream ordering -- the whole
     reason for merging them -- survives the projection. Returned alongside the
     events so the caller can record it: an undeclared shift would make the run
     unreproducible, which is the same defect as an undeclared seed.
@@ -230,18 +316,33 @@ def shift_to_now(
             record["payload"]["occurred_at"] = _iso(
                 _parse(record["payload"]["occurred_at"]) + delta
             )
+        if record["payload"].get("transaction_occurred_at"):
+            record["payload"]["transaction_occurred_at"] = _iso(
+                _parse(record["payload"]["transaction_occurred_at"]) + delta
+            )
         shifted.append((occurred + delta, topic, record))
     return shifted, delta
 
 
-def _to_request(event: dict[str, Any]) -> dict[str, Any]:
+def _to_request(topic: str, event: dict[str, Any]) -> dict[str, Any]:
     """A released event as the gateway's request contract.
 
     `ingested_at` is dropped: it is processing time, stamped by the gateway, and
-    the request contract forbids it (ADR-0026).
+    the request contract forbids it (ADR-0026). A transaction is sent without its
+    `authorization_outcome`: outcomes arrive as their own events (ADR-0049 §7).
     """
     payload = dict(event["payload"])
+    if topic == TX_AUTHORIZATION_V1:
+        return {
+            "transaction_id": payload["transaction_id"],
+            "account_id": payload["account_id"],
+            "authorization_outcome": payload["authorization_outcome"],
+            "decided_at": event["envelope"]["occurred_at"],
+            "transaction_occurred_at": payload["transaction_occurred_at"],
+        }
     payload.pop("memo", None)
+    if topic == "tx.raw.v1":
+        payload.pop("authorization_outcome", None)
     request = {k: v for k, v in payload.items() if v not in (None, "")}
     request["occurred_at"] = event["envelope"]["occurred_at"]
     return request
@@ -264,7 +365,7 @@ def replay(
     posted: Counter[str] = Counter()
     with httpx.Client(base_url=base_url, timeout=30.0) as client:
         for _occurred, topic, event in events:
-            payload = _to_request(event)
+            payload = _to_request(topic, event)
             response = client.post(
                 STREAMS[topic],
                 json=payload,
@@ -359,6 +460,7 @@ def render(
     shift: dt.timedelta,
     reasons: Counter[str],
     blind: int,
+    outcome_source: OutcomeSource,
 ) -> str:
     fraud_rate = outcome.triage_rate(fraudulent=True)
     legit_rate = outcome.triage_rate(fraudulent=False)
@@ -387,19 +489,46 @@ def render(
         lines.append(f"| `{topic}` | {posted.get(topic, 0):,} |")
     lines += [
         "",
-        "All three released ingress streams, merged on `occurred_at` and replayed in that",
-        "order. Transactions alone would hold `failed_logins_1h` and",
-        "`hours_since_identity_change` permanently absent, and every rule over them would",
-        "abstain rather than fire -- so R008, R012 and R013 could not have fired whatever the",
-        "data said.",
+        "All four released ingress streams, merged on `occurred_at` and replayed in that",
+        "order, an outcome after transactions at one instant. Transactions alone would hold",
+        "`failed_logins_1h`, `hours_since_identity_change` and `declined_ratio_1h`",
+        "permanently absent, and every rule over them would abstain rather than fire.",
         "",
         "**Event-time projection:** every event shifted forward by one constant of",
         f"`{int(shift.total_seconds()):,}s` ({shift.days} days), applied identically to all",
-        "three streams. Relative gaps and cross-stream ordering are preserved exactly; the",
+        "four streams. Relative gaps and cross-stream ordering are preserved exactly; the",
         "frozen dataset is unmodified. Without it every decision in the run carries the",
         "`occurred_at_backdated` flag -- correct, since the events really are old, but a",
         "uniform flag on all of them carries no information and hides a genuine degradation",
         "among it.",
+        "",
+        "## Authorization outcomes",
+        "",
+        f"Feature set `{FEATURE_SET_VERSION}` reads verified authorization outcomes, never a",
+        "transaction's own request field (ADR-0049 §5).",
+        "",
+    ]
+    if outcome_source.derived:
+        lines += [
+            f"The dataset has no `{TX_AUTHORIZATION_V1}` stream, so {outcome_source.count:,}",
+            "outcomes were derived from its transactions' outcome column by the generator's own",
+            f"builder ({outcome_source.delay_model}; seed `{outcome_source.seed}`, the source",
+            "manifest's). Loaded transactions whose column derives nothing:",
+            "",
+            "| value | transactions |",
+            "|---|---|",
+        ]
+        lines += [f"| `{value}` | {n:,} |" for value, n in outcome_source.omitted.items()]
+        if not outcome_source.omitted:
+            lines.append("| _none_ | 0 |")
+    else:
+        lines.append(
+            f"Replayed from the dataset's `{TX_AUTHORIZATION_V1}` stream: "
+            f"{outcome_source.count:,} outcomes."
+        )
+    lines += [
+        "",
+        "## Triage bands",
         "",
         "| label | LOW | MEDIUM | HIGH | CRITICAL | triaged |",
         "|---|---|---|---|---|---|",
@@ -488,6 +617,13 @@ def main() -> int:
     parser.add_argument("--dataset-version", required=True)
     parser.add_argument("--base-url", default="http://localhost:8010")
     parser.add_argument("--limit", type=int, default=2000, help="Transactions to score.")
+    parser.add_argument(
+        "--source-manifest",
+        type=Path,
+        default=None,
+        help="The dataset's generation run manifest. Its seed dates derived outcomes by DM-1 when "
+        "the dataset has no tx.authorization.v1 stream (ADR-0049 §7).",
+    )
     args = parser.parse_args()
 
     # A run record names the feature set its values were computed with. While the online
@@ -498,18 +634,31 @@ def main() -> int:
     except NonConformantFeatureSetError as exc:
         print(f"refused: {exc}", file=sys.stderr)
         return 2
-    if not OUTCOMES_REPLAYED:
+    seed: int | None = None
+    if args.source_manifest is not None:
+        manifest = json.loads(args.source_manifest.read_text())
+        if manifest.get("dataset_version") != args.dataset_version:
+            print(
+                f"refused: {args.source_manifest} describes dataset "
+                f"{manifest.get('dataset_version')!r}, not {args.dataset_version!r}; its seed "
+                f"would date another dataset's outcomes.",
+                file=sys.stderr,
+            )
+            return 2
+        seed = int(manifest["seed"])
+    elif not (args.dataset_dir / f"{TX_AUTHORIZATION_V1}.parquet").exists():
         print(
-            f"refused: feature set {FEATURE_SET_VERSION} reads authorization outcomes, which this "
-            f"replay neither delivers nor derives yet (ADR-0049 §7, Stage 2 step 7 unit 3).",
+            f"refused: feature set {FEATURE_SET_VERSION} reads authorization outcomes. The dataset "
+            f"has no {TX_AUTHORIZATION_V1} stream, and deriving them needs the source manifest's "
+            f"seed: pass --source-manifest (ADR-0049 §7).",
             file=sys.stderr,
         )
         return 2
 
-    events = load_streams(args.dataset_dir, limit=args.limit)
+    events, outcome_source = load_streams(args.dataset_dir, limit=args.limit, seed=seed)
     shifted, delta = shift_to_now(events)
     fingerprint = hashlib.sha256(
-        f"{args.dataset_version}:{args.limit}:{int(delta.total_seconds())}".encode()
+        f"{args.dataset_version}:{args.limit}:{int(delta.total_seconds())}:{seed}".encode()
     ).hexdigest()[:16]
 
     counts = Counter(topic for _o, topic, _r in shifted)
@@ -544,6 +693,7 @@ def main() -> int:
         shift=delta,
         reasons=reasons,
         blind=blind,
+        outcome_source=outcome_source,
     )
     REPORT.parent.mkdir(parents=True, exist_ok=True)
     REPORT.write_text(report)
