@@ -9,6 +9,15 @@ against the manifest, as §1.2 requires of a control. A mismatch makes the run i
     python -m eval.track_a.lpc5_control --manifest eval/track_a/eval-v1.manifest.json  # §14.1
     python -m eval.track_a.lpc5_control --control eval-v1  # fast-lane scale smoke
     python -m eval.track_a.lpc5_control --control eval-v2  # the gated generator, as it is
+    python -m eval.track_a.lpc5_control --control zero-rate  # §14.2
+    python -m eval.track_a.lpc5_control --control ablation --correction N12  # §14.3, one
+    python -m eval.track_a.lpc5_control --control ablation --candidate candidate.manifest.json
+
+§14.2 and §14.3 are taken from a candidate: the gated generator as it is, or the configuration
+of `--candidate`, whose scenario-config digest is checked. Each control changes only what the
+criterion names (`controls.zero_rate_control`, `controls.ablation_control`), and a control whose
+run is invalid meets nothing. They are acceptance evidence only on the frozen candidate at
+acceptance scale (§16.4).
 """
 
 from __future__ import annotations
@@ -22,7 +31,7 @@ import time
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 
-from data.generator.config import BaselineIdentityConfig, GeneratorConfig
+from data.generator.config import CORRECTIONS, BaselineIdentityConfig, GeneratorConfig
 from data.generator.digest import DatasetDigest, canonical_bytes
 from data.generator.engine import GeneratedRow, coverage_mix, generate_dataset, plan_fraud
 from data.generator.lpc5 import controls, run
@@ -43,7 +52,7 @@ def _config(args: argparse.Namespace) -> GeneratorConfig:
         fraud_rate=args.fraud_rate,
         start_at=dt.datetime(2026, 1, 1, tzinfo=dt.UTC),
         end_at=dt.datetime(2026, 3, 1, tzinfo=dt.UTC),
-        baseline_identity=BaselineIdentityConfig() if args.control == "eval-v2" else None,
+        baseline_identity=BaselineIdentityConfig() if args.control != "eval-v1" else None,
     )
 
 
@@ -73,10 +82,92 @@ def _manifest_mismatches(
     ]
 
 
+def evaluate_config(config: GeneratorConfig, digest: DatasetDigest | None = None) -> run.Lpc5Report:
+    """`LPC-5` over one in-memory generation of `config`, with availability and its mix."""
+    universe = build_universe(config)
+    know = knowledge(universe)
+    rows = generate_dataset(config, universe)
+    return run.evaluate(
+        _tee_transactions(rows, digest) if digest is not None else rows,
+        know,
+        availability=reference_availability(know.start_ms),
+        mix=coverage_mix(plan_fraud(config, universe)[0]),
+    )
+
+
+def control_configs(
+    control: str, candidate: GeneratorConfig, correction: str
+) -> list[tuple[str, str | None, GeneratorConfig]]:
+    """What a §14.2 or §14.3 run evaluates: (label, the correction disabled, configuration)."""
+    if control == "zero-rate":
+        return [("§14.2 zero-rate control", None, controls.zero_rate_control(candidate))]
+    chosen = CORRECTIONS if correction == "all" else (correction,)
+    return [(f"§14.3 ablation {c}", c, controls.ablation_control(candidate, c)) for c in chosen]
+
+
+def control_unmet(correction: str | None, report: run.Lpc5Report) -> list[str]:
+    """Why a control did not fail as required; empty when it did. An invalid run meets nothing."""
+    if report.invalid:
+        return [f"the run is invalid: {reason}" for reason in report.invalid]
+    if correction is None:
+        return controls.zero_rate_unmet(report)
+    return controls.ablation_unmet(correction, report)
+
+
+def _run_controls(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    out = sys.stdout
+    if args.candidate is not None:
+        manifest = json.loads(args.candidate.read_text(encoding="utf-8"))
+        candidate = GeneratorConfig.from_mapping(manifest["config"])
+        recorded = manifest.get("fraud_scenario_config_digest")
+        if recorded is not None and recorded != candidate.digest():
+            out.write(
+                f"candidate digest: MISMATCH (invalid): manifest {recorded!r}, configuration "
+                f"{candidate.digest()!r}\n"
+            )
+            return 2
+        source = f"candidate={args.candidate}"
+    else:
+        candidate = _config(args)
+        source = f"the gated generator as it is, seed={candidate.seed}"
+    try:
+        runs = control_configs(args.control, candidate, args.correction)
+    except ValueError as exc:
+        parser.error(str(exc))
+    out.write(
+        f"diagnostic unless on the frozen candidate at acceptance scale (§16.4): {source} "
+        f"rows={candidate.row_count}\n"
+    )
+    unmet_controls = 0
+    for label, correction, config in runs:
+        started = time.monotonic()
+        report = evaluate_config(config)
+        unmet = control_unmet(correction, report)
+        unmet_controls += bool(unmet)
+        verdict = "MET" if not unmet else "NOT MET"
+        out.write(f"{label}: {verdict} ({time.monotonic() - started:.0f} s)\n")
+        for item in unmet:
+            out.write(f"  unmet: {item}\n")
+        if len(runs) == 1:
+            out.write(report.format(limit=args.limit) + "\n")
+    return 1 if unmet_controls else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, help="regenerate gate-off from this manifest")
-    parser.add_argument("--control", choices=("eval-v1", "eval-v2"), default="eval-v1")
+    parser.add_argument(
+        "--control", choices=("eval-v1", "eval-v2", "zero-rate", "ablation"), default="eval-v1"
+    )
+    parser.add_argument(
+        "--correction",
+        choices=(*CORRECTIONS, "all"),
+        default="all",
+        help="the correction a §14.3 ablation disables",
+    )
+    parser.add_argument(
+        "--candidate", type=Path, help="take §14.2 and §14.3 from this candidate manifest"
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--rows", type=int, default=120_000)
     parser.add_argument("--accounts", type=int, default=4_800)
@@ -86,6 +177,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--fraud-rate", type=float, default=0.005)
     parser.add_argument("--limit", type=int, default=8, help="findings shown per check")
     args = parser.parse_args(argv)
+    if args.control in ("zero-rate", "ablation"):
+        if args.manifest is not None:
+            parser.error("--manifest regenerates eval-v1; take §14.2 and §14.3 from --candidate")
+        return _run_controls(args, parser)
 
     manifest: dict[str, object] | None = None
     if args.manifest is not None:
@@ -99,15 +194,8 @@ def main(argv: list[str] | None = None) -> int:
         control = args.control
 
     started = time.monotonic()
-    universe = build_universe(config)
-    know = knowledge(universe)
     digest = DatasetDigest()
-    report = run.evaluate(
-        _tee_transactions(generate_dataset(config, universe), digest),
-        know,
-        availability=reference_availability(know.start_ms),
-        mix=coverage_mix(plan_fraud(config, universe)[0]),
-    )
+    report = evaluate_config(config, digest)
     elapsed = time.monotonic() - started
     peak_mib = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024 * 1024)
 

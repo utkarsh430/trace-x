@@ -890,8 +890,26 @@ Phase 3, in the wave order of `docs/PHASE3_PLAN.md` §5:
         - replay and availability.
         - The outbox relay that publishes `tx.authorization.v1` to Kafka belongs to Phase 3 Step 4,
           with the gateway's other publishing.
-        - Step 8, the ablation controls, is next.
-   8. Ablation controls.
+   8. Done: the `LPC-5` §14.2 and §14.3 controls can be run and judged.
+      - `controls.zero_rate_control` and `controls.ablation_control` take a candidate (gate on, no
+        correction disabled) and change only what the criterion names.
+        - Zero-rate zeroes every legitimate-baseline rate: identity and device activity, T1, T3 and
+          N1–N5. It refuses a rate field it does not name.
+        - An ablation disables one correction and keeps the seed and everything else, so a failed
+          check is attributable to it.
+      - The field list moved from the stage-1c test into the library, which that test now uses.
+      - `eval/track_a/lpc5_control.py` runs them:
+        - `--control zero-rate`, or `--control ablation --correction <one or all>`;
+        - taken from the gated generator as it is, or from `--candidate`, whose scenario-config
+          digest is checked;
+        - a control whose run is invalid meets nothing, and any unmet control exits 1.
+      - Tests pin that every ablation differs from its candidate only in its correction, that every
+        correction has a declared ablation and an evaluator, and that the zero-rate fields are
+        exactly the rates §14.2 lists.
+      - A fast-lane smoke test runs the N12 ablation end to end: it fails S2c rule 3 as required,
+        and the candidate does not. That is diagnostic only (§16.4).
+      - **Not yet run at acceptance scale, or for the other corrections.** Controls on the final
+        candidate belong to step 11. Step 9's probe shows which ablations are at risk.
    9. Diagnostic eval-v2 probe.
    10. Final candidate.
    11. Frozen `LPC-5` acceptance.

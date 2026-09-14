@@ -7,8 +7,10 @@ returns the unmet expectations, and an empty list means the control behaved as d
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
+from typing import Final
 
 from data.generator import label_proxy
+from data.generator.config import CORRECTIONS, BaselineIdentityConfig, GeneratorConfig
 from data.generator.lpc5 import declaration as d
 from data.generator.lpc5.run import Lpc5Report
 from trace_core.domain.enums import FraudPattern
@@ -189,3 +191,86 @@ def ablation_unmet(correction: str, report: Lpc5Report) -> list[str]:
     if ABLATION_CHECKS[correction](report):
         return []
     return [f"{correction}: expected {expectation.check} {expectation.note}".rstrip()]
+
+
+ZERO_RATE_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "login_rate_per_account_day",
+        "abandoned_burst_rate_per_account_day",
+        "password_change_rate_per_account_year",
+        "email_change_rate_per_account_year",
+        "phone_change_rate_per_account_year",
+        "address_change_rate_per_account_year",
+        "mfa_reset_rate_per_account_year",
+        "mfa_enrolled_rate_per_account_year",
+        "new_device_rate_per_account_year",
+        "attribute_change_rate_per_device_year",
+        "fingerprint_change_rate_per_device_year",
+        "new_device_payment_share",
+        "secondary_device_account_share",
+        "secondary_device_transaction_share",
+        "decline_share_per_transaction",
+        "decline_retry_share_per_transaction",
+        "transaction_away_ip_share",
+        "travel_trips_per_account_year",
+        "micro_session_share_per_transaction",
+        "fixed_price_merchant_share",
+        "fixed_price_purchase_share",
+        "household_account_share",
+    }
+)
+"""§14.2: every legitimate-baseline rate, by name -- identity and device activity, T1, T3 and N1-N5.
+
+Conditional shares (of logins, bursts or new devices) are left alone: with their rates zero, nothing
+they apply to happens. A rate added to `BaselineIdentityConfig` must be named here, or the control
+would quietly stop being a zero-activity control; `zero_rates` refuses a per-day or per-year rate
+it does not name."""
+
+_RATE_SUFFIXES: Final = ("_per_account_day", "_per_account_year", "_per_device_year")
+
+
+def zero_rates(block: BaselineIdentityConfig) -> BaselineIdentityConfig:
+    """`block` with every legitimate-baseline rate zero and every other setting unchanged."""
+    fields = set(BaselineIdentityConfig.model_fields)
+    unknown = sorted(ZERO_RATE_FIELDS - fields)
+    unnamed = sorted(
+        name for name in fields if name.endswith(_RATE_SUFFIXES) and name not in ZERO_RATE_FIELDS
+    )
+    if unknown or unnamed:
+        raise ValueError(
+            f"the zero-rate fields are stale: {unknown} do not exist, and the rates {unnamed} are "
+            f"not named"
+        )
+    return BaselineIdentityConfig.model_validate(
+        {**block.model_dump(), **dict.fromkeys(ZERO_RATE_FIELDS, 0.0)}
+    )
+
+
+def _candidate_block(config: GeneratorConfig) -> BaselineIdentityConfig:
+    block = config.baseline_identity
+    if block is None:
+        raise ValueError(
+            "a §14.2 or §14.3 control is taken from a candidate, which has the eval-v2 gate on"
+        )
+    if block.disabled_corrections:
+        raise ValueError(
+            f"a candidate disables no correction; this one disables "
+            f"{list(block.disabled_corrections)}"
+        )
+    return block
+
+
+def zero_rate_control(config: GeneratorConfig) -> GeneratorConfig:
+    """§14.2: the candidate with every legitimate-baseline rate zero; the seed and all else kept."""
+    return config.model_copy(update={"baseline_identity": zero_rates(_candidate_block(config))})
+
+
+def ablation_control(config: GeneratorConfig, correction: str) -> GeneratorConfig:
+    """§14.3: the candidate with `correction` alone disabled; the seed and all else kept, so a
+    failed check is attributable to that correction."""
+    if correction not in CORRECTIONS:
+        raise ValueError(f"unknown correction {correction!r}")
+    block = BaselineIdentityConfig.model_validate(
+        {**_candidate_block(config).model_dump(), "disabled_corrections": (correction,)}
+    )
+    return config.model_copy(update={"baseline_identity": block})

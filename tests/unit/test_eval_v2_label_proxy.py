@@ -40,6 +40,7 @@ from data.generator.label_proxy import (
     wilson_interval,
 )
 from data.generator.labels import TransactionLabel
+from data.generator.lpc5 import controls
 from data.generator.population import build_universe
 
 from trace_core.domain.enums import EvidenceKind, FraudPattern
@@ -591,52 +592,10 @@ def _stage1(**overrides: Any) -> GeneratorConfig:
     return GeneratorConfig(**base)
 
 
-ZERO_RATE_FIELDS = frozenset(
-    {
-        "login_rate_per_account_day",
-        "abandoned_burst_rate_per_account_day",
-        "password_change_rate_per_account_year",
-        "email_change_rate_per_account_year",
-        "phone_change_rate_per_account_year",
-        "address_change_rate_per_account_year",
-        "mfa_reset_rate_per_account_year",
-        "mfa_enrolled_rate_per_account_year",
-        "new_device_rate_per_account_year",
-        "attribute_change_rate_per_device_year",
-        "fingerprint_change_rate_per_device_year",
-        "new_device_payment_share",
-        "secondary_device_account_share",
-        "secondary_device_transaction_share",
-        "decline_share_per_transaction",
-        "decline_retry_share_per_transaction",
-        "transaction_away_ip_share",
-        "fixed_price_merchant_share",
-        "fixed_price_purchase_share",
-        "household_account_share",
-        "travel_trips_per_account_year",
-        "micro_session_share_per_transaction",
-    }
-)
-"""Every identity, device, T1 and T3 rate, named. A rate added later must be
-added here too, or the control would quietly stop being a zero-activity control."""
-
-
 def _zero_rates() -> BaselineIdentityConfig:
-    """Every rate zero, every other setting at its default: the block, no activity."""
-    fields = set(BaselineIdentityConfig.model_fields)
-    assert fields >= ZERO_RATE_FIELDS
-    suffixed = {
-        name
-        for name in fields
-        if name.endswith(("_per_account_day", "_per_account_year", "_per_device_year"))
-    }
-    assert suffixed <= ZERO_RATE_FIELDS
-    return BaselineIdentityConfig.model_validate(
-        {
-            **_EVAL_V1_INSTANCES.model_dump(),
-            **dict.fromkeys(ZERO_RATE_FIELDS, 0.0),
-        }
-    )
+    """Every rate zero, every other setting at its default: the block, no activity
+    (`controls.zero_rates`, the transform `LPC-5` §14.2's control uses)."""
+    return controls.zero_rates(_EVAL_V1_INSTANCES)
 
 
 def _reports(config: GeneratorConfig) -> _Reports:
