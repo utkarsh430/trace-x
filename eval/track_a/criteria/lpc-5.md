@@ -1,6 +1,6 @@
 # `LPC-5` — the eval-v2 label-proxy acceptance criterion
 
-- **Status:** FROZEN, revision 1. Declared 2026-09-14, before any eval-v2 candidate dataset exists and
+- **Status:** FROZEN, revision 2 (§20). Declared 2026-09-14, before any eval-v2 candidate dataset exists and
   before any code implementing this revision.
 - **Freeze.** The commit that adds this file. Its sha256 is recorded in `docs/PROGRESS.md`. The
   acceptance command must refuse to run when this file's digest differs from the digest named in the
@@ -9,6 +9,8 @@
   - The Stage 1d audit (`eval/track_a/audits/label-proxy-audit-stage-1d.md`) and the lead's review of it
     on 2026-09-14: the INTRINSIC_BEHAVIOURAL_SIGNAL allowlist, fully mechanical rules, and U7.
   - Authorization decisions reach features as their own dated events: ADR-0049.
+  - Revision 2 (2026-09-14): the user's blocking corrections — the rare-scenario calendar rule, G2
+    disclosure, the `authorization_outcome` field name, and the frozen generator decisions G3–G7.
 - **What it replaces.** It replaces, as eval-v2's acceptance criterion, LPC-1 to LPC-4 of the eval-v2
   draft ADR.
   - Their rules are restated in §5, so this file is complete on its own.
@@ -192,7 +194,7 @@ end of the window, whatever its label.
 | `amount_last_digit` | R | `abs(amount_minor) mod 10` | `0`…`9` |
 | `amount_roundness` | R | the most specific value that holds | `x1000`, `x100`, `x10`, `other` |
 | `outcome_field` | R | payload `authorization_outcome` | released values |
-| `decision` | B | the `decision` of this row's OUT row | `APPROVED`, `DECLINED`, `none` |
+| `outcome_event` | B | the `authorization_outcome` of this row's OUT row | `APPROVED`, `DECLINED`, `none` |
 | `card` | B | `card_id` is the account's first card in `U` | `first`, `other` |
 | `user_agent` | B | payload | released values, `absent` |
 | `memo` | B | payload | `absent-or-empty`, `non-empty` |
@@ -209,7 +211,7 @@ end of the window, whatever its label.
 | `merchant_country_home` | B | equals the account's country | `home`, `other` |
 | `merchant_accounts_1h` | B | distinct accounts among TX rows at this merchant with `t' ∈ (t − 1 h, t]` | `1-4`, `5-19`, `20+` |
 | `merchant_amount_cv_24h` | B | over TX rows at this merchant, in this currency, with `t' ∈ (t − 24 h, t]`: population standard deviation ÷ mean of `amount_minor` | `n<2`, `<0.05`, `[0.05,0.2)`, `≥0.2` |
-| `merchant_high_amount_cv_24h` | B | `not-high` when this row's `amount_decile` is not `9`. Otherwise, over TX rows at this merchant, in this currency, with `t' ∈ (t − 24 h, t]` and `amount_decile` `9`: `n<5` when fewer than 5, else population standard deviation ÷ mean | `not-high`, `n<5`, `<0.05`, `[0.05,0.2)`, `≥0.2` |
+| `merchant_same_amount_accounts_24h` | B | distinct accounts, this row's included, with a TX row at this merchant, in this currency, with `t' ∈ (t − 24 h, t]` and `amount_minor` within ±2 % of this row's | `1`, `2-4`, `5+` |
 | `shared_merchant_link` | B | at least 2 other accounts that share a `device_id` or `ip_id` with this account (in any TX rows of the dataset) also have a TX row at this merchant within 7 days of `t`, on either side | `yes`, `no` |
 
 **Location.**
@@ -295,7 +297,7 @@ Plus the common R attributes, with `payload_keys@event_type`.
 
 | Attribute | Class | Definition | Values |
 |---|---|---|---|
-| `decision` | B | payload | released values |
+| `authorization_outcome` | B | payload | released values |
 | `hour`, `daypart`, `weekday` | B | as for TX | as for TX |
 | `decision_latency` | R | `t(OUT) − t(its TX row)`, ms | `<0`, `[0,40)`, `[40,100)`, `[100,250)`, `[250,500)`, `[500,1000)`, `≥1000` |
 | `tx_link` | R | exactly one TX row has this `transaction_id` | `one`, `not` |
@@ -403,8 +405,8 @@ Windows are `[t − W, t)`, and account attribution uses the payload `account_id
 | `TX_NON_HOME_DEVICE` | `device_id` is not a home device | 0.01 |
 | `TX_DEVICE_FIRST_USED_24H` | `device_id` is not a home device, and the account's earliest TX row on it (this one included) is at or after `t − 24 h` | 0.001 |
 | `TX_WHOLE_SECOND` | `t mod 1000 = 0` | 0.0005 |
-| `TX_DECLINED` | **its OUT row's `decision` is `DECLINED`** | 0.005 |
-| `TX_DECLINED_PRIOR_1H` | **the account has an OUT row with `decision = DECLINED`, `t' ∈ [t − 1 h, t)`, and another `transaction_id`** | 0.0005 |
+| `TX_DECLINED` | **its OUT row's `authorization_outcome` is `DECLINED`** | 0.005 |
+| `TX_DECLINED_PRIOR_1H` | **the account has an OUT row with `authorization_outcome = DECLINED`, `t' ∈ [t − 1 h, t)`, and another `transaction_id`** | 0.0005 |
 
 **Rules.** R1, R2 and R3 of §5.1 apply to each signal.
 
@@ -467,7 +469,7 @@ Model or rule performance is never an argument for an entry.
 
 | Key | Attributes and values it can admit |
 |---|---|
-| `DEVICE_SHARING` | `device_accounts` ∈ {`2`,`3-5`,`6+`}; ID `device_login_accounts` ∈ {`2`,`3-5`,`6+`}; `joint_link = yes`, only together with an `S` fragment that cites shared IPs |
+| `DEVICE_SHARING` | `device_accounts` ∈ {`2`,`3-5`,`6+`}; ID `device_login_accounts` ∈ {`2`,`3-5`,`6+`} |
 | `DEVICE_NOVELTY` | `device_home = not`; `device_age` ∈ {`first-use`/`first-reference`, `<1h`, `[1h,24h)`} |
 | `IP_REPUTATION` | `ip_datacenter = datacenter` |
 | `MCC_ANOMALY` | `mcc_habitual = unhabitual` |
@@ -557,7 +559,7 @@ A declaration test rejects an attribute that a row of `s` names and that is also
 | CT-6 | TX | `distinct_merchants_1h` | `2`, `3-4`, `5-9`, `10+` | rare: `5-9`; none: `10+` | documented | 0.60 | S "across many distinct merchants" | `merchant_habitual`, `merchant_popularity@merchant_habitual`, `merchant_accounts_1h` |
 | CT-7 | TX | `distinct_mcc_5m` | `2`, `3-4`, `5+` | rare: `3-4`; none: `5+` | documented | 0.40 | S "many distinct merchants and MCCs" + "inside a few minutes" | `merchant_mcc`, `mcc_habitual` |
 | CT-8 | TX | `amount_vs_account` | `<0.1`, `[0.1,0.5)` | — | documented | 0.60 | S "Many sub-threshold authorisations" | `amount_decile`, `amount_z` |
-| CT-9 | OUT | `decision` | `DECLINED` | — | — | 0.20 | S "a substantial share declined" | — |
+| CT-9 | OUT | `authorization_outcome` | `DECLINED` | — | — | 0.20 | S "a substantial share declined" | — |
 | CT-10 | TX | `prior_decisions_1h` | `1`, `2-4`, `5-9`, `10+` | rare: `5-9`; none: `10+` | documented | 0.60 | as CT-1 | — |
 | CT-11 | TX | `prior_declined_share_1h` | `0`, `(0,0.4)`, `≥0.4` | — | documented | 0.60 | S "a substantial share declined" | — |
 
@@ -604,10 +606,9 @@ above its own short-window baseline".
 
 | # | P | Attribute | V* | Exempt | Composition | E_min | Source | Consequences |
 |---|---|---|---|---|---|---|---|---|
-| MC-1 | TX | `merchant_high_amount_cv_24h` | `<0.05` | — | — | 0.30 | S "unusually uniform amounts" | `merchant_amount_cv_24h` |
+| MC-1 | TX | `merchant_same_amount_accounts_24h` | `5+` | — | — | 0.50 | S "unusually uniform amounts from many unrelated accounts" | `merchant_amount_cv_24h` |
 | MC-2 | TX | `amount_decile` | `8`, `9` | — | judged | 0.80 | S "high, unusually uniform amounts" | — |
-| MC-3 | TX | `amount_vs_account` | `[2,5)`, `[5,20)`, `≥20` | rare: `≥20` | documented | 0.80 | S "high, unusually uniform amounts from many unrelated accounts" `[review]` | `amount_z` |
-| MC-4 | TX | `merchant_habitual` | `unhabitual` | — | — | 0.80 | S "One merchant" + "from many unrelated accounts" `[review]` | `merchant_popularity@merchant_habitual` |
+| MC-4 | TX | `merchant_habitual` | `unhabitual` | — | — | 0.80 | S "One merchant" + "from many unrelated accounts" | `merchant_popularity@merchant_habitual` |
 | MC-5 | TX | `mcc_habitual` | `unhabitual` | — | — | 0.50 | K "`MCC_ANOMALY`" | `merchant_mcc` |
 
 **`CREDENTIAL_STUFFING` (§3.8).**
@@ -621,7 +622,6 @@ above its own short-window baseline".
 | CS-5 | TX | `ip_datacenter` | `datacenter` | — | — | 0.80 | K "`IP_REPUTATION`" | `ip_home`, `ip_accounts`, `ip_accounts_1h` |
 | CS-6 | TX | `ip_login_accounts_1h` | `2-4`, `5+` | rare: `5+` | documented | 0.50 | S "A burst of failed logins across many unrelated accounts" | — |
 | CS-7 | TX | `prior_events_24h` | `other-identity`, `failed-login` | — | judged | 0.60 | S "a minority succeeding and transacting immediately" | `failed_logins_1h` |
-| CS-8 | TX | `joint_link` | `yes` | — | — | 0.50 | S "from a small datacenter IP pool" + K "`DEVICE_SHARING`" | — |
 
 **`ANOMALOUS_HIGH_VALUE` (§3.9).**
 
@@ -657,6 +657,8 @@ These were in LPC-4's allowlist or were considered for this one.
 | `FRAUD_RING` merchant attributes (LPC-4, interp.) | Consequences of FR-3. |
 | `MERCHANT_COLLUSION` `merchant_popularity`, `merchant_mcc`, `merchant_country`, `merchant_country_home` (LPC-4) | Not cited. Popularity is a consequence of MC-4, `merchant_mcc` of MC-5, and the country attributes are ORDINARY. |
 | `ACCOUNT_TAKEOVER` DEV `event_type` | Legitimate device events are `FIRST_SEEN` as well, so no effect could be shown (§13 S7b). |
+| `MERCHANT_COLLUSION` `amount_vs_account` (MC-3 of revision 1) | Removed in revision 2: amounts stay account-conditioned, and the relationship structure carries the signal (G6). |
+| `CREDENTIAL_STUFFING` TX `joint_link` (CS-8 of revision 1) | Removed in revision 2: transacting accounts pay from their own devices (G4). |
 | Any entry sourced from `IDENTITY_CHANGE` for `CREDENTIAL_STUFFING` | The mechanism emits logins, which are not identity changes (§18, item 8). |
 
 ## 7. S1 — no undocumented exclusivity or enrichment
@@ -726,8 +728,14 @@ For every population, every R attribute and every group `g` (each scenario, and 
 2. **Instances.** An instance's start is the least `t` of its TX rows. `N_g` is the number of
    instances of group `g`, and `k_gj` is how many of them start in slice `j`.
 3. **Legitimate share.** `ℓ_j` is the share of LEGIT TX rows in slice `j`.
-4. **Rule.** For each group `g` (each scenario, and `POOLED`) and each slice with `ℓ_j ≥ 0.01`, take
+4. **Pooled rule.** For `POOLED` and each slice with `ℓ_j ≥ 0.01`, take
    `(lo, hi) = Wilson(k_gj, N_g, N_g)`. Fail if `hi < 0.25 × ℓ_j` or `lo > 4.0 × ℓ_j`.
+5. **Per-scenario rule (revision 2).** A scenario has too few instances for 20 slices, so it is judged
+   at a lower resolution, without intervals.
+   - Split `[start_at, end_at)` into 3 thirds of equal length; a start exactly on a boundary belongs to
+     the later third.
+   - For each scenario, fail if any third holds no instance start, or if any third holds more than
+     two thirds of the scenario's instance starts (`3 × k > 2 × N_g`).
 
 ## 10. S4 — no fixed-offset spikes
 
@@ -783,7 +791,53 @@ For every population, every R attribute and every group `g` (each scenario, and 
 | `CARD_TESTING` payoff (the one planned event after the probes) | ORDINARY-REGION: `amount ≥ 3 × typical` |
 | `CARD_TESTING` probes | `rng.randrange(1, 250)` |
 | `ANOMALOUS_HIGH_VALUE` | `int(exp(amount_mu) × rng.uniform(20.0, 60.0)) + 1`, which always exceeds 20 × `typical` |
-| `MERCHANT_COLLUSION` | one draw per instance, `band = rng′.randrange(15000, 60000)` with `rng′ = derive(seed, "scenario-amount", f"{instance_id}:band")`; each row `band + rng.randrange(-400, 400)` |
+| `MERCHANT_COLLUSION` | G6: one price per instance, `P = int(exp(rng′.uniform(8.3, 8.9)))` with `rng′ = derive(seed, "scenario-amount", f"{instance_id}:price")`; each row `int(P × rng.uniform(0.99, 1.01))` |
+
+**Frozen generator decisions (revision 2, user decisions of 2026-09-14).** Each is a generator rule
+with the check named.
+
+- **G3 — only `IMPOSSIBLE_TRAVEL` is impossible.**
+  - **Rule.** For `ACCOUNT_TAKEOVER` and `UNUSUAL_LOCATION_DEVICE`, episode placement rejects any
+    proposal under which a planted TX row implies more than 900 km/h to the account's previous TX row
+    or to its next TX row, when that row is within 24 h. Rows are legitimate or planted, of any channel.
+  - **Retry.** Rejected proposals redraw placement and M1 locations with the next attempt; M4's
+    10,000-proposal limit applies.
+  - **Check (exact).** Every TX row of those two scenarios satisfies the bound.
+- **G4 — no guaranteed device novelty.**
+  - **`CARD_TESTING`.** Every TX row of an instance uses one `device_id`: the draw the account's
+    legitimate payment-device mechanism (T1) makes for the instance's first planned transaction.
+  - **`CREDENTIAL_STUFFING`.**
+    - Its ID rows carry one shared `device_id` (the documented `DEVICE_SHARING`).
+    - Each transacting account's TX row uses that account's legitimate payment-device draw.
+    - It keeps the pool IP (`IP_REPUTATION`).
+  - **Check.** S7a (one device per card-testing instance), plus R7 on the now ORDINARY `device_home`
+    and `device_age`.
+- **G5 — randomised spacing where no burst is documented.** All draws use
+  `derive(seed, "scenario-time", f"{instance_id}:{ordinal}")`.
+  - **`ACCOUNT_TAKEOVER`.** TX times are drawn independently and uniformly in
+    `[t_change + 20 min, t_change + 6 h)`, then sorted. The `FIRST_SEEN` is drawn uniformly in
+    `(t_change, first TX)` (N7).
+  - **`FRAUD_RING`.** TX times are drawn independently and uniformly in `[start, start + span)`, with
+    `span = U(2 d, 7 d)`.
+  - **`DEVICE_FARM`.** TX times are drawn independently and uniformly in `[start, start + span)`, with
+    `span = U(1 h, 24 h)` (N8).
+  - **M4.** It then applies per transaction for `FRAUD_RING` and `DEVICE_FARM`, and per whole episode
+    for `ACCOUNT_TAKEOVER`.
+  - **Check.** S4 and R7.
+- **G6 — merchant collusion through structure.**
+  - **Amounts.** One price per instance (G1). Payers are drawn uniformly, rejecting any account with
+    `|ln P − amount_mu| > amount_sigma`, with at most 10,000 draws per payer.
+  - **Signal.** Each payment is ordinary for its payer. The signal is relational: many unrelated
+    accounts paying one merchant the same amount (MC-1, MC-4, MC-5).
+  - **Check.** S5a and S7a.
+- **G7 — causal keys are only what the mechanism creates.** Under the eval-v2 gate:
+  - `CREDENTIAL_STUFFING` declares `AUTHENTICATION_ANOMALY`, a new evidence kind for failed and
+    successful logins across accounts, together with `IP_REPUTATION` and `DEVICE_SHARING`.
+    `IDENTITY_CHANGE` is removed, and no identity change is emitted.
+  - `CARD_TESTING` declares `VELOCITY`, `AMOUNT_ANOMALY` and `MCC_ANOMALY`. `DEVICE_SHARING` is removed,
+    because G4 no longer creates device sharing.
+  - eval-v1's recorded keys are unchanged.
+  - **Check.** S7a.
 
 **S5a — mechanism check.** Recompute every planted TX row's amount by G1 and require equality.
 
@@ -811,6 +865,7 @@ For every population, every R attribute and every group `g` (each scenario, and 
    - Every TX amount is > 2.5 × `typical`.
    - Every TX row is > 100 km from home.
 2. **`CARD_TESTING`.** The probes are the TX rows with amount < 250.
+   - Every TX row uses one `device_id` (G4).
    - There are ≥ 9 probes.
    - They cover ≥ 5 distinct merchants.
    - The probe span is < 1,800,000 ms.
@@ -835,11 +890,15 @@ For every population, every R attribute and every group `g` (each scenario, and 
    - Exactly one merchant.
    - ≥ 10 accounts.
    - `(max − min) / max(1, mean)` of the amounts is < 0.2.
+   - Every row has `|ln amount_minor − amount_mu| ≤ amount_sigma + 0.011` (G6).
 8. **`CREDENTIAL_STUFFING`.**
    - ≥ 16 ID rows, covering ≥ 10 accounts.
    - ≤ 3 distinct `ip_id`.
    - More `LOGIN_FAILED` than `LOGIN_SUCCEEDED`.
    - Every ID row's IP is a datacenter IP.
+   - No Q4e ID row belongs to the instance.
+11a. **Causal keys under the gate** are exactly those G7 declares for `CREDENTIAL_STUFFING` and
+    `CARD_TESTING`, and every other scenario's keys are unchanged.
 9. **`ANOMALOUS_HIGH_VALUE`.**
    - Exactly 1 TX row.
    - Its amount is ≥ 20 × `typical`.
@@ -861,7 +920,7 @@ A row that names two populations is judged in each.
 1. **eval-v1 negative control.**
    - **Inputs.** eval-v1 is regenerated gate-off from its manifest and digest-verified. Its OUT rows are
      derived by ADR-0049 §7 (DM-1 with eval-v1's seed), with envelopes built by the eval-v2
-     decision-row builder.
+     outcome-row builder.
    - **Requirement.** It must fail every one of the following, each on the cell named.
      1. §5.1 R3 on `IDENTITY_CHANGE_24H` and on `DEVICE_FIRST_SEEN_24H`, each with a lower bound
         > 0.25.
@@ -897,7 +956,7 @@ A row that names two populations is judged in each.
    | N1 legitimate non-home IPs | §7 S1-U (a), TX `ip_home = not` |
    | N2 legitimate travel | §7 S1-U (a), TX `distance_home` ∈ {`[100,500)`, `≥500`}, `ACCOUNT_TAKEOVER` |
    | N3 legitimate micro-sessions | §7 S1-U (a), TX `gap_prev` ∈ {`<10s`, `[10s,60s)`}, `CARD_TESTING` or `VELOCITY_ATTACK` |
-   | N4 fixed-price merchants | §7 S1-U (a), TX `merchant_high_amount_cv_24h = <0.05`, `MERCHANT_COLLUSION` |
+   | N4 fixed-price merchants | §7 S1-U (a), TX `merchant_same_amount_accounts_24h = 5+`, `MERCHANT_COLLUSION` |
    | N5 household sharing | §7 S1-U (a), TX `joint_link = yes`, `FRAUD_RING` |
    | N6 whole-window placement | §9, `POOLED`, slice 20 |
    | N7 takeover change → `FIRST_SEEN` offset | §10, K2, `ACCOUNT_TAKEOVER` |
@@ -915,6 +974,12 @@ A row that names two populations is judged in each.
      - The extra instances are planned exactly as mix instances are, from
        `derive(seed, "coverage-floor", f"{pattern}:{n}")`.
      - The realised fraud rate is measured and recorded.
+   - **Disclosure (revision 2).**
+     - The acceptance record and the eval-v2 manifest list, per pattern, the instance count the
+       weighted mix produced and the number G2 added.
+     - When G2 added any instances, every report on the dataset states that its scenario mix is a
+       coverage floor, not natural prevalence.
+     - A missing disclosure fails this check.
 5. **Non-vacuity of the checks.** Fail if any of the following judged nothing:
    - S1-B, for any allowlist row;
    - S4, on K1, K2 or K7;
@@ -930,7 +995,8 @@ The acceptance record carries the following, each computed on the acceptance run
 - **Power per scenario and population:** instance counts, and the smallest planted share R7 could fail
   against a legitimate share of 0.05.
 - **R6:** the sensitivity window of §5.3, recomputed.
-- **Mix:** the realised fraud rate and scenario mix.
+- **Mix:** the realised fraud rate and scenario mix, with the natural and G2-added instance counts per
+  pattern.
 - **Draws:** G1 draw counts per scenario.
 
 ## 16. Implementation obligations (before any candidate)
@@ -956,7 +1022,10 @@ The acceptance record carries the following, each computed on the acceptance run
    - an offset spike with and without a legitimate counterpart;
    - G1 recomputation;
    - an S7b row where the legitimate share exceeds 0.5;
-   - G2 adding instances to a pattern below 20, in a configuration built for it.
+   - G2 adding instances to a pattern below 20, in a configuration built for it;
+   - the per-scenario thirds rule: a start on a third boundary belongs to the later third; an empty
+     third fails; exactly two thirds in one third passes, and one more start fails;
+   - G3's speed bound, at exactly 900 km/h (passes) and just above it (fails).
 4. **Controls.** §14 runs at the acceptance scale in Stage 2. Runs at fast-lane scale in CI are
    diagnostic smoke tests only.
 5. **Isolation.** No module under `packages/`, `services/` or `mcp_servers/` imports the criterion
@@ -972,9 +1041,12 @@ The acceptance record carries the following, each computed on the acceptance run
   few accounts.
 - **S2's 0.01.** Representation is identical by construction, so any difference shown on conservative
   bounds is a defect. The tolerance only absorbs interval arithmetic.
-- **S3's 20 slices, 0.25 and 4.0.** A slice is about three days — the size of the gap LP-14 left. The
-  factors fail only on evidence of absence or of heavy concentration, so they tolerate genuine
-  clustering.
+- **S3's 20 slices, 0.25 and 4.0 (pooled).** A slice is about three days — the size of the gap LP-14
+  left. The factors fail only on evidence of absence or of heavy concentration, so they tolerate
+  genuine clustering.
+- **S3's thirds (per scenario).** At 20 instances, an interval over 20 slices is too weak to mean
+  anything. Thirds catch a scenario missing from a whole part of the window, or crowded into one. For
+  uniformly placed instances, a false failure at 20 instances is a fraction of a percent per scenario.
 - **S4's 3-bin window against a 60-bin background, and the 4.0 ratio.**
   - A point mass split across adjacent seconds by sub-second jitter is still a spike.
   - A documented range such as "inside a few minutes" is not.
@@ -1001,12 +1073,8 @@ The acceptance record carries the following, each computed on the acceptance run
 These come from reading the code, not from any run. Each is resolved, if confirmed, by an approved
 route. None is resolved by editing this criterion.
 
-1. **Remote attackers trip travel speed.** `ACCOUNT_TAKEOVER` and `UNUSUAL_LOCATION_DEVICE` transact
-   far from home soon after the customer's own activity. `leg_speed`, their consequence, will show
-   infeasible speeds that legitimate travel (N2) does not.
-   - This is real behaviour of a remote attacker, but it is not cited.
-   - **Route:** a user decision — a catalogue citation, or recording the failure. It is not nuisance
-     randomisation.
+1. **Remote attackers trip travel speed.** Resolved in revision 2 by G3: only `IMPOSSIBLE_TRAVEL`
+   guarantees an impossible speed.
 2. **Takeover change types.** `ACCOUNT_TAKEOVER` draws its change from three of the five Q4e types, so
    ATO-3's composition check will fail.
    - **Route:** nuisance randomisation — draw from the legitimate change-type mix (Q1 extension).
@@ -1020,33 +1088,30 @@ route. None is resolved by editing this criterion.
    `UNUSUAL_LOCATION_DEVICE` and `ACCOUNT_TAKEOVER` (N9, made exact here).
 6. **N10 is per business flow, not per causal chain.** An episode-scoped correlation id would encode
    scenario membership, so S2c rule 5 fails it.
-7. **MC-3 and MC-4** rest on an implication of their fragments `[review]`, for confirmation.
-8. **Catalogue inconsistency.** `CREDENTIAL_STUFFING` declares `IDENTITY_CHANGE` as a causal key, but
-   its mechanism emits only logins, which are not identity changes (Q4e).
-   - No entry uses the key.
-   - The catalogue inconsistency is reported for a decision.
-9. **Planted devices.** `CARD_TESTING` and `CREDENTIAL_STUFFING` pay from a device the account has never
-   used, and their catalogue entries do not cite that. Their TX `device_home` and `device_age` are
-   ORDINARY, so R7 will flag them.
-   - **Route:** a user decision — a catalogue citation, or recording the failure.
-10. **G2 changes the realised scenario mix** for the rarest patterns, for confirmation.
+7. **MC-3 and MC-4.** Resolved in revision 2 by G6: MC-3 is removed, and MC-4 stands as relational
+   structure.
+8. **`CREDENTIAL_STUFFING`'s `IDENTITY_CHANGE` key.** Resolved in revision 2 by G7. The catalogue and
+   the evidence vocabulary change together when the generator change lands.
+9. **Planted devices.** Resolved in revision 2 by G4 and G7.
+10. **G2 changes the realised scenario mix.** Kept in revision 2, with the disclosure of §14.4.
 11. **Exemptions are judgements.** Exempt values (§6.3) rest on judgements about real-world legitimate
     frequency, not on measurements.
 12. **Population sharing by chance.** `population.py` draws home devices and home IPs independently
     for each account, so unrelated legitimate accounts share them. Dataset-wide sharing attributes are
     therefore common among legitimate rows, and the `FRAUD_RING` link entries (FR-1 to FR-3) may show
     weaker effects than the mechanism intends. This is derived from the code, not measured.
-13. **Fixed-price look-alikes need ordinary traffic.** A colluding merchant also takes ordinary spending,
-    so `merchant_amount_cv_24h`, a consequence of MC-1, is high for it. N4's fixed-price merchants must
-    take ordinary traffic too, or S1-B will separate `MERCHANT_COLLUSION` through that attribute.
+13. **Fixed-price look-alikes need ordinary traffic and many customers.** A colluding merchant also
+    takes ordinary spending, so `merchant_amount_cv_24h`, a consequence of MC-1, is high for it. N4's
+    fixed-price merchants must take ordinary traffic too, and sell one price to at least five accounts
+    a day, or S1-U and S1-B will separate `MERCHANT_COLLUSION`.
 14. **Undocumented spacing of multi-transaction episodes.** Three scenarios place several transactions
     of one account close together, but their signatures document no burst:
     - `ACCOUNT_TAKEOVER`, 3–25 minutes apart;
     - `FRAUD_RING`, 20 minutes to 3 hours apart;
     - `DEVICE_FARM`, a repeat about a minute after the first.
 
-    Short-window counts are ORDINARY for them, so R7 will flag them.
-    - **Route:** nuisance timing (Q1 extension), or a catalogue citation.
+    Resolved in revision 2 by G5. The documented "within hours" of a takeover still puts several
+    transactions into one day, so the probe may show residual enrichment of `tx_count_24h`.
 
 ## 19. Known limits
 
@@ -1065,3 +1130,17 @@ route. None is resolved by editing this criterion.
 1. **2026-09-14, revision 1.** Initial freeze. No eval-v2 candidate exists. The latest diagnostic
    evidence is the Stage 1d gated probe (120,000 transactions, seed 42), and no threshold here was set
    from its numbers.
+2. **2026-09-14, revision 2.** The user's blocking corrections. Still no eval-v2 candidate and no new
+   run.
+   - **S3.** The per-scenario 20-slice interval rule is replaced by the thirds rule; the pooled rule is
+     unchanged.
+   - **G2.** Disclosure of the coverage floor.
+   - **Field name.** OUT's `decision` becomes `authorization_outcome` (ADR-0049), and TX's `decision`
+     becomes `outcome_event`.
+   - **Generator decisions** G3–G7, recorded with their checks.
+   - **Consequences for entries.**
+     - MC-1 re-expressed on `merchant_same_amount_accounts_24h`, with `E_min` 0.50.
+     - MC-3 and CS-8 removed; MC-4's review flag cleared.
+     - The `joint_link` causal-key mapping removed.
+     - The N4 ablation check follows MC-1.
+   - **Nothing else changed:** no other threshold, attribute or rule.

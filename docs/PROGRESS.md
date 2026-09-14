@@ -556,8 +556,19 @@ both reports.
       kept.
     - To be recorded as a decision that updates ADR-0030 (Stage 2 step 5).
   * **U7 decided.** See UNRESOLVED DECISIONS; designed in ADR-0049 (Proposed), not implemented.
-  * **`LPC-5` amended and frozen** as `eval/track_a/criteria/lpc-5.md`, revision 1, sha256
-    `ae6c334df1c0a22d26d2d09701f4319eab4d9aca6bf2ebb3ca6a4926b50b6fbb`.
+  * **`LPC-5` amended and frozen** as `eval/track_a/criteria/lpc-5.md`. Revision 1 was committed
+    first; **revision 2**, the current freeze, has sha256 `49f401d1a469bd9874157a72915e33f88f9dfdaa88ecfaea2c5e0e35a8dc2b06`.
+    - **Revision 2 applies the user's blocking corrections** of the same day:
+      - a thirds rule for per-scenario calendar coverage, with the pooled 20-slice rule unchanged;
+      - disclosure whenever the G2 coverage floor changes the natural scenario mix;
+      - the outcome field renamed `authorization_outcome`.
+    - **Generator decisions frozen with checks:**
+      - G3: only `IMPOSSIBLE_TRAVEL` implies an impossible speed.
+      - G4: no guaranteed device novelty for card testing or credential stuffing.
+      - G5: randomised spacing for takeover, fraud ring and device farm.
+      - G6: merchant-collusion amounts are account-conditioned; the signal is relational.
+      - G7: credential stuffing gains `AUTHENTICATION_ANOMALY` and loses `IDENTITY_CHANGE`; card testing
+        loses `DEVICE_SHARING`, because its mechanism no longer creates sharing.
     - **Fully mechanical.** An INTRINSIC_BEHAVIOURAL_SIGNAL allowlist of 57 cited entries, each with a
       value set, exemption, composition rule, minimum effect and consequences; the S0–S8 checks; a
       declared amount mechanism (G1) and coverage floor (G2); and eval-v1, zero-rate and per-correction
@@ -565,7 +576,7 @@ both reports.
     - **Revisions.** A threshold changes only by a numbered revision, with a fresh candidate generated
       after it.
     - **Predicted conflicts.** §18 lists 14, read from the code rather than from any run, for the
-      diagnostic probe to confirm or refute. Several need user decisions (NEXT EXECUTABLE TASKS).
+      diagnostic probe to confirm or refute. Those needing user decisions were resolved by revision 2.
 
 ## CURRENTLY FAILING TESTS
 
@@ -617,7 +628,7 @@ both reports.
 | U4 | Whether the Skeptic agent pays for its cost | Phase 9 Arm F — `UNUSUAL_LOCATION_DEVICE` was built deliberately ambiguous to give this ablation something real to measure |
 | U5 | LightGBM vs XGBoost on measured PR-AUC | Phase 4 |
 | U6 | Whether Phase 13 (Go gateway) is worth doing | Phase 13 entry |
-| **U7** | **Decided 2026-09-14: authorization decisions are their own dated events.** A transaction's own outcome is post-decision and never enters its own features. Decisions arrive as `tx.authorization.v1` events after the score. `declined_ratio_1h` reads only decisions made before `as_of` and recorded before the read, never the scored transaction's own (`CurrentObservation.PRIOR_KNOWN`, feature set 3.0.0). Historical sources replay the transaction first and the decision after it, through the declared delay model DM-1. Designed in ADR-0049 (Proposed). **Not implemented:** until Stage 2 step 7, earlier outcomes still come from scoring requests | Decided; implementation in Stage 2 step 7 |
+| **U7** | **Decided 2026-09-14: authorization decisions are their own dated events.** A transaction's own outcome is post-decision and never enters its own features. Outcomes arrive as `tx.authorization.v1` events (field `authorization_outcome`). PostgreSQL records them first and decides duplicates and conflicts; the Redis store holds derived state only. An outcome is pending until its transaction is known with the same account, and pending outcomes never count. `declined_ratio_1h` reads only verified outcomes decided before `as_of` and known before the read, never the scored transaction's own (`CurrentObservation.PRIOR_KNOWN`, feature set 3.0.0). Historical sources replay the transaction first and the decision after it, through the declared delay model DM-1. Designed in ADR-0049 (Proposed). **Not implemented:** until Stage 2 step 7, earlier outcomes still come from scoring requests | Decided; implementation in Stage 2 step 7 |
 | **U9** | **Decided 2026-09-14: snake_case** for every data-platform identifier -- schema and table identifiers and the lake directories derived from them, streaming query and checkpoint names, Delta transaction app ids, Databricks job and task identifiers, and metric and manifest identifiers for the same logical name. CLAUDE.md §6 amended narrowly; no mapping layer; a consistency test pins it (ADR-0048) | Decided |
 | **U10** | **Decided 2026-09-14: R010 stays at `device_distinct_accounts_24h >= 5`.** The `eval-v1` replay delta -- 9 more legitimate and 3 more fraud high-risk decisions, all attributed to self-inclusion -- is expected semantic drift, not a regression. Not retuned on `eval-v1`, whose device-related label proxies would fit the ruleset to a flawed dataset. A threshold study follows on `eval-v2` (NEXT EXECUTABLE TASKS); any change is a separate, versioned ruleset decision | Decided |
 
@@ -627,18 +638,11 @@ both reports.
 
 Phase 3, in the wave order of `docs/PHASE3_PLAN.md` §5:
 
-1. **User decisions still open.**
-   - Acceptance of ADR-0046 to ADR-0049, with ADR-0048's proposed plan corrections.
-   - The `LPC-5` §18 items that need a user decision:
-     - remote-attacker travel speed (item 1);
-     - MC-3 and MC-4 (item 7);
-     - `CREDENTIAL_STUFFING`'s `IDENTITY_CHANGE` key (item 8);
-     - planted devices (item 9);
-     - the G2 coverage floor (item 10);
-     - multi-transaction spacing (item 14).
+1. **User decisions still open:** acceptance of ADR-0046 to ADR-0049, with ADR-0048's proposed plan
+   corrections.
 2. **Step E Stage 2, in the approved order.**
-   1. Done: amend and freeze `LPC-5`.
-   2. Next: `LPC-5` unit and self-tests.
+   1. Done: amend and freeze `LPC-5` (revision 2).
+   2. Next: integrate the Step E worktree onto this branch, then `LPC-5` unit and self-tests.
    3. Show that eval-v1 fails the intended checks.
    4. Complete and test LPC-4.
    5. Record the Q1 extension.
