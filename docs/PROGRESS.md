@@ -531,6 +531,36 @@ both reports.
     Spark session log the lake root to stdout, ahead of the refusal line a toolchain test reads. The
     session factory now resolves the root quietly, and `tests/stream/test_session.py`, rerun after the
     fix, 9 passed, 1 warning. `tests/stream/test_delta_capabilities.py` passed in full.
+* **Step 4 — durable observation log (lead): in progress** (ADR-0051, Proposed; `P3.observation-log`
+  IN_PROGRESS). Started 2026-09-14, once the eval-v2 sub-track closed.
+  * **Slice 1, fenced producer sessions: implemented.**
+    * **Migration 0006, `app.producer_sessions`.** A trigger stamps `started_at`, `heartbeat_at`
+      and `closed_at` from PostgreSQL `now()`, whatever a client sends. It refuses any change to
+      a session's identity, recording `last_seq` without closing, and any change after close.
+    * **Grants.** `trace_app` has column-scoped INSERT and UPDATE only, and no DELETE or TRUNCATE.
+    * **`PostgresSessionLedger` and `PostgresWriterLock`** run on one dedicated autocommit
+      connection. The advisory lock ends with that connection.
+    * **`trace_core.observation.session.WriterSession`:**
+      * start is fenced; without the lock the process is not ready and opens nothing;
+      * sequence numbers are contiguous, including under concurrency;
+      * any heartbeat that cannot confirm both the lock and the open row loses the session at once;
+      * close happens only on a confirmed flush, and an unconfirmed one leaves the session unclosed.
+    * **Evidence.**
+      * `tests/unit/test_observation_writer_session.py` covers every transition with fakes.
+      * `tests/integration/test_producer_sessions.py`, against the local migrated PostgreSQL, covers:
+        * the lifecycle on the database clock;
+        * that a client cannot supply a time;
+        * that `trace_app` cannot rewrite, reopen or delete a session;
+        * that the lock fences a second writer until its connection ends;
+        * that a second `WriterSession` is not ready while the first holds the fence.
+      * Like the other service-backed integration tests, this suite skips loudly in CI (D14).
+  * **Not yet built:**
+    * gateway wiring and readiness;
+    * sequencing and session headers on produce;
+    * the `tx.scored.v1` contract;
+    * the outbox relay, whose process ADR-0051 leaves to the A/B;
+    * the chaos tests;
+    * the controlled hot-path A/B.
 * **Step E — `eval-v2`.** Stages 1, 1b and 1c are complete. Their code is integrated onto this branch.
   * **Integration.** The worktree branch `worktree-agent-aae9faa608636c9c8` was fast-forwarded to the
     phase branch, and the Step E work was committed on top. The phase branch fast-forwards to it.

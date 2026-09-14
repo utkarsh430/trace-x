@@ -62,6 +62,7 @@ been thought through.
 | [0048](0048-delta-capabilities-and-lake-conventions.md) | What Delta 4.0.1 actually does, and the lake conventions built on it | 3 | Proposed |
 | [0049](0049-authorization-outcome-events.md) | Authorization outcomes are their own dated events; `declined_ratio_1h` reads only verified outcomes known before the score | 3 | Proposed |
 | [0050](0050-scenario-identity-and-nuisance-parameters.md) | A scenario's identity is its mechanism, relationships, signature and tests; everything else is a nuisance parameter (refines ADR-0030 for eval-v2) | 3 | Proposed |
+| [0051](0051-gateway-observation-log.md) | The gateway's durable observation log: fenced producer sessions, contiguous sequences and detectable gaps | 3 | Proposed |
 
 ## Notes on status
 

@@ -301,12 +301,13 @@
       "id": "P3.observation-log",
       "phase": "3",
       "name": "Gateway observation log: every crash, shed and outage loss is a detectable gap",
-      "status": "NOT_STARTED",
+      "status": "IN_PROGRESS",
       "evidence": {
         "command": "pytest -m chaos tests/chaos/test_observation_log.py",
         "verified_at": null,
         "result": null
-      }
+      },
+      "notes": "Phase 3 Step 4 (ADR-0051, Proposed). Slice 1 (2026-09-14): migration 0006 app.producer_sessions (database-clock timestamps, immutable identity, close-once, column-scoped trace_app grants), PostgresSessionLedger, PostgresWriterLock (a session-scoped advisory lock that ends with its connection) and trace_core.observation.session.WriterSession (fenced start, contiguous sequences, loss on any unconfirmed heartbeat, close only on a confirmed flush), with unit tests and integration tests against PostgreSQL. Not yet built: gateway wiring and readiness, session headers and sequencing on produce, tx.scored.v1, the outbox relay, the chaos tests in tests/chaos/test_observation_log.py, and the hot-path A/B. No PASS before the chaos evidence exists."
     },
     {
       "id": "P3.semantics-hardening",
