@@ -300,7 +300,7 @@ recorded outcome, never a hang.
 |---|---|---|---|---|
 | Orchestrator | — (routes only) | **none — cannot retrieve** | 30 steps, 120 s | FAIL |
 | Behavioral | `SPEND_PROFILE`, `VELOCITY`, `AMOUNT_ANOMALY`, `ACCOUNT_TENURE` | in-process feature reads | 6 calls, 20 s | DEGRADE |
-| Device & Identity | `DEVICE_NOVELTY`, `DEVICE_SHARING`, `IP_REPUTATION`, `IDENTITY_CHANGE` | `identity-mcp` | 6, 20 s | DEGRADE |
+| Device & Identity | `DEVICE_NOVELTY`, `DEVICE_SHARING`, `IP_REPUTATION`, `IDENTITY_CHANGE`, `AUTHENTICATION_ANOMALY` | `identity-mcp` | 6, 20 s | DEGRADE |
 | Merchant Intelligence | `MERCHANT_RISK`, `MCC_ANOMALY`, `MERCHANT_PATTERN` | `fraud-intelligence-mcp` | 5, 20 s | DEGRADE |
 | Graph Investigation | `GRAPH_CLUSTER`, `RING_SCORE`, `LINK_PATH` | `graph-mcp` | 5, 30 s | DEGRADE |
 | Historical Case | `HISTORICAL_MATCH`, `PRIOR_OUTCOME` | `fraud-intelligence-mcp` | 4, 20 s | DEGRADE |

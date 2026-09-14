@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from data.generator import planted
 from data.generator.baseline import (
     DAYS_PER_YEAR,
     STREAM_ABANDONED,
@@ -64,9 +65,17 @@ from data.generator.engine import (
     scenario_device_references,
     tie_order_key,
 )
+from data.generator.lpc5 import rules as lpc5_rules
+from data.generator.lpc5.frame import build_frame
+from data.generator.lpc5.frame import knowledge as lpc5_knowledge
 from data.generator.population import Universe, build_universe
 from data.generator.rng import derive
-from data.generator.scenarios import ImpossibleTravel, PlannedEvent
+from data.generator.scenarios import (
+    SCENARIOS_BY_PATTERN,
+    ImpossibleTravel,
+    PlannedEvent,
+    ScenarioInstance,
+)
 
 from trace_core.domain.enums import FraudPattern
 from trace_core.domain.geo import GeoPoint, implied_speed_kmh
@@ -499,9 +508,10 @@ def test_planted_locations_are_drawn_around_their_anchor_never_copied(
 def test_planted_entry_modes_are_drawn_from_the_channels_legitimate_modes(
     gate_off: list[GeneratedRow], gate_on: list[GeneratedRow], universe: Universe
 ) -> None:
-    """M3. eval-v1 forces ECOMMERCE (card-not-present) and CHIP (card-present) on
-    planted transactions. The gate draws from the planted channel's legitimate modes
-    and never changes the planted channel."""
+    """M3 and M6. eval-v1 forces ECOMMERCE (card-not-present) and CHIP (card-present) on
+    planted transactions. Under the gate only impossible travel keeps a planted channel (M6),
+    and its entry mode is drawn from that channel's legitimate modes (M3). Every other planted
+    transaction draws channel and entry mode the legitimate way."""
     from data.generator.engine import _CHANNEL_ENTRY
 
     def planted_modes(rows: list[GeneratedRow]) -> list[tuple[GeneratedRow, PlannedEvent]]:
@@ -518,12 +528,17 @@ def test_planted_entry_modes_are_drawn_from_the_channels_legitimate_modes(
     assert {r.event["payload"]["entry_mode"] for r, _ in off} <= {"ECOMMERCE", "CHIP"}
 
     on = planted_modes(gate_on)
-    assert len(on) == len(off)
+    assert on
     for row, planned in on:
         payload = row.event["payload"]
-        assert payload["channel"] == planned.overrides["channel"]
+        assert _instance(row).pattern is FraudPattern.IMPOSSIBLE_TRAVEL
+        assert payload["channel"] == planned.overrides["channel"] == "CARD_PRESENT"
         assert payload["entry_mode"] in _CHANNEL_ENTRY[payload["channel"]]
-    cnp = [r for r, _ in on if r.event["payload"]["channel"] == "CARD_NOT_PRESENT"]
+    cnp = [
+        r
+        for r in gate_on
+        if _is_fraud_tx(r) and r.event["payload"]["channel"] == "CARD_NOT_PRESENT"
+    ]
     assert len(cnp) >= 30
     modes = collections.Counter(r.event["payload"]["entry_mode"] for r in cnp)
     assert set(modes) == {"ECOMMERCE", "TOKEN", "MANUAL"}
@@ -1296,8 +1311,8 @@ def test_every_declared_ablation_names_a_generator_correction() -> None:
     assert set(CORRECTIONS) == set(declaration.ABLATIONS)
 
 
-def _ablated(*disabled: str) -> list[GeneratedRow]:
-    config = GeneratorConfig(
+def _ablation_config(*disabled: str) -> GeneratorConfig:
+    return GeneratorConfig(
         row_count=4_000,
         account_count=300,
         merchant_count=60,
@@ -1309,7 +1324,10 @@ def _ablated(*disabled: str) -> list[GeneratedRow]:
             coverage_floor_instances=1, disabled_corrections=disabled
         ),
     )
-    return list(generate_dataset(config))
+
+
+def _ablated(*disabled: str) -> list[GeneratedRow]:
+    return list(generate_dataset(_ablation_config(*disabled)))
 
 
 def _planned_event(row: GeneratedRow) -> PlannedEvent:
@@ -1391,3 +1409,234 @@ def test_ablating_n10_restores_the_borrowed_correlation_ids() -> None:
 def test_ablating_n11_restores_value_dependent_timestamp_strings() -> None:
     rows = _ablated("N11")
     assert not all(_MS_Z.fullmatch(r.event["envelope"]["occurred_at"]) for r in rows)
+
+
+# ============================================== 6b: the planted episodes =====
+
+
+def _planted_tx(rows: list[GeneratedRow], *patterns: FraudPattern) -> list[GeneratedRow]:
+    return [
+        r
+        for r in rows
+        if _is_fraud_tx(r)
+        and r.label is not None
+        and (not patterns or r.label.fraud_pattern in patterns)
+    ]
+
+
+def _by_instance(rows: list[GeneratedRow]) -> dict[str, list[GeneratedRow]]:
+    grouped: dict[str, list[GeneratedRow]] = collections.defaultdict(list)
+    for row in rows:
+        assert row.scenario_instance is not None
+        grouped[row.scenario_instance.instance_id].append(row)
+    return grouped
+
+
+def _ordinal(row: GeneratedRow) -> int:
+    assert row.planned_ordinal is not None
+    return row.planned_ordinal
+
+
+def _instance(row: GeneratedRow) -> ScenarioInstance:
+    assert row.scenario_instance is not None
+    return row.scenario_instance
+
+
+def test_g1_every_planted_amount_is_the_one_lpc5_recomputes(
+    gate_on: list[GeneratedRow], universe: Universe
+) -> None:
+    """Against the criterion's own implementation of G1, not the generator's."""
+    seed = _coherence_config().seed
+    profiles = {p.account_id: p for p in universe.profiles}
+    grouped = _by_instance(_planted_tx(gate_on))
+    assert len({_instance(rows[0]).pattern for rows in grouped.values()}) == len(FraudPattern)
+    for rows in grouped.values():
+        instance = _instance(rows[0])
+        payoff = max(map(_ordinal, rows)) if instance.pattern is FraudPattern.CARD_TESTING else None
+        for row in rows:
+            payload = row.event["payload"]
+            expected = lpc5_rules.g1_amount(
+                seed,
+                instance.instance_id,
+                _ordinal(row),
+                instance.pattern,
+                profiles[payload["account_id"]],
+                payoff=_ordinal(row) == payoff,
+            )
+            assert payload["amount_minor"] == expected, (instance.instance_id, _ordinal(row))
+
+
+def test_g4_card_testing_and_stuffing_pay_from_devices_the_account_knows(
+    gate_on: list[GeneratedRow], plan: tuple[Universe, BaselinePlan]
+) -> None:
+    universe, baseline = plan
+    index_of = {str(p.account_id): i for i, p in enumerate(universe.profiles)}
+
+    def known(account: str, device: str, at_ms: int) -> bool:
+        index = index_of[account]
+        if device in universe.profiles[index].home_devices:
+            return True
+        devices = baseline.payment_devices.get(index)
+        return devices is not None and (
+            device == devices.secondary
+            or any(tau < at_ms and enrolled == device for tau, enrolled in devices.enrolled)
+        )
+
+    testing = _by_instance(_planted_tx(gate_on, FraudPattern.CARD_TESTING))
+    stuffing = _planted_tx(gate_on, FraudPattern.CREDENTIAL_STUFFING)
+    assert testing and stuffing
+    for rows in testing.values():
+        assert len({r.event["payload"]["device_id"] for r in rows}) == 1
+    for row in [*(r for rows in testing.values() for r in rows), *stuffing]:
+        payload = row.event["payload"]
+        assert known(payload["account_id"], payload["device_id"], _millis(row)), payload
+    logins = [
+        r
+        for r in gate_on
+        if _is_scenario_side(r) and _instance(r).pattern is FraudPattern.CREDENTIAL_STUFFING
+    ]
+    for rows in _by_instance(logins).values():
+        assert len({r.event["payload"]["device_id"] for r in rows}) == 1
+
+
+def test_g6_collusion_payments_are_ordinary_for_their_payers(
+    gate_on: list[GeneratedRow], universe: Universe
+) -> None:
+    profiles = {p.account_id: p for p in universe.profiles}
+    grouped = _by_instance(_planted_tx(gate_on, FraudPattern.MERCHANT_COLLUSION))
+    assert grouped
+    for rows in grouped.values():
+        amounts = [r.event["payload"]["amount_minor"] for r in rows]
+        assert len({r.event["payload"]["merchant_id"] for r in rows}) == 1
+        assert (max(amounts) - min(amounts)) / max(1.0, statistics.mean(amounts)) < 0.2
+        for row in rows:
+            payload = row.event["payload"]
+            profile = profiles[payload["account_id"]]
+            spread = abs(math.log(payload["amount_minor"]) - profile.amount_mu)
+            assert spread <= profile.amount_sigma + 0.011, payload
+
+
+def test_g7_gated_keys_are_only_what_the_mechanism_creates(gate_on: list[GeneratedRow]) -> None:
+    seen: set[FraudPattern] = set()
+    for row in _planted_tx(gate_on):
+        assert row.label is not None and row.label.fraud_pattern is not None
+        pattern = row.label.fraud_pattern
+        expected = planted.EVAL_V2_CAUSAL_KEYS.get(
+            pattern, SCENARIOS_BY_PATTERN[pattern].causal_evidence_keys()
+        )
+        assert row.label.causal_evidence_keys == expected, pattern
+        seen.add(pattern)
+    assert set(planted.EVAL_V2_CAUSAL_KEYS) <= seen
+    stuffing_side = {
+        _event_type(r)
+        for r in gate_on
+        if _is_scenario_side(r) and _instance(r).pattern is FraudPattern.CREDENTIAL_STUFFING
+    }
+    assert stuffing_side <= {"LOGIN_FAILED", "LOGIN_SUCCEEDED"}
+
+
+def test_m5_planted_merchants_follow_their_documented_choice(
+    gate_on: list[GeneratedRow], universe: Universe
+) -> None:
+    profiles = {p.account_id: p for p in universe.profiles}
+    mcc = {str(m.merchant_id): m.mcc for m in universe.merchants}
+    checked: collections.Counter[FraudPattern] = collections.Counter()
+    for row in _planted_tx(
+        gate_on, FraudPattern.ACCOUNT_TAKEOVER, FraudPattern.ANOMALOUS_HIGH_VALUE
+    ):
+        payload = row.event["payload"]
+        profile = profiles[payload["account_id"]]
+        assert payload["merchant_id"] not in profile.habitual_merchants
+        pattern = _instance(row).pattern
+        if pattern is FraudPattern.ANOMALOUS_HIGH_VALUE:
+            assert payload["merchant_mcc"] not in {mcc[m] for m in profile.habitual_merchants}
+        checked[pattern] += 1
+    assert len(checked) == 2
+    for rows in _by_instance(_planted_tx(gate_on, FraudPattern.CARD_TESTING)).values():
+        payoff = max(map(_ordinal, rows))
+        probes = [r.event["payload"]["merchant_id"] for r in rows if _ordinal(r) != payoff]
+        assert len(set(probes)) == len(probes)
+
+
+def test_m6_only_impossible_travel_keeps_a_planted_channel(gate_on: list[GeneratedRow]) -> None:
+    rows = [r for r in gate_on if r.topic == TX and r.scenario_instance is not None]
+    assert rows
+    for row in rows:
+        overrides = _planned_event(row).overrides
+        if _instance(row).pattern is FraudPattern.IMPOSSIBLE_TRAVEL:
+            assert overrides["channel"] == "CARD_PRESENT" == row.event["payload"]["channel"]
+        else:
+            assert "channel" not in overrides and "entry_mode" not in overrides
+
+
+def test_lpc5_s7a_scenario_invariants_hold_on_the_gated_generator(
+    gate_on: list[GeneratedRow], universe: Universe
+) -> None:
+    frame = build_frame(gate_on, seed=universe.config.seed)
+    result = lpc5_rules.s7_instances(frame, lpc5_knowledge(universe))
+    assert result.judged > 0
+    assert not result.findings, [f"{f.check}: {f.detail}" for f in result.findings]
+
+
+def _eval_v1_plan(config: GeneratorConfig) -> dict[str, ScenarioInstance]:
+    off = config.model_copy(update={"baseline_identity": None})
+    return {i.instance_id: i for i in plan_fraud(off, build_universe(off))[0]}
+
+
+@pytest.mark.parametrize(
+    ("correction", "fields"),
+    [
+        ("N9", ("amount_minor",)),
+        ("M5", ("merchant_id",)),
+        ("M6", ("channel",)),
+    ],
+)
+def test_ablating_n9_m5_or_m6_keeps_eval_v1_planned_fields(
+    correction: str, fields: tuple[str, ...]
+) -> None:
+    config = _ablation_config(correction)
+    universe = build_universe(config)
+    eval_v1 = _eval_v1_plan(config)
+    compared = 0
+    for row in generate_dataset(config, universe):
+        if not _is_fraud_tx(row):
+            continue
+        planned_event = eval_v1[_instance(row).instance_id].events[_ordinal(row)]
+        payload = row.event["payload"]
+        if correction == "N9":
+            assert (
+                payload["account_id"] == universe.profiles[planned_event.account_index].account_id
+            )
+        for field in fields:
+            if field in planned_event.overrides:
+                assert payload[field] == planned_event.overrides[field], (correction, field)
+                compared += 1
+    assert compared > 0
+
+
+def test_takeover_changes_follow_the_legitimate_change_type_mix() -> None:
+    """`LPC-5` §18 item 2: eval-v1 drew three of the five Q4e types; the gate draws all five,
+    weighted as legitimate identity changes are."""
+    config = _coherence_config(baseline_identity=_EVAL_V1_INSTANCES)
+    universe = build_universe(config)
+    scenario = SCENARIOS_BY_PATTERN[FraudPattern.ACCOUNT_TAKEOVER]
+    changes: collections.Counter[str] = collections.Counter()
+    for n in range(400):
+        instance = scenario.inject(
+            derive(config.seed, "change-type-test", str(n)), universe, f"fi_{n:08d}", 0
+        )
+        revised = planted.revise(config, universe, instance)
+        changes.update(
+            e.identity_event_type
+            for e in revised.events
+            if e.topic == IDENTITY and e.identity_event_type is not None
+        )
+    assert set(changes) == set(planted.Q4E_TYPES)
+    assert config.baseline_identity is not None
+    weights = dict(
+        zip(planted.Q4E_TYPES, planted.change_type_weights(config.baseline_identity), strict=True)
+    )
+    total = sum(changes.values())
+    for change, weight in weights.items():
+        expected = total * weight / sum(weights.values())
+        _assert_within(changes[change], expected, math.sqrt(expected), change)

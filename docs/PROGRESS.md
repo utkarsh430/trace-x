@@ -720,14 +720,19 @@ Phase 3, in the wave order of `docs/PHASE3_PLAN.md` §5:
           (`BaselineIdentityConfig.disabled_corrections`), wired for T1–T3, M1–M3, N10 and N11.
         - Test fixtures that compare gate-on with gate-off set the floor to one, so both plan
           eval-v1's episodes. G2 has its own tests.
-      - **6b next:**
-        - G1 amounts (N9);
-        - G4 devices;
-        - G6 merchant collusion;
-        - G7 keys, with `AUTHENTICATION_ANOMALY`;
-        - M5 merchants, including `ANOMALOUS_HIGH_VALUE`'s documented new category;
+      - **6b done** (`data/generator/planted.py`, applied to every planned episode under the gate).
+        - G1 amounts (N9), checked against `LPC-5`'s own recompute.
+        - G4: card testing and credential stuffing pay from the account's own devices, resolved
+          after the legitimate device plan. The stuffing logins keep their one shared device.
+        - G6: one collusion price per instance, and payers for whom that price is ordinary.
+        - G7 keys, with the new `EvidenceKind.AUTHENTICATION_ANOMALY`. The catalogue lists
+          eval-v2 keys beside eval-v1's, and the ARCHITECTURE roster names the new kind.
+        - M5 merchants, including `ANOMALOUS_HIGH_VALUE`'s documented new category (§18 item 4).
         - M6 channels.
-      - **6c:** placement and timing: N6, M4, G5 (N7, N8), G3.
+        - Takeover change types drawn from the legitimate mix (§18 item 2).
+        - Ablation switches wired for N9, M5 and M6.
+        - `LPC-5` S7a holds on a small gated generation.
+      - **6c next:** placement and timing: N6, M4, G5 (N7, N8), G3.
       - **6d:** legitimate look-alikes N1–N5.
    7. U7/N12 (ADR-0049).
    8. Ablation controls.

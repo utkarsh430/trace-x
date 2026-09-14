@@ -24,8 +24,8 @@ from __future__ import annotations
 import datetime as dt
 import random
 from collections import Counter, defaultdict
-from collections.abc import Iterator, Sequence
-from dataclasses import dataclass
+from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass, replace
 from typing import Any, Final
 
 from data.generator.baseline import (
@@ -43,6 +43,7 @@ from data.generator.behavior import (
 from data.generator.config import PRODUCER, BaselineIdentityConfig, GeneratorConfig
 from data.generator.labels import TransactionLabel
 from data.generator.outcomes import iso_millis
+from data.generator.planted import LEGITIMATE_DEVICE_PATTERNS, revise
 from data.generator.population import Universe, build_universe
 from data.generator.rng import derive, substream_seed
 from data.generator.scenarios import ALL_SCENARIOS, PlannedEvent, ScenarioInstance, default_mix
@@ -485,6 +486,82 @@ def _legitimate_device(
     return None
 
 
+def _payment_device(
+    config: GeneratorConfig,
+    universe: Universe,
+    payment: Mapping[int, PaymentDevices],
+    account_index: int,
+    at_ms: int,
+    rng: random.Random,
+) -> str:
+    """The device an account's own payment at `at_ms` would use: T1's pick, else a home device."""
+    settings = config.baseline_identity
+    device = None
+    if settings is not None and settings.applies("T1"):
+        device = _legitimate_device(settings, payment.get(account_index), at_ms, rng)
+    if device is None:
+        home = universe.profiles[account_index].home_devices
+        device = home[rng.randrange(len(home))]
+    return device
+
+
+def _resolve_planted_devices(
+    config: GeneratorConfig,
+    universe: Universe,
+    planted: list[tuple[int, int, int, Any]],
+    payment: Mapping[int, PaymentDevices],
+) -> list[tuple[int, int, int, Any]]:
+    """G4: card-testing and credential-stuffing transactions pay from the account's own devices.
+
+    - **Card testing.** Every transaction of an instance uses the device the account's payment
+      mechanism picks for the instance's first transaction, from
+      `derive(seed, "scenario-device", instance_id)`.
+    - **Credential stuffing.** Each transaction uses the pick for itself, from
+      `derive(seed, "scenario-device", f"{instance_id}:{ordinal}")`. The logins keep their one
+      shared device.
+
+    Neither is guaranteed new to the account, because neither scenario documents device novelty.
+    Runs on final times, so a device enrolled at that moment is known exactly as T1 knows it."""
+    seed = config.seed
+    first: dict[str, tuple[int, int, int]] = {}
+    for occurred_ms, _tiebreak, _kind, (instance, planned, ordinal) in planted:
+        if planned.topic != "tx.raw.v1" or instance.pattern is not FraudPattern.CARD_TESTING:
+            continue
+        current = first.get(instance.instance_id)
+        if current is None or (occurred_ms, ordinal) < (current[0], current[1]):
+            first[instance.instance_id] = (occurred_ms, ordinal, planned.account_index)
+    testing = {
+        instance_id: _payment_device(
+            config,
+            universe,
+            payment,
+            account_index,
+            occurred_ms,
+            derive(seed, "scenario-device", instance_id),
+        )
+        for instance_id, (occurred_ms, _ordinal, account_index) in first.items()
+    }
+    resolved: list[tuple[int, int, int, Any]] = []
+    for entry in planted:
+        occurred_ms, tiebreak, kind, (instance, planned, ordinal) = entry
+        if planned.topic == "tx.raw.v1" and instance.pattern in LEGITIMATE_DEVICE_PATTERNS:
+            if instance.pattern is FraudPattern.CARD_TESTING:
+                device = testing[instance.instance_id]
+            else:
+                device = _payment_device(
+                    config,
+                    universe,
+                    payment,
+                    planned.account_index,
+                    occurred_ms,
+                    derive(seed, "scenario-device", f"{instance.instance_id}:{ordinal}"),
+                )
+            planned = replace(planned, overrides={**planned.overrides, "device_id": device})
+            entry = (occurred_ms, tiebreak, kind, (instance, planned, ordinal))
+        resolved.append(entry)
+    return resolved
+
+
 def _plan_eval_v2(
     config: GeneratorConfig,
     universe: Universe,
@@ -596,7 +673,8 @@ def _plan_eval_v2(
         )
     # M1-M3. Planted locations and entry modes are drawn the way legitimate ones
     # are, on the final times; every other planted field is kept.
-    plan.extend(_redraw_planted_transactions(config, universe, retimed))
+    resolved = _resolve_planted_devices(config, universe, retimed, payment)
+    plan.extend(_redraw_planted_transactions(config, universe, resolved))
 
     # Legitimate identity and device events. Tiebreaks start above every other.
     base = legit_count + len(instances) * 1000
@@ -886,6 +964,8 @@ def plan_fraud(config: GeneratorConfig, universe: Universe) -> tuple[list[Scenar
         total_tx += _cover_floor(
             config, universe, instances, config.baseline_identity.coverage_floor_instances
         )
+        # The gate's scenario decisions (`data.generator.planted`); no transaction count moves.
+        instances[:] = [revise(config, universe, instance) for instance in instances]
     return instances, total_tx
 
 
