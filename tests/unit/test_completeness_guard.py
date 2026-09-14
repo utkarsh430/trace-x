@@ -141,6 +141,51 @@ def test_a_ledger_that_cannot_be_read_at_start_cannot_vouch_for_no_hole() -> Non
     assert guard.pending
 
 
+def test_an_unreadable_start_later_read_empty_withdraws_nothing() -> None:
+    """The ledger answers late -- a database slower to start than the gateway. An empty ledger
+    then vouches exactly as it would have at start-up, so nothing is withdrawn: withdrawing anyway
+    cost every such restart a day of `history_incomplete` for nothing lost."""
+    store, ledger = _Store(), _Ledger()
+    ledger.readable = False
+    guard = _guard(store, ledger)
+    guard.resume()
+    assert guard.pending
+    assert not guard.reconcile(), "an unreadable ledger still cannot vouch"
+    ledger.readable = True
+    assert guard.reconcile()
+    assert not guard.pending
+    assert store.withdrawals == []
+
+
+def test_an_unreadable_start_later_showing_a_hole_withdraws_it() -> None:
+    store, ledger = _Store(), _Ledger()
+    ledger.record_hole(reason=HoleReason.UNREACHABLE, instance_id="gw-0")
+    ledger.readable = False
+    guard = _guard(store, ledger)
+    guard.resume()
+    ledger.readable = True
+    assert guard.reconcile()
+    assert len(store.withdrawals) == 1
+    assert ledger.open_holes() == 0
+    assert len(ledger.rows) == 1, "an inherited hole is not recorded a second time"
+
+
+def test_an_unreadable_start_with_a_loss_of_its_own_withdraws_whatever_the_ledger_says() -> None:
+    """This process lost an observation while it could not write the ledger either, so an empty
+    ledger proves nothing about that loss."""
+    store, ledger = _Store(), _Ledger()
+    ledger.readable = False
+    ledger.writable = False
+    guard = _guard(store, ledger)
+    guard.resume()
+    guard.observation_unrecorded(HoleReason.UNREACHABLE)
+    ledger.readable = True
+    ledger.writable = True
+    assert ledger.open_holes() == 0
+    assert guard.reconcile()
+    assert len(store.withdrawals) == 1
+
+
 def test_a_hole_the_ledger_refused_is_recorded_on_the_next_lost_observation() -> None:
     store, ledger = _Store(), _Ledger()
     guard = _guard(store, ledger)

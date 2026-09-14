@@ -227,8 +227,11 @@ sufficient; the literals are the oracle.
     that instance stops first, its peers keep claiming completeness until one of them restarts. One
     gateway runs locally; closing this for several instances belongs with plan §4.1's writer fencing
     (Step 4).
-  - A ledger that is configured but unreadable counts as holding one. A crash after a failed ledger
-    write forgets the hole; plan §4.1's writer fencing, in Step 4, closes that window.
+  - A ledger that is configured but unreadable counts as holding one until it can be read. Read
+    later and empty, it vouches as it would have at start-up, and nothing is withdrawn -- unless this
+    process lost an observation in the meantime. The gateway opens its database pool before the
+    guard first reads the ledger. A crash after a failed ledger write forgets the hole; plan §4.1's
+    writer fencing, in Step 4, closes that window.
   - The conditions for wiring it, as met in Step 1b:
     - withdrawing keeps the later of the store's existing epoch and `resume_at`, in one
       compare-and-set script;

@@ -387,7 +387,7 @@ both reports.
     implements both evaluation modes and passes the hand-derived literal fixtures; 58 mutants and the
     mode-agreement properties keep the fixtures honest. The durable hole ledger (migration 0004) and
     the run guard landed with it.
-  * **Step 1b is implemented and verified locally; not yet committed at the time of writing.**
+  * **Step 1b is committed** (`129a590`), with a start-up fix on top.
     * **The Redis store conforms.** One Lua script records the scored transaction and reads its
       context atomically, and Redis refuses it whole when full. All 66 literal fixtures pass as
       served, so the 34 strict expected failures are gone. Account history is kept raw for 25 hours
@@ -408,6 +408,13 @@ both reports.
     * **New tests:** seeded months-long histories against the reference, with reach assertions
       (folding, lifetime gaps, redeliveries, reads behind retention); eight concurrent writers
       replayed in receipt order; all-or-nothing refusal on a real `noeviction` Redis.
+    * **A start-up defect, found by the rebuilt gateway and fixed.** Start-up read the hole ledger
+      before opening the database pool, so every restart counted the unreadable ledger as a hole:
+      readiness said `withdrawn`, and the first request would have moved the epoch a day ahead with
+      nothing lost. The pool now opens first, and a ledger unreadable at start-up that later reads
+      empty withdraws nothing unless this process lost an observation meanwhile. The restart chaos
+      test had handed the app an already-open pool and could not see it; it now builds the pool
+      closed, as `build_state` does, and a new clean-restart test fails without the fix.
     * `SERVED_FEATURES_CONFORM` is true: all four of ADR-0046 §5's conditions hold.
   * **Not done yet:** the Phase 2 load gate, manual replay and rule re-validation on feature set
     2.0.0, against a rebuilt gateway image. Thresholds stay as declared; a legitimate-traffic
@@ -533,3 +540,8 @@ TRACE-X verify — 2026-09-14T03:47:56Z
 Run on the Step 1b tree before this entry was written. Outside `make verify`, on the same code with
 the local stack up and `.env` loaded: `pytest -m integration tests/integration` passed 155 with none
 skipped, and `tests/chaos/test_redis_down.py` with `tests/chaos/test_feature_store_holes.py` passed 9.
+After the start-up fix, `make verify` at 2026-09-14T03:54:36Z again reported VERIFY OK, 11 passed; the guard's
+unit tests and both restart chaos tests passed on that code.
+
+**Acceptance status: 20 PASS · 1 IN_PROGRESS · 45 NOT_STARTED · 0 FAIL · 0 BLOCKED** across 66 tracked
+capabilities. `tests/acceptance/status.json` is the authoritative machine-readable record.

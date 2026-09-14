@@ -93,6 +93,10 @@ class CompletenessGuard:
         self._pending = False
         self._recorded = False
         """Whether the pending episode is already in the ledger."""
+        self._unverified = False
+        """Pending only because the ledger could not be read at start-up: no hole is known."""
+        self._lost_here = False
+        """Whether this process itself lost an observation during the pending episode."""
 
     @property
     def pending(self) -> bool:
@@ -108,6 +112,7 @@ class CompletenessGuard:
         except Exception as exc:
             log.warning("feature_store_hole_ledger_unreadable", error=type(exc).__name__)
             self._pending = True
+            self._unverified = True
             return
         if open_holes:
             log.warning("feature_store_hole_inherited", open_holes=open_holes)
@@ -119,6 +124,7 @@ class CompletenessGuard:
         if not self._pending:
             log.warning("feature_store_hole_opened", reason=reason.value)
         self._pending = True
+        self._lost_here = True
         if self._recorded or self._ledger is None:
             return
         try:
@@ -138,6 +144,23 @@ class CompletenessGuard:
         """Withdraw a pending hole from the store. True once nothing is pending."""
         if not self._pending:
             return True
+        if self._unverified and not self._lost_here and self._ledger is not None:
+            # Pending only because the ledger was unreadable at start-up. Read now, it answers
+            # the question start-up could not: an empty ledger here vouches exactly as an empty
+            # ledger at start-up would have, so there is nothing to withdraw. Withdrawing anyway
+            # would cost every slow-database restart a day of `history_incomplete`.
+            try:
+                open_holes = self._ledger.open_holes()
+            except Exception as exc:
+                log.warning("feature_store_hole_ledger_unreadable", error=type(exc).__name__)
+                return False
+            self._unverified = False
+            if not open_holes:
+                self._pending = False
+                log.info("feature_store_hole_ledger_verified")
+                return True
+            log.warning("feature_store_hole_inherited", open_holes=open_holes)
+            self._recorded = True
         through: int | None = None
         if self._ledger is not None:
             try:
@@ -166,6 +189,8 @@ class CompletenessGuard:
                 return False
         self._pending = False
         self._recorded = False
+        self._unverified = False
+        self._lost_here = False
         log.info("feature_store_hole_withdrawn", resume_at=resume_at.isoformat())
         return True
 

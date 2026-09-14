@@ -318,6 +318,18 @@ def create_app(state: GatewayState | None = None) -> FastAPI:
         resolved = state or build_state()
         app.state.gateway = resolved
 
+        # Opened before anything reads the database, the completeness guard's hole ledger
+        # first: a pool that is still closed reads as an unreadable ledger, which cannot vouch
+        # for the absence of a hole (ADR-0046 §5).
+        if resolved.pool is not None:
+            try:
+                resolved.pool.open(wait=True, timeout=10)
+            except Exception as exc:
+                # Not fatal at start-up: Postgres may come up after the gateway,
+                # and readiness already reports the instance as not ready. A
+                # crash loop here would make a slow database into an outage.
+                log.warning("postgres_pool_not_ready", error=type(exc).__name__)
+
         # Establish the feature store's completeness epoch at start-up (NX, so
         # a store that has been running for a day is not re-dated by a gateway
         # restart). Until the store has warmed for the widest declared lookback
@@ -361,14 +373,6 @@ def create_app(state: GatewayState | None = None) -> FastAPI:
             SERVICE_NAME,
             {"features": _store_info(resolved.redis), "cache": _store_info(resolved.cache_redis)},
         )
-        if resolved.pool is not None:
-            try:
-                resolved.pool.open(wait=True, timeout=10)
-            except Exception as exc:
-                # Not fatal at start-up: Postgres may come up after the gateway,
-                # and readiness already reports the instance as not ready. A
-                # crash loop here would make a slow database into an outage.
-                log.warning("postgres_pool_not_ready", error=type(exc).__name__)
         yield
         if resolved.pool is not None:
             resolved.pool.close()

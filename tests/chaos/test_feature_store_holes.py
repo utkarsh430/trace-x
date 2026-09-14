@@ -107,8 +107,15 @@ def ledger_pool() -> Iterator[Any]:
         _truncate()
 
 
-def _gateway(redis_client: Any, pool: Any, instance_id: str) -> GatewayState:
-    """Wired as `build_state` wires it: one guard, shared by the pipeline and readiness."""
+def _gateway(redis_client: Any, instance_id: str) -> GatewayState:
+    """Wired as `build_state` wires it: one guard shared by the pipeline and readiness, and a
+    PostgreSQL pool created CLOSED, which the app's start-up opens. A harness that handed over an
+    open pool would not exercise the start-up order the gateway actually runs."""
+    from psycopg_pool import ConnectionPool
+
+    pool = ConnectionPool(
+        _dsn("TRACE_APP_DB_USER", "TRACE_APP_DB_PASSWORD"), min_size=1, max_size=2, open=False
+    )
     store = RedisOnlineFeatureStore(redis_client)
     breaker = CircuitBreaker("redis-features")
     guard = CompletenessGuard(store, PostgresHoleLedger(pool), instance_id=instance_id)
@@ -126,9 +133,42 @@ def _gateway(redis_client: Any, pool: Any, instance_id: str) -> GatewayState:
         ),
         metrics=HotPathMetrics(),
         redis=redis_client,
+        pool=pool,
         breaker=breaker,
         feature_store=store,
         completeness=guard,
+    )
+
+
+def _warm(store: RedisOnlineFeatureStore) -> Any:
+    """A store that has recorded for longer than any feature looks back."""
+    since = event_time(
+        dt.datetime.now(dt.UTC) - dt.timedelta(seconds=PLAN.widest_lookback_s + 3_600)
+    )
+    store.establish_epoch(at=since)
+    return since
+
+
+def test_a_clean_restart_does_not_withdraw_completeness(
+    feature_redis: Any, ledger_pool: Any
+) -> None:
+    """No hole in the ledger, and a gateway started the way `build_state` starts it. The warm
+    store's epoch must survive untouched: a start-up that read its ledger before the pool was open
+    once withdrew completeness on every restart -- a day of `history_incomplete` for nothing
+    lost, and a load gate that passes regardless, because a cold store reports it too."""
+    store = RedisOnlineFeatureStore(feature_redis)
+    warm_since = _warm(store)
+    assert PostgresHoleLedger(ledger_pool).open_holes() == 0
+
+    with TestClient(create_app(_gateway(feature_redis, "chaos-clean"))) as gateway:
+        history = gateway.get("/readyz").json()["checks"]["feature_history"]
+        assert "withdrawn" not in history, history
+        decision = _post(gateway)
+        assert decision.status_code == 200
+        assert decision.headers["X-Trace-Degraded"] == "false", decision.json()["degraded_reasons"]
+
+    assert feature_redis.get(store.epoch_key) == str(to_millis(warm_since)), (
+        "a restart with no hole moved the completeness epoch"
     )
 
 
@@ -136,13 +176,10 @@ def test_a_restarted_gateway_inherits_the_hole_an_outage_left(
     feature_redis: Any, ledger_pool: Any
 ) -> None:
     store = RedisOnlineFeatureStore(feature_redis)
-    warm_since = event_time(
-        dt.datetime.now(dt.UTC) - dt.timedelta(seconds=PLAN.widest_lookback_s + 3_600)
-    )
-    store.establish_epoch(at=warm_since)
+    warm_since = _warm(store)
     ledger = PostgresHoleLedger(ledger_pool)
 
-    with TestClient(create_app(_gateway(feature_redis, ledger_pool, "chaos-first"))) as first:
+    with TestClient(create_app(_gateway(feature_redis, "chaos-first"))) as first:
         warm = _post(first)
         assert warm.status_code == 200
         assert warm.headers["X-Trace-Degraded"] == "false", "fixture: the store should be warm"
@@ -161,7 +198,7 @@ def test_a_restarted_gateway_inherits_the_hole_an_outage_left(
     )
 
     restarted_ms = to_millis(dt.datetime.now(dt.UTC))
-    with TestClient(create_app(_gateway(feature_redis, ledger_pool, "chaos-second"))) as second:
+    with TestClient(create_app(_gateway(feature_redis, "chaos-second"))) as second:
         epoch_ms = int(feature_redis.get(store.epoch_key))
         assert epoch_ms >= restarted_ms + MAX_CLOCK_SKEW_FUTURE_S * 1000, (
             f"the restarted gateway served with the epoch at {epoch_ms}, not moved past the "

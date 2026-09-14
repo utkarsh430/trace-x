@@ -99,7 +99,8 @@ Phase 2 added three more:
   `FLUSHALL`s the feature store and asserts `history_incomplete`;
   `tests/chaos/test_feature_store_holes.py` pauses the feature store under one gateway, stops that
   gateway, and asserts the next one inherits the hole from PostgreSQL, moves the epoch past it and
-  serves `history_incomplete`; the conformance suite carries
+  serves `history_incomplete` -- and that a restart with no hole leaves a warm store's epoch
+  untouched, with the database pool opened by start-up exactly as `build_state` leaves it; the conformance suite carries
   `complete_since` explicitly, so "an unseen device is not known" is asserted on a store that has
   watched for its horizon and "cannot tell" on one that has not (ADR-0044).
 - **feature-semantics conformance** — `tests/conformance/feature_semantics_suite.py`, run unmodified
