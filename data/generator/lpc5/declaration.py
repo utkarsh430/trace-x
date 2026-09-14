@@ -25,7 +25,10 @@ from trace_core.domain.enums import FraudPattern
 CRITERION_ID: Final = "LPC-5"
 REVISION: Final = 2
 CRITERION_PATH: Final = "eval/track_a/criteria/lpc-5.md"
-CRITERION_SHA256: Final = "49f401d1a469bd9874157a72915e33f88f9dfdaa88ecfaea2c5e0e35a8dc2b06"
+# The frozen document's public sha256, not a credential.
+CRITERION_SHA256: Final = (
+    "49f401d1a469bd9874157a72915e33f88f9dfdaa88ecfaea2c5e0e35a8dc2b06"  # pragma: allowlist secret
+)
 
 # ------------------------------------------------------------------ §3 statistics --------------
 Z: Final = 1.645
@@ -80,9 +83,14 @@ TOPICS: Final[Mapping[Population, str]] = MappingProxyType(
         Population.TX: "tx.raw.v1",
         Population.ID: "identity.events.v1",
         Population.DEV: "device.events.v1",
-        Population.OUT: "tx.authorization.v1",
     }
 )
+OUTCOME_STREAM: Final[str | None] = None
+"""The released topic of the OUT population, or None until ADR-0049's topic is released (Stage 2
+step 7). No code may name an unreleased topic (`tests/contract/test_topic_release_gate.py`). Until
+then outcome rows exist only as rows derived by ADR-0049 §7, and a stream row under any other
+topic is refused."""
+OUTCOME_STREAM_LABEL: Final = "authorization-outcome stream (unreleased)"
 
 
 class Klass(StrEnum):

@@ -552,6 +552,17 @@ both reports.
     - no availability provider exists for feature set 3.0.0 (§4.6);
     - `tx.authorization.v1` has no released schema, which S2c rule 1 flags.
 
+    **No code names the outcome topic yet.** The topic release gate forbids naming an unreleased
+    topic, so the OUT population is recorded as unreleased: outcome rows are derived only, and
+    step 7 sets the stream when it releases the schema.
+
+    **Verification slip, fixed.** Commit `78ad5ea` was made while `make verify` failed. Its output
+    was piped through `grep`, which hid the exit status. Two gates had failed:
+    - the topic release gate: outcome-topic literals had landed ahead of ADR-0049's release;
+    - the secret scan: the pinned criterion digest.
+
+    The next commit fixes both, and verification now gates on `make verify`'s own exit code.
+
     **Evaluation also changed:** LPC-2's decline signals can now read outcome rows, as `LPC-5`
     §5.2 declares, and planted rows carry their planned-event ordinal. This is metadata only and
     never serialised.

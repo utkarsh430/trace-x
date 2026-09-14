@@ -7,7 +7,6 @@ import datetime as dt
 import math
 
 import pytest
-from data.generator import outcomes
 from data.generator.config import GeneratorConfig
 from data.generator.engine import generate_dataset
 from data.generator.lpc5 import controls, rules, run
@@ -47,25 +46,26 @@ def _profile(n: int, mu: float = 7.378, sigma: float = 1.0) -> AccountProfile:
     )
 
 
-def test_s2c_passes_on_well_formed_rows_except_the_unreleased_outcome_schema() -> None:
+def test_s2c_passes_rules_2_and_4_to_8_on_well_formed_rows_with_derived_outcomes() -> None:
     rows = Rows()
-    tx = rows.tx(T0, account(0), authorization_outcome="UNKNOWN")
-    rows.outcome(tx, "APPROVED")
+    rows.tx(T0, account(0), authorization_outcome="APPROVED")
     rows.identity(T0 + 5_000, account(0), "LOGIN_SUCCEEDED")
     know = knowledge()
     result = rules.s2c_rows(build_frame(rows.rows, seed=know.seed, validate=True), know)
-    assert [f.check for f in result.findings] == ["S2c/1"]
-    assert "tx.authorization.v1 has no released schema" in result.findings[0].detail
+    # Until ADR-0049 releases the outcome stream (step 7), outcomes can only be derived from the
+    # transaction field (a rule 3 violation), and derived rows have no released schema (rule 1).
+    assert {f.check for f in result.findings} == {"S2c/1", "S2c/3"}
+    rule_one = next(f for f in result.findings if f.check == "S2c/1")
+    assert "has no released schema" in rule_one.detail
 
 
 def test_s2c_names_every_violated_rule() -> None:
     rows = Rows()
     first = rows.tx(T0, account(0), authorization_outcome="APPROVED", memo="ACCOUNT_TAKEOVER")
-    rows.outcome(first, "APPROVED", envelope={"occurred_at": outcomes.iso_millis(T0 + 1)})
     rows.tx(
         T0 + 1_000,
         account(1),
-        authorization_outcome="UNKNOWN",
+        authorization_outcome="UNKNOWN",  # no outcome row: rule 4
         envelope={"occurred_at": "2026-01-15T00:00:01Z"},
     )
     rows.identity(END_MS + 1, account(2), "LOGIN_FAILED")
@@ -89,13 +89,13 @@ def test_s2c_names_every_violated_rule() -> None:
 
 def test_s2c_without_validation_reports_rules_one_and_two_as_not_run() -> None:
     rows = Rows()
-    tx = rows.tx(T0, account(0), authorization_outcome="UNKNOWN")
-    rows.outcome(tx, "APPROVED")
+    rows.tx(T0, account(0), authorization_outcome="APPROVED")
     know = knowledge()
     result = rules.s2c_rows(build_frame(rows.rows, seed=know.seed), know)
     details = {f.check: f.detail for f in result.findings}
-    assert set(details) == {"S2c/1", "S2c/2"}
+    assert {"S2c/1", "S2c/2"} <= set(details)
     assert "not run" in details["S2c/1"]
+    assert "not run" in details["S2c/2"]
 
 
 def test_s4_pairs_keep_planted_and_legitimate_pairs_and_drop_mixed_ones() -> None:

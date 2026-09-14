@@ -18,7 +18,6 @@ from typing import Any, Final
 from data.generator.rng import derive
 from trace_core.domain.identifiers import uuid7
 
-TOPIC: Final = "tx.authorization.v1"
 EVENT_TYPE: Final = "tx.authorization"
 SCHEMA_VERSION: Final = 1
 OUTCOMES: Final = frozenset({"APPROVED", "DECLINED"})

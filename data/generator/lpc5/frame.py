@@ -354,7 +354,7 @@ def build_frame(
                 frame.ident.append(side)
             else:
                 frame.dev.append(side)
-        elif row.topic == d.TOPICS[d.Population.OUT]:
+        elif d.OUTCOME_STREAM is not None and row.topic == d.OUTCOME_STREAM:
             raw_out.append((order, event))
         else:
             raise ValueError(f"LPC-5 does not judge topic {row.topic!r}")
@@ -379,7 +379,7 @@ def build_frame(
                 correlation_id=tx.envelope.correlation_id or "",
             )
             if validate:
-                _validate(frame, outcomes.TOPIC, event, order)
+                _validate(frame, d.OUTCOME_STREAM_LABEL, event, order)
             raw_out.append((order, event))
             order += 1
     for out_order, event in raw_out:

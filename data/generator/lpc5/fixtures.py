@@ -27,12 +27,6 @@ HOME_POINT = (51.5, -0.12)
 PRODUCER = "trace-generator@1.0.0"
 
 
-def _millis(text: str) -> int:
-    from data.generator.lpc5.frame import millis
-
-    return millis(text)
-
-
 def account(n: int) -> str:
     return f"acct_{n:06d}"
 
@@ -140,35 +134,6 @@ class Rows:
             scenario_instance=scenario,
             planned_ordinal=ordinal,
         )
-        self.rows.append(row)
-        return row
-
-    def outcome(
-        self,
-        transaction: GeneratedRow,
-        authorization_outcome: str,
-        *,
-        seed: int = 42,
-        envelope: dict[str, Any] | None = None,
-        **payload_overrides: Any,
-    ) -> GeneratedRow:
-        """The transaction's `tx.authorization.v1` row, built by the generator's own builder."""
-        tx_envelope = transaction.event["envelope"]
-        tx_payload = transaction.event["payload"]
-        event = outcomes.outcome_event(
-            seed,
-            transaction_id=tx_payload["transaction_id"],
-            account_id=tx_payload["account_id"],
-            authorization_outcome=authorization_outcome,
-            transaction_occurred_at=tx_envelope["occurred_at"],
-            transaction_occurred_ms=_millis(tx_envelope["occurred_at"]),
-            producer=tx_envelope["producer"],
-            trace_id=tx_envelope["trace_id"],
-            correlation_id=tx_envelope["correlation_id"],
-        )
-        event["envelope"].update(envelope or {})
-        event["payload"].update(payload_overrides)
-        row = GeneratedRow(topic=outcomes.TOPIC, event=event)
         self.rows.append(row)
         return row
 
