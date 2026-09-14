@@ -22,21 +22,29 @@ a run used rather than leaving it implicit.
 from __future__ import annotations
 
 import datetime as dt
+import random
+from collections import defaultdict
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from typing import Any, Final
 
+from data.generator.baseline import (
+    BaselineEvent,
+    DeviceReferences,
+    PaymentDevices,
+    plan_baseline,
+)
 from data.generator.behavior import (
     pick_merchant_index,
     sample_amount_minor,
     sample_location,
     sample_occurred_at,
 )
-from data.generator.config import PRODUCER, GeneratorConfig
+from data.generator.config import PRODUCER, BaselineIdentityConfig, GeneratorConfig
 from data.generator.labels import TransactionLabel
 from data.generator.population import Universe, build_universe
 from data.generator.rng import derive
-from data.generator.scenarios import ALL_SCENARIOS, ScenarioInstance, default_mix
+from data.generator.scenarios import ALL_SCENARIOS, PlannedEvent, ScenarioInstance, default_mix
 from trace_core.domain.identifiers import uuid7
 from trace_core.domain.time import to_millis
 
@@ -77,6 +85,14 @@ class GeneratedRow:
     scenario_instance: ScenarioInstance | None = None
     """Present on injected rows. Never serialised into the event -- it exists so
     the ground-truth writer can record which episode a row belonged to."""
+    authorization_decided_ms: int | None = None
+    """eval-v2 only: when this transaction's authorization outcome was decided.
+
+    Kept in the plan and never serialised into the event, so a later decision to
+    emit authorization outcomes as their own dated events can take it from here.
+    One latency distribution applies to every transaction -- approved or declined,
+    legitimate or planted -- because a latency that differed by outcome or label
+    would become a proxy the moment it was emitted. None when the gate is off."""
 
 
 def _iso(millis: int) -> str:
@@ -228,6 +244,424 @@ def _build_side_event(
     }
 
 
+# ------------------------------------------------------------- eval-v2 -----
+#
+# Everything in this section runs only when `config.baseline_identity` is set.
+# With it absent, `generate_dataset` takes exactly the path it took before this
+# section existed -- pinned by eval-v1's frozen digest and by literal digests of
+# the pre-change generator in tests/unit/test_generator_baseline_identity.py.
+
+_RETRY_GAP_MS: Final = (20_000, 600_000)
+"""From a legitimate declined attempt to the customer's retry (chosen)."""
+_MAX_DECLINE_PROBABILITY: Final = 0.5
+"""Cap on one legitimate transaction's decline probability after the account's
+multiplier, so a lognormal tail cannot produce accounts that almost always decline."""
+_DECISION_LATENCY_FLOOR_MS: Final = 40
+_DECISION_LATENCY_MEAN_MS: Final = 300.0
+_DECISION_LATENCY_SD_MS: Final = 150.0
+
+_SINGLE: Final = 0
+_ATTEMPT: Final = 1
+_RETRY: Final = 2
+_RETRY_FRESH_FIELDS: Final = frozenset({"transaction_id", "authorization_outcome"})
+"""The only payload fields a retry does not copy from its declined attempt."""
+
+
+@dataclass(frozen=True, slots=True)
+class _LegitimateTransaction:
+    """A legitimate transaction's eval-v2 decisions, fixed before emission."""
+
+    account_index: int
+    device_id: str | None
+    """A non-home device chosen by T1, or None for the eval-v1 home-device choice."""
+    declined: bool
+    role: int
+    pair: int
+    """Identifies a retry pair (the retry's draw index); the draw's own index otherwise."""
+
+
+def _device_platform(universe: Universe, device: str) -> str:
+    """The universe's platform for a device, so every event about it agrees.
+
+    eval-v1 drew a platform at random per side event, so one device could report
+    two platforms -- and only scenario devices ever did.
+    """
+    return universe.devices[int(device.split("_")[1])].platform
+
+
+def _scenario_side_stream(
+    config: GeneratorConfig, instance: ScenarioInstance, ordinal: int
+) -> random.Random:
+    """One substream per scenario side event, keyed by the event itself.
+
+    eval-v1 keyed side events by the NEXT TRANSACTION's position, which
+    consecutive side events share, so they shared `trace_id` and
+    `idempotency_key` too. Were only scenario events to keep doing that once
+    legitimate events exist, a shared envelope would mark fraud.
+    """
+    return derive(config.seed, "scenario-side-event", f"{instance.instance_id}:{ordinal}")
+
+
+def _scenario_side_device(
+    universe: Universe, planned: PlannedEvent, rng: random.Random
+) -> str | None:
+    """The device a scenario side event names. Drawn first from its stream."""
+    override = planned.overrides.get("device_id")
+    if override is not None or planned.topic != "device.events.v1":
+        return None if override is None else str(override)
+    profile = universe.profiles[planned.account_index]
+    return profile.home_devices[rng.randrange(len(profile.home_devices))]
+
+
+def _build_scenario_side_event_v2(
+    config: GeneratorConfig,
+    universe: Universe,
+    instance: ScenarioInstance,
+    planned: PlannedEvent,
+    ordinal: int,
+    occurred_ms: int,
+    position: int,
+    lag: Any,
+) -> dict[str, Any]:
+    """A scenario's identity or device event under eval-v2 semantics.
+
+    Same payload shape as `_build_side_event`; a unique envelope substream and a
+    coherent platform. Its lag still comes from the shared stream, in emission
+    order, as in eval-v1.
+    """
+    profile = universe.profiles[planned.account_index]
+    rng = _scenario_side_stream(config, instance, ordinal)
+    device = _scenario_side_device(universe, planned, rng)
+    ingested_ms = occurred_ms + int(abs(lag.gauss(70, 40))) + 5
+    overrides = planned.overrides
+
+    if planned.topic == "identity.events.v1":
+        payload: dict[str, Any] = {
+            "account_id": profile.account_id,
+            "identity_event_type": planned.identity_event_type or "UNKNOWN",
+            "user_agent": _USER_AGENTS[rng.randrange(len(_USER_AGENTS))],
+        }
+        if device is not None:
+            payload["device_id"] = device
+        if "ip_id" in overrides:
+            payload["ip_id"] = overrides["ip_id"]
+        event_type = "identity.events"
+    else:
+        if device is None:  # pragma: no cover - _scenario_side_device always names one
+            raise ValueError(f"{instance.instance_id}:{ordinal}: device event without a device")
+        payload = {
+            "device_id": device,
+            "account_id": profile.account_id,
+            "device_event_type": planned.device_event_type or "UNKNOWN",
+            "platform": _device_platform(universe, device),
+        }
+        if "ip_id" in overrides:
+            payload["ip_id"] = overrides["ip_id"]
+        event_type = "device.events"
+
+    return {
+        "envelope": _envelope(event_type, occurred_ms, ingested_ms, position, rng),
+        "payload": payload,
+    }
+
+
+def _build_baseline_event(
+    config: GeneratorConfig, universe: Universe, planned: BaselineEvent, position: int
+) -> dict[str, Any]:
+    """A legitimate identity or device event (`data.generator.baseline`).
+
+    Shaped exactly like a scenario event of the same type -- key set, user-agent
+    distribution, correlation scheme, lag distribution -- because any difference
+    in shape would betray which kind of event it is.
+    """
+    profile = universe.profiles[planned.account_index]
+    rng = derive(config.seed, "baseline-event", planned.key)
+    ingested_ms = planned.occurred_ms + int(abs(rng.gauss(70, 40))) + 5
+
+    if planned.topic == "identity.events.v1":
+        payload: dict[str, Any] = {
+            "account_id": profile.account_id,
+            "identity_event_type": planned.event_type,
+            "user_agent": _USER_AGENTS[rng.randrange(len(_USER_AGENTS))],
+            "device_id": planned.device_id,
+        }
+        if planned.ip_id is not None:
+            payload["ip_id"] = planned.ip_id
+        event_type = "identity.events"
+    else:
+        payload = {
+            "device_id": planned.device_id,
+            "account_id": profile.account_id,
+            "device_event_type": planned.event_type,
+            "platform": _device_platform(universe, planned.device_id),
+        }
+        event_type = "device.events"
+
+    return {
+        "envelope": _envelope(event_type, planned.occurred_ms, ingested_ms, position, rng),
+        "payload": payload,
+    }
+
+
+def scenario_device_references(
+    config: GeneratorConfig, universe: Universe, instances: Sequence[ScenarioInstance]
+) -> DeviceReferences:
+    """Every device a scenario names, per account.
+
+    Legitimate activity never adopts one of these for that account, as a new
+    device or a secondary one: an account that already knew a scenario's device
+    would make that scenario's DEVICE_NOVELTY key false.
+    """
+    devices: dict[int, set[str]] = defaultdict(set)
+    for instance in instances:
+        for ordinal, planned in enumerate(instance.events):
+            if planned.topic == "tx.raw.v1":
+                override = planned.overrides.get("device_id")
+                if override is not None:
+                    devices[planned.account_index].add(str(override))
+                continue
+            side_device = _scenario_side_device(
+                universe, planned, _scenario_side_stream(config, instance, ordinal)
+            )
+            if side_device is not None:
+                devices[planned.account_index].add(side_device)
+    return DeviceReferences(scenario_devices=dict(devices))
+
+
+def _legitimate_device(
+    settings: BaselineIdentityConfig,
+    devices: PaymentDevices | None,
+    at_ms: int,
+    rng: random.Random,
+) -> str | None:
+    """T1: a non-home device for a legitimate transaction at `at_ms`, or None.
+
+    A device enrolled strictly before `at_ms` first, then the secondary device;
+    None keeps the eval-v1 home-device choice. Never a device the account does not
+    yet know.
+    """
+    if devices is None:
+        return None
+    latest = devices.latest_enrolled_before(at_ms)
+    if latest is not None and rng.random() < settings.new_device_payment_share:
+        return latest
+    if devices.secondary is not None and rng.random() < settings.secondary_device_transaction_share:
+        return devices.secondary
+    return None
+
+
+def _plan_eval_v2(
+    config: GeneratorConfig,
+    universe: Universe,
+    merged: list[tuple[int, int, int, Any]],
+    legit_count: int,
+    instances: Sequence[ScenarioInstance],
+) -> list[tuple[int, int, int, Any]]:
+    """The gate-on plan: eval-v1's merged plan transformed before emission.
+
+    Scenario references -> identity and device plan -> legitimate transaction
+    decisions (T1, T3) -> scenario sub-second timing (T2) -> planted location and
+    entry-mode draws (M1-M3) -> one sort. The number of transactions, every label,
+    every planted channel and every other planted override are unchanged; which
+    transaction sits at which position may change.
+    """
+    settings = config.baseline_identity
+    if settings is None:  # pragma: no cover - guarded by generate_dataset
+        raise ValueError("_plan_eval_v2 requires baseline_identity")
+    seed = config.seed
+    start_ms = to_millis(config.start_at)
+
+    # Legitimate draws, recovered in draw order: a draw's tiebreak is its index.
+    draw_ms = [0] * legit_count
+    draw_account = [0] * legit_count
+    planted: list[tuple[int, int, int, Any]] = []
+    for occurred_ms, tiebreak, kind, payload in merged:
+        if kind == 0:
+            draw_ms[tiebreak] = occurred_ms
+            draw_account[tiebreak] = payload
+        else:
+            planted.append((occurred_ms, tiebreak, kind, payload))
+
+    references = scenario_device_references(config, universe, instances)
+    baseline = plan_baseline(config, universe, references)
+    payment = baseline.payment_devices
+
+    plan: list[tuple[int, int, int, Any]] = []
+
+    # T1 and T3. One substream per account: its first draw is the account's
+    # decline-propensity multiplier, then its decisions in draw order.
+    sigma = settings.decline_propensity_sigma
+    streams: dict[int, tuple[random.Random, float]] = {}
+    consumed = False
+    for index in range(legit_count):
+        if consumed:
+            consumed = False
+            continue
+        account = draw_account[index]
+        at_ms = draw_ms[index]
+        if account not in streams:
+            stream = derive(seed, "baseline-transactions", str(account))
+            multiplier = stream.lognormvariate(-(sigma**2) / 2.0, sigma) if sigma > 0 else 1.0
+            streams[account] = (stream, multiplier)
+        rng, multiplier = streams[account]
+        devices = payment.get(account)
+
+        retry_p = min(
+            _MAX_DECLINE_PROBABILITY, settings.decline_retry_share_per_transaction * multiplier
+        )
+        if index + 1 < legit_count and rng.random() < retry_p:
+            attempt_ms = at_ms - rng.randrange(*_RETRY_GAP_MS)
+            if attempt_ms >= start_ms:
+                device = _legitimate_device(settings, devices, attempt_ms, rng)
+                # The attempt takes the consumed draw's tiebreak; the retry keeps
+                # this draw's time and tiebreak. The count is exactly unchanged.
+                plan.append(
+                    (
+                        attempt_ms,
+                        index + 1,
+                        3,
+                        _LegitimateTransaction(account, device, True, _ATTEMPT, index),
+                    )
+                )
+                plan.append(
+                    (at_ms, index, 3, _LegitimateTransaction(account, device, False, _RETRY, index))
+                )
+                consumed = True
+                continue
+
+        decline_p = min(
+            _MAX_DECLINE_PROBABILITY, settings.decline_share_per_transaction * multiplier
+        )
+        declined = rng.random() < decline_p
+        device = _legitimate_device(settings, devices, at_ms, rng)
+        plan.append(
+            (at_ms, index, 3, _LegitimateTransaction(account, device, declined, _SINGLE, index))
+        )
+
+    # T2. Every planted event keeps its planned second and gets a uniform
+    # millisecond, as legitimate transactions do.
+    retimed: list[tuple[int, int, int, Any]] = []
+    for occurred_ms, tiebreak, kind, payload in planted:
+        instance, _planned, ordinal = payload
+        subsecond = derive(seed, "scenario-subsecond", f"{instance.instance_id}:{ordinal}")
+        retimed.append(
+            (occurred_ms - occurred_ms % 1000 + subsecond.randrange(1000), tiebreak, kind, payload)
+        )
+    # M1-M3. Planted locations and entry modes are drawn the way legitimate ones
+    # are, on the final times; every other planted field is kept.
+    plan.extend(_redraw_planted_transactions(config, retimed))
+
+    # Legitimate identity and device events. Tiebreaks start above every other.
+    base = legit_count + len(instances) * 1000
+    for offset, planned_event in enumerate(baseline.events):
+        plan.append((planned_event.occurred_ms, base + offset, 2, planned_event))
+
+    plan.sort(key=lambda item: (item[0], item[1]))
+    return plan
+
+
+_LOCATION_ATTEMPTS: Final = 32
+"""Location redraws allowed before a planted episode fails loudly rather than
+emit a label its rows no longer support."""
+
+
+def _redraw_planted_transactions(
+    config: GeneratorConfig, planted: list[tuple[int, int, int, Any]]
+) -> list[tuple[int, int, int, Any]]:
+    """M1-M3: planted transactions with their location and entry mode redrawn.
+
+    eval-v1 copied a scenario's planted point onto the transactions it placed --
+    one exact coordinate repeated through a takeover, the account's home point
+    itself on an impossible-travel leg -- and forced `ECOMMERCE` or `CHIP` as the
+    entry mode. No legitimate transaction looks like that, so each marked fraud.
+    Here the planted point is the anchor of the legitimate noise model, and the
+    entry mode is drawn from the planted channel's legitimate modes. Channels,
+    amounts, merchants, devices, IPs and every other planted field are untouched,
+    and side events pass through unchanged.
+    """
+    by_instance: dict[str, list[tuple[int, int, int, Any]]] = defaultdict(list)
+    for entry in planted:
+        by_instance[entry[3][0].instance_id].append(entry)
+
+    redrawn: list[tuple[int, int, int, Any]] = []
+    for instance_id, entries in by_instance.items():
+        candidate: list[tuple[int, int, int, Any]] = []
+        for attempt in range(_LOCATION_ATTEMPTS):
+            candidate = [_with_redrawn_fields(config, entry, attempt) for entry in entries]
+            if _travel_stays_impossible(candidate):
+                break
+        else:
+            raise ValueError(
+                f"{instance_id}: no location draw in {_LOCATION_ATTEMPTS} attempts kept the "
+                f"planted travel impossible; emitting it would be a wrong label"
+            )
+        redrawn.extend(candidate)
+    return redrawn
+
+
+def _with_redrawn_fields(
+    config: GeneratorConfig, entry: tuple[int, int, int, Any], attempt: int
+) -> tuple[int, int, int, Any]:
+    """One planted transaction with M1-M3 applied; any other entry unchanged."""
+    from dataclasses import replace
+
+    from trace_core.domain.geo import GeoPoint
+
+    occurred_ms, tiebreak, kind, (instance, planned, ordinal) = entry
+    if planned.topic != "tx.raw.v1":
+        return entry
+    overrides = dict(planned.overrides)
+    key = f"{instance.instance_id}:{ordinal}"
+    if "latitude" in overrides or "longitude" in overrides:
+        anchor = GeoPoint(
+            latitude=float(overrides["latitude"]), longitude=float(overrides["longitude"])
+        )
+        location = derive(config.seed, "scenario-location", f"{key}:{attempt}")
+        point = sample_location(location, anchor, config.geo_jitter_km)
+        overrides["latitude"] = point.latitude
+        overrides["longitude"] = point.longitude
+    if "entry_mode" in overrides:
+        modes = _CHANNEL_ENTRY.get(str(overrides.get("channel")))
+        if modes is None:
+            raise ValueError(f"{key}: a planted entry mode can only be redrawn with its channel")
+        chooser = derive(config.seed, "scenario-entry-mode", key)
+        overrides["entry_mode"] = modes[chooser.randrange(len(modes))]
+    return occurred_ms, tiebreak, kind, (instance, replace(planned, overrides=overrides), ordinal)
+
+
+def _travel_stays_impossible(entries: list[tuple[int, int, int, Any]]) -> bool:
+    """IMPOSSIBLE_TRAVEL's label is true only while its emitted legs stay infeasible."""
+    import itertools
+
+    from data.generator.scenarios import SCENARIOS_BY_PATTERN, ImpossibleTravel
+    from trace_core.domain.enums import FraudPattern
+    from trace_core.domain.geo import GeoPoint, implied_speed_kmh
+
+    if not entries or entries[0][3][0].pattern is not FraudPattern.IMPOSSIBLE_TRAVEL:
+        return True
+    scenario = SCENARIOS_BY_PATTERN[FraudPattern.IMPOSSIBLE_TRAVEL]
+    threshold = (
+        scenario.min_speed_kmh
+        if isinstance(scenario, ImpossibleTravel)
+        else ImpossibleTravel().min_speed_kmh
+    )
+    legs = sorted((e for e in entries if e[3][1].topic == "tx.raw.v1"), key=lambda e: (e[0], e[1]))
+    for first, second in itertools.pairwise(legs):
+        a = first[3][1].overrides
+        b = second[3][1].overrides
+        seconds = (second[0] - first[0]) / 1000
+        if seconds <= 0:
+            return False
+        speed = implied_speed_kmh(
+            GeoPoint(latitude=a["latitude"], longitude=a["longitude"]),
+            GeoPoint(latitude=b["latitude"], longitude=b["longitude"]),
+            seconds,
+        )
+        if speed <= threshold:
+            return False
+    return True
+
+
 def generate_events(
     config: GeneratorConfig, universe: Universe | None = None
 ) -> Iterator[dict[str, Any]]:
@@ -324,7 +758,15 @@ def plan_fraud(config: GeneratorConfig, universe: Universe) -> tuple[list[Scenar
 def generate_dataset(
     config: GeneratorConfig, universe: Universe | None = None
 ) -> Iterator[GeneratedRow]:
-    """The full dataset: legitimate traffic with fraud episodes woven in."""
+    """The full dataset: legitimate traffic with fraud episodes woven in.
+
+    With `config.baseline_identity` set (eval-v2), the legitimate baseline is
+    woven in as well -- identity and device activity, non-home payment devices,
+    declines -- and planted events take eval-v2 timing, side-event semantics, and
+    locations and entry modes drawn the legitimate way. The transaction count,
+    every label, every planted channel and every other planted override are
+    unchanged.
+    """
     universe = universe or build_universe(config)
     instances, fraud_tx = plan_fraud(config, universe)
     legit_count = max(0, config.row_count - fraud_tx)
@@ -343,9 +785,27 @@ def generate_dataset(
     for offset, instance in enumerate(instances):
         for ordinal, planned in enumerate(instance.events):
             merged.append(
-                (planned.occurred_ms, legit_count + offset * 1000 + ordinal, 1, (instance, planned))
+                (
+                    planned.occurred_ms,
+                    legit_count + offset * 1000 + ordinal,
+                    1,
+                    (instance, planned, ordinal),
+                )
             )
     merged.sort(key=lambda item: (item[0], item[1]))
+
+    eval_v2 = config.baseline_identity is not None
+    decisions: random.Random | None = None
+    if eval_v2:
+        merged = _plan_eval_v2(config, universe, merged, legit_count, instances)
+        decisions = derive(config.seed, "authorization-decision")
+    pending_retries: dict[int, dict[str, Any]] = {}
+
+    def decided_at(occurred_ms: int) -> int | None:
+        if decisions is None:
+            return None
+        latency = int(abs(decisions.gauss(_DECISION_LATENCY_MEAN_MS, _DECISION_LATENCY_SD_MS)))
+        return occurred_ms + _DECISION_LATENCY_FLOOR_MS + latency
 
     position = 0
     for occurred_ms, _tiebreak, kind, payload in merged:
@@ -361,7 +821,47 @@ def generate_dataset(
             position += 1
             continue
 
-        instance, planned = payload
+        if kind == 2:
+            yield GeneratedRow(
+                topic=payload.topic,
+                event=_build_baseline_event(config, universe, payload, position),
+                label=None,
+            )
+            continue
+
+        if kind == 3:
+            legitimate: _LegitimateTransaction = payload
+            if legitimate.role == _RETRY:
+                if legitimate.pair not in pending_retries:  # pragma: no cover - attempt is earlier
+                    raise ValueError(f"retry {legitimate.pair} emitted before its attempt")
+                overrides = pending_retries.pop(legitimate.pair)
+            else:
+                overrides = {}
+                if legitimate.device_id is not None:
+                    overrides["device_id"] = legitimate.device_id
+                if legitimate.declined:
+                    overrides["authorization_outcome"] = "DECLINED"
+            event = _build_transaction(
+                config, universe, legitimate.account_index, occurred_ms, position, lag, overrides
+            )
+            if legitimate.role == _ATTEMPT:
+                pending_retries[legitimate.pair] = {
+                    key: value
+                    for key, value in event["payload"].items()
+                    if key not in _RETRY_FRESH_FIELDS
+                }
+            yield GeneratedRow(
+                topic="tx.raw.v1",
+                event=event,
+                label=TransactionLabel(
+                    transaction_id=event["payload"]["transaction_id"], is_fraud=False
+                ),
+                authorization_decided_ms=decided_at(occurred_ms),
+            )
+            position += 1
+            continue
+
+        instance, planned, ordinal = payload
         if planned.topic == "tx.raw.v1":
             event = _build_transaction(
                 config,
@@ -383,12 +883,20 @@ def generate_dataset(
                     causal_evidence_keys=instance.causal_evidence_keys,
                 ),
                 scenario_instance=instance,
+                authorization_decided_ms=decided_at(occurred_ms),
             )
             position += 1
         else:
+            side_event = (
+                _build_scenario_side_event_v2(
+                    config, universe, instance, planned, ordinal, occurred_ms, position, lag
+                )
+                if eval_v2
+                else _build_side_event(config, universe, planned, occurred_ms, position, lag)
+            )
             yield GeneratedRow(
                 topic=planned.topic,
-                event=_build_side_event(config, universe, planned, occurred_ms, position, lag),
+                event=side_event,
                 label=None,
                 scenario_instance=instance,
             )

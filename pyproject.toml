@@ -126,6 +126,9 @@ k6 = "grafana/k6:0.49.0@sha256:8cd78f9d0de5f50bc8821cceecf356d5d9e839e6611c226a3
 line-length = 100
 target-version = "py312"
 src = ["packages", "scripts", "tests", "eval", "mcp_servers", "data", "services", "benchmarks"]
+# Archived one-off diagnostic probes kept as the Stage 1d audit's evidence, with their outputs.
+# They are records, not maintained code: Stage 2's criterion tests replace them.
+extend-exclude = ["eval/track_a/audits/stage-1d-evidence"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "SIM", "ARG", "PTH", "RUF", "S", "T20"]
@@ -185,6 +188,8 @@ explicit_package_bases = true
 # Two bases: `packages/` (so trace_core.* resolves from source, not from the
 # editable install) and the repo root (so data.* and tests.conformance.* do).
 mypy_path = "packages:."
+# The archived Stage 1d probes (see [tool.ruff] extend-exclude): records, not maintained code.
+exclude = ["^eval/track_a/audits/stage-1d-evidence/"]
 
 # Phase-gated optional dependencies. Each is imported INSIDE a function and
 # guarded by a MissingDependencyError that names the extra, so absence is a loud,

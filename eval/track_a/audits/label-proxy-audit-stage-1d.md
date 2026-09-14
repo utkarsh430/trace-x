@@ -20,7 +20,7 @@ than because it learned fraud behaviour?
 | Code | `data/generator/*.py` on `phase/03-stream-medallion` (the eval-v1 generator; line numbers below), the Step E worktree's diff and its eval-v2 ADR draft | — |
 
 The probe scripts and their outputs are kept beside the eval-v2 draft in the Step E worktree
-(`adr-drafts/stage-1d-evidence/`); Stage 2's tests replace them.
+(now `eval/track_a/audits/stage-1d-evidence/`); Stage 2's tests replace them.
 
 **Behavioural signal.** An observable is a legitimate fraud signal only if all three hold:
 1. it is named by the scenario's documented signature, notes or causal keys

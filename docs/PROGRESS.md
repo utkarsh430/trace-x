@@ -530,7 +530,19 @@ both reports.
     Spark session log the lake root to stdout, ahead of the refusal line a toolchain test reads. The
     session factory now resolves the root quietly, and `tests/stream/test_session.py`, rerun after the
     fix, 9 passed, 1 warning. `tests/stream/test_delta_capabilities.py` passed in full.
-* **Step E — `eval-v2`.** Stages 1, 1b and 1c are complete in its worktree:
+* **Step E — `eval-v2`.** Stages 1, 1b and 1c are complete. Their code is integrated onto this branch.
+  * **Integration.** The worktree branch `worktree-agent-aae9faa608636c9c8` was fast-forwarded to the
+    phase branch, and the Step E work was committed on top. The phase branch fast-forwards to it.
+  * **Drafts and evidence.** The eval-v2 draft ADR is now `eval/track_a/drafts/eval-v2-adr-draft.md`,
+    and the Stage 1d probes and outputs are archived in `eval/track_a/audits/stage-1d-evidence/`,
+    outside lint and type scope.
+  * **LPC-4 module retired.** The partial, untested `label_proxy_audit.py` is gone: `LPC-5` §5.4
+    carries R7–R9, so Stage 2 step 4 folds into step 2.
+  * **Main checkout.** It still holds uncommitted copies of the same Step E files, from an
+    integration attempt made there before the session moved into the worktree. Discard them
+    before fast-forwarding `phase/03-stream-medallion`.
+
+  What stages 1–1c delivered:
   * legitimate identity, device and decline activity;
   * planted-row markers removed;
   * label-proxy criteria LPC-1 to LPC-3 declared before any gated run. The `eval-v1` negative
