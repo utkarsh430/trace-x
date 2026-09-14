@@ -987,6 +987,48 @@ Phase 3, in the wave order of `docs/PHASE3_PLAN.md` §5:
         - **For §14.1.** The eval-v1 negative control recorded in step 3 ran under revision 2. Its
           `R7 hour` expectation now rests on scenarios other than takeover and impossible travel.
           The controls rerun in step 11.
+      - **Probe 2 (diagnostic, after revision 3).** Quarter scale, seed 44, commit `a2792e0`.
+        - Output: `eval/track_a/audits/stage-2-evidence/lpc5-eval-v2-probe-quarter-scale-rev3.txt`.
+          Pooled-contributor analysis of the same data:
+          `eval/track_a/audits/stage-2-evidence/probe2-pooled-contributors.txt`.
+        - Revision 3 resolved what it targeted: takeover clustering and time of day, the
+          `EMAIL_CHANGE`/`PHONE_CHANGE` support failures, the takeover identity-event IPs, MC-5 and
+          DF-5. M4's ablation check no longer fails without the ablation. S7b is down to the CT-3
+          near miss.
+        - **Verdict still FAIL** on R7, R8, S1-U, S1-B, S2b and S7b.
+        - **Category A in the data: none found.**
+          - Velocity attacks' device, merchant, MCC and country multiplicity is the ordinary
+            per-transaction selection the legitimate baseline uses, at burst volume: decision 6 is
+            implemented faithfully.
+          - The anomalous-high-value findings (`ip_accounts = 1`, a prior failed login, decision
+            latency) are a few of its single-transaction rows; its injection sets only the amount
+            and the merchant.
+        - **Category A in the instrument: R8's contributor rule.**
+          - Revision 3 counts any scenario whose share exceeds the legitimate upper bound as
+            contributing.
+          - In about half of the failing pooled cells, every contributor enriched on its own admits
+            the value; the cell is judged only because of scenarios at trivial shares. That does not
+            implement "materially contributing".
+          - Tightening it changes §5.4 and weakens R8 relative to revision 3 as committed, so it is
+            the user's decision.
+          - Step 10 waits: a revision after a candidate exists invalidates the candidate.
+        - **Category B (documented behaviour, not revised):**
+          - velocity volume in merchant, MCC, device, country and activity attributes;
+          - impossible travel's two-transaction counts and decisions;
+          - the takeover's new device in the DEV stream, and `ADDRESS_CHANGE` support;
+          - card testing's countries, activity and TX-side declines;
+          - ring, stuffing and farm consequences inside their strata;
+          - merchant-collusion amounts under G6;
+          - velocity `3-4` in five minutes, which revision 3 did not exempt for velocity.
+        - **Category C (sample size or chance):**
+          - the CT-3 near miss;
+          - `rare` values short of thirty legitimate rows at quarter scale;
+          - S2b on scenarios of twenty-odd rows (unusual-location amount digits,
+            anomalous-high-value decision latency);
+          - the anomalous-high-value findings.
+        - **Consequence for acceptance.** Category B findings still fail `LPC-5`'s mechanical checks.
+          Under revision 3, an acceptance run on any candidate records FAIL on them, whatever R8's
+          rule. Raised with the user before any candidate is frozen.
    10. Final candidate.
    11. Frozen `LPC-5` acceptance.
    12. Freeze the manifest and digests.

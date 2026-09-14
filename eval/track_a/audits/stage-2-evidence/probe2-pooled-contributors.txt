@@ -1,0 +1,210 @@
+# DIAGNOSTIC -- not acceptance evidence (eval/track_a/criteria/lpc-5.md §1.3).
+# Stage 2 step 9, probe 2 follow-up: an analysis of probe 2's own data, regenerated
+# deterministically (seed 44, the probe's configuration, commit a2792e0). Not a new probe.
+# For every pooled cell failing R8 or S1-U: the legitimate upper bound, and the scenarios revision 3
+# counts as contributing (own share above it), split into those that do not admit the value
+# (blocking) and those that do (admitting); ENRICHED marks a scenario enriched on its own.
+# Then per-instance multiplicity for velocity attacks and card testing.
+
+## Output
+== pooled cells failing R8 or S1-U: 36
+DEV/device_age/<1h [-] legit hi 0.0013 :: blocked-by-enriched
+    blocking: ['ACCOUNT_TAKEOVER 13/20 ENRICHED']
+    admitting: []
+DEV/device_age/[1h,24h) [-] legit hi 0.0180 :: blocked-by-enriched
+    blocking: ['ACCOUNT_TAKEOVER 7/20 ENRICHED']
+    admitting: []
+DEV/device_home/not [-] legit hi 0.3543 :: blocked-by-enriched
+    blocking: ['ACCOUNT_TAKEOVER 20/20 ENRICHED']
+    admitting: []
+DEV/event_type/FIRST_SEEN [-] legit hi 0.1764 :: blocked-by-enriched
+    blocking: ['ACCOUNT_TAKEOVER 20/20 ENRICHED']
+    admitting: []
+DEV/hour/22 [-] legit hi 0.0397 :: blocked-by-enriched
+    blocking: ['ACCOUNT_TAKEOVER 4/20 ENRICHED']
+    admitting: []
+TX/account_activity/51+ [-] legit hi 0.0020 :: blocked-by-enriched
+    blocking: ['VELOCITY_ATTACK 378/557 ENRICHED', 'CREDENTIAL_STUFFING 1/67', 'ANOMALOUS_HIGH_VALUE 1/24']
+    admitting: []
+TX/amount_vs_account/<0.1 [-] legit hi 0.0135 :: blocked-by-unenriched-only
+    blocking: ['DEVICE_FARM 6/283']
+    admitting: ['CARD_TESTING 230/314 ENRICHED']
+TX/amount_z/<-2 [-] legit hi 0.0253 :: blocked-by-unenriched-only
+    blocking: ['IMPOSSIBLE_TRAVEL 2/40', 'DEVICE_FARM 9/283']
+    admitting: ['CARD_TESTING 279/314 ENRICHED']
+TX/avail:declined_ratio_1h/AVAILABLE [-] legit hi 0.0652 :: blocked-by-enriched
+    blocking: ['DEVICE_FARM 19/283', 'IMPOSSIBLE_TRAVEL 19/40 ENRICHED', 'FRAUD_RING 32/428']
+    admitting: ['VELOCITY_ATTACK 537/557 ENRICHED', 'ACCOUNT_TAKEOVER 57/100 ENRICHED', 'CARD_TESTING 295/314 ENRICHED']
+TX/avail:hours_since_identity_change/AVAILABLE [-] legit hi 0.0068 :: blocked-by-unenriched-only
+    blocking: ['ANOMALOUS_HIGH_VALUE 1/24', 'MERCHANT_COLLUSION 5/638', 'CARD_TESTING 13/314']
+    admitting: ['ACCOUNT_TAKEOVER 100/100 ENRICHED']
+TX/device_account_tx/2 [-] legit hi 0.0118 :: blocked-by-unenriched-only
+    blocking: ['CREDENTIAL_STUFFING 3/67']
+    admitting: ['DEVICE_FARM 190/283 ENRICHED', 'FRAUD_RING 164/428 ENRICHED']
+TX/device_accounts/6+ [-] legit hi 0.0497 :: blocked-by-unenriched-only
+    blocking: ['IMPOSSIBLE_TRAVEL 3/40']
+    admitting: ['DEVICE_FARM 283/283 ENRICHED', 'FRAUD_RING 348/428 ENRICHED', 'UNUSUAL_LOCATION_DEVICE 1/20']
+TX/device_accounts_24h/3-4 [-] legit hi 0.0408 :: blocked-by-unenriched-only
+    blocking: ['VELOCITY_ATTACK 63/557', 'CREDENTIAL_STUFFING 4/67']
+    admitting: ['DEVICE_FARM 44/283', 'FRAUD_RING 157/428 ENRICHED', 'ACCOUNT_TAKEOVER 8/100', 'UNUSUAL_LOCATION_DEVICE 1/20']
+TX/device_accounts_24h/5+ [-] legit hi 0.0008 :: blocked-by-unenriched-only
+    blocking: ['VELOCITY_ATTACK 3/557', 'MERCHANT_COLLUSION 1/638']
+    admitting: ['DEVICE_FARM 204/283 ENRICHED', 'FRAUD_RING 67/428 ENRICHED']
+TX/device_age/<1h [-] legit hi 0.0044 :: blocked-by-enriched
+    blocking: ['VELOCITY_ATTACK 90/557 ENRICHED']
+    admitting: ['ACCOUNT_TAKEOVER 25/100 ENRICHED', 'DEVICE_FARM 11/283', 'FRAUD_RING 8/428']
+TX/device_age/[1h,24h) [-] legit hi 0.0202 :: blocked-by-enriched
+    blocking: ['DEVICE_FARM 78/283 ENRICHED']
+    admitting: ['ACCOUNT_TAKEOVER 55/100 ENRICHED', 'FRAUD_RING 65/428 ENRICHED']
+TX/device_home/not [-] legit hi 0.0771 :: blocked-by-unenriched-only
+    blocking: ['VELOCITY_ATTACK 48/557']
+    admitting: ['ACCOUNT_TAKEOVER 100/100 ENRICHED', 'DEVICE_FARM 283/283 ENRICHED', 'FRAUD_RING 428/428 ENRICHED', 'UNUSUAL_LOCATION_DEVICE 20/20 ENRICHED']
+TX/distinct_countries_24h/3+ [-] legit hi 0.0143 :: blocked-by-enriched
+    blocking: ['VELOCITY_ATTACK 389/557 ENRICHED', 'DEVICE_FARM 10/283', 'CARD_TESTING 171/314 ENRICHED', 'MERCHANT_COLLUSION 11/638', 'ANOMALOUS_HIGH_VALUE 2/24']
+    admitting: ['IMPOSSIBLE_TRAVEL 5/40 ENRICHED', 'ACCOUNT_TAKEOVER 7/100']
+TX/distinct_devices_24h/3+ [-] legit hi 0.0070 :: blocked-by-enriched
+    blocking: ['VELOCITY_ATTACK 147/557 ENRICHED']
+    admitting: ['FRAUD_RING 55/428 ENRICHED', 'DEVICE_FARM 5/283', 'ACCOUNT_TAKEOVER 4/100', 'UNUSUAL_LOCATION_DEVICE 1/20']
+TX/distinct_mcc_5m/3-4 [-] legit hi 0.0004 :: blocked-by-enriched
+    blocking: ['VELOCITY_ATTACK 160/557 ENRICHED']
+    admitting: ['CARD_TESTING 61/314 ENRICHED']
+TX/distinct_mcc_5m/5+ [-] legit hi 0.0003 :: blocked-by-enriched
+    blocking: ['VELOCITY_ATTACK 348/557 ENRICHED']
+    admitting: ['CARD_TESTING 192/314 ENRICHED']
+TX/distinct_merchants_1h/10+ [-] legit hi 0.0003 :: blocked-by-enriched
+    blocking: ['VELOCITY_ATTACK 230/557 ENRICHED']
+    admitting: ['CARD_TESTING 134/314 ENRICHED']
+TX/distinct_merchants_1h/3-4 [-] legit hi 0.0020 :: blocked-by-enriched
+    blocking: ['VELOCITY_ATTACK 54/557 ENRICHED', 'FRAUD_RING 2/428', 'IMPOSSIBLE_TRAVEL 1/40']
+    admitting: ['ACCOUNT_TAKEOVER 16/100 ENRICHED', 'CARD_TESTING 40/314 ENRICHED']
+TX/distinct_merchants_1h/5-9 [-] legit hi 0.0003 :: blocked-by-enriched
+    blocking: ['VELOCITY_ATTACK 227/557 ENRICHED']
+    admitting: ['CARD_TESTING 101/314 ENRICHED', 'ACCOUNT_TAKEOVER 1/100']
+TX/ip_home/not [-] legit hi 0.0635 :: blocked-by-unenriched-only
+    blocking: ['UNUSUAL_LOCATION_DEVICE 2/20', 'IMPOSSIBLE_TRAVEL 3/40']
+    admitting: ['FRAUD_RING 428/428 ENRICHED', 'CREDENTIAL_STUFFING 67/67 ENRICHED']
+TX/joint_link/yes [-] legit hi 0.1113 :: blocked-by-unenriched-only
+    blocking: ['CREDENTIAL_STUFFING 9/67', 'CARD_TESTING 77/314', 'VELOCITY_ATTACK 71/557']
+    admitting: ['FRAUD_RING 428/428 ENRICHED']
+TX/mcc_habitual/unhabitual [-] legit hi 0.1250 :: blocked-by-unenriched-only
+    blocking: ['DEVICE_FARM 38/283', 'IMPOSSIBLE_TRAVEL 5/40', 'UNUSUAL_LOCATION_DEVICE 4/20']
+    admitting: ['ACCOUNT_TAKEOVER 49/100 ENRICHED', 'MERCHANT_COLLUSION 303/638 ENRICHED', 'ANOMALOUS_HIGH_VALUE 24/24 ENRICHED', 'FRAUD_RING 204/428 ENRICHED', 'CARD_TESTING 158/314 ENRICHED']
+TX/merchant_habitual/unhabitual [-] legit hi 0.2551 :: blocked-by-unenriched-only
+    blocking: ['IMPOSSIBLE_TRAVEL 14/40', 'UNUSUAL_LOCATION_DEVICE 7/20']
+    admitting: ['MERCHANT_COLLUSION 630/638 ENRICHED', 'ACCOUNT_TAKEOVER 100/100 ENRICHED', 'ANOMALOUS_HIGH_VALUE 24/24 ENRICHED', 'FRAUD_RING 427/428 ENRICHED', 'CARD_TESTING 297/314 ENRICHED']
+TX/merchant_popularity/101+ [habitual] legit hi 0.8708 :: blocked-by-unenriched-only
+    blocking: ['VELOCITY_ATTACK 377/425', 'DEVICE_FARM 192/211', 'IMPOSSIBLE_TRAVEL 24/26', 'UNUSUAL_LOCATION_DEVICE 12/13']
+    admitting: ['CARD_TESTING 15/17', 'FRAUD_RING 1/1', 'MERCHANT_COLLUSION 8/8']
+TX/merchant_popularity/101+ [unhabitual] legit hi 0.2188 :: blocked-by-unenriched-only
+    blocking: ['VELOCITY_ATTACK 30/132', 'CREDENTIAL_STUFFING 4/12', 'DEVICE_FARM 16/72']
+    admitting: ['MERCHANT_COLLUSION 569/630 ENRICHED', 'FRAUD_RING 131/427', 'CARD_TESTING 90/297']
+TX/prior_decisions_1h/2-4 [-] legit hi 0.0029 :: blocked-by-unenriched-only
+    blocking: ['MERCHANT_COLLUSION 2/638', 'FRAUD_RING 2/428', 'IMPOSSIBLE_TRAVEL 1/40']
+    admitting: ['VELOCITY_ATTACK 60/557 ENRICHED', 'ACCOUNT_TAKEOVER 20/100 ENRICHED', 'CARD_TESTING 61/314 ENRICHED']
+TX/prior_declined_share_1h/0 [-] legit hi 0.0538 :: blocked-by-enriched
+    blocking: ['DEVICE_FARM 19/283', 'IMPOSSIBLE_TRAVEL 17/40 ENRICHED', 'FRAUD_RING 32/428']
+    admitting: ['VELOCITY_ATTACK 537/557 ENRICHED', 'ACCOUNT_TAKEOVER 57/100 ENRICHED', 'CARD_TESTING 23/314']
+TX/prior_declined_share_1h/≥0.4 [-] legit hi 0.0129 :: blocked-by-unenriched-only
+    blocking: ['IMPOSSIBLE_TRAVEL 2/40']
+    admitting: ['CARD_TESTING 165/314 ENRICHED']
+TX/prior_events_24h/identity-change [-] legit hi 0.0068 :: blocked-by-unenriched-only
+    blocking: ['ANOMALOUS_HIGH_VALUE 1/24', 'MERCHANT_COLLUSION 5/638', 'CARD_TESTING 13/314']
+    admitting: ['ACCOUNT_TAKEOVER 100/100 ENRICHED']
+TX/shared_merchant_link/yes [-] legit hi 0.0800 :: blocked-by-enriched
+    blocking: ['ACCOUNT_TAKEOVER 30/100 ENRICHED', 'DEVICE_FARM 25/283', 'ANOMALOUS_HIGH_VALUE 4/24', 'CARD_TESTING 56/314', 'IMPOSSIBLE_TRAVEL 6/40']
+    admitting: ['FRAUD_RING 425/428 ENRICHED']
+TX/tx_count_1h/3-4 [-] legit hi 0.0029 :: blocked-by-unenriched-only
+    blocking: ['MERCHANT_COLLUSION 2/638', 'FRAUD_RING 2/428', 'IMPOSSIBLE_TRAVEL 1/40']
+    admitting: ['VELOCITY_ATTACK 40/557', 'ACCOUNT_TAKEOVER 18/100 ENRICHED', 'CARD_TESTING 40/314 ENRICHED']
+TX/tx_count_24h/5-9 [-] legit hi 0.0031 :: blocked-by-unenriched-only
+    blocking: ['FRAUD_RING 18/428', 'MERCHANT_COLLUSION 5/638']
+    admitting: ['VELOCITY_ATTACK 100/557 ENRICHED', 'ACCOUNT_TAKEOVER 31/100 ENRICHED', 'CARD_TESTING 100/314 ENRICHED']
+== summary {'blocked-by-enriched': 18, 'blocked-by-unenriched-only': 19}
+== VELOCITY_ATTACK: 20 instances; tx median 27.0; distinct devices median 2.0 max 4; home devices median 1.0; distinct merchants median 12.0; distinct countries median 4.0 max 6
+== CARD_TESTING: 20 instances; tx median 16.0; distinct devices median 1.0 max 1; home devices median 1.0; distinct merchants median 16.0; distinct countries median 4.0 max 5
+ANALYSIS=0
+
+## Script
+
+"""Diagnostic analysis of probe 2's own data (seed 44 regenerated deterministically; not a new probe)."""
+import datetime as dt
+import re
+import statistics
+import sys
+from collections import defaultdict
+
+from data.generator.config import BaselineIdentityConfig, GeneratorConfig
+from data.generator.engine import generate_dataset
+from data.generator.lpc5 import declaration as d
+from data.generator.lpc5 import stats
+from data.generator.lpc5.attributes import compute_tables
+from data.generator.lpc5.availability import reference_availability
+from data.generator.lpc5.frame import build_frame, knowledge
+from data.generator.lpc5.judge import Allowlist, tally
+from data.generator.population import build_universe
+
+report = open(sys.argv[1], encoding="utf-8").read().splitlines()
+pooled_cells = sorted(
+    {
+        (m.group(1), m.group(2), m.group(3))
+        for line in report
+        if (m := re.match(r"^      (?:R8|S1-U\(\w\)) (\w+)/([^/]+)/(.+)/POOLED: ", line))
+    }
+)
+config = GeneratorConfig(
+    seed=44, row_count=250_000, account_count=10_000, merchant_count=750, device_count=12_000,
+    ip_count=5_000, fraud_rate=0.005, start_at=dt.datetime(2026, 1, 1, tzinfo=dt.UTC),
+    end_at=dt.datetime(2026, 3, 1, tzinfo=dt.UTC), baseline_identity=BaselineIdentityConfig(),
+)
+universe = build_universe(config)
+know = knowledge(universe)
+frame = build_frame(generate_dataset(config, universe), seed=config.seed)
+tables = compute_tables(frame, know, availability=reference_availability(know.start_ms))
+allow = Allowlist()
+
+print(f"== pooled cells failing R8 or S1-U: {len(pooled_cells)}")
+summary = defaultdict(int)
+for population_name, attribute, value in pooled_cells:
+    population = d.Population(population_name)
+    counts = tally(tables[population], attribute)
+    for group, stratum, cell_value in counts.cells():
+        if group != d.POOLED or cell_value != value:
+            continue
+        legit = counts.share(d.LEGIT, stratum, (value,))
+        floor = max(legit.hi, d.LEGIT_SHARE_FLOOR)
+        admitting, blocking = [], []
+        for scenario, cell_stratum, v in counts.cells():
+            if scenario in (d.LEGIT, d.POOLED) or cell_stratum != stratum or v != value:
+                continue
+            share = counts.share(scenario, stratum, (value,))
+            if not share.r or share.x / share.r <= floor:
+                continue
+            tag = f"{scenario} {share.x}/{share.r}{' ENRICHED' if stats.enriched(share, legit) else ''}"
+            if allow.is_ordinary(scenario, population, attribute, value):
+                blocking.append(tag)
+            else:
+                admitting.append(tag)
+        kind = "blocked-by-enriched" if any("ENRICHED" in b for b in blocking) else (
+            "blocked-by-unenriched-only" if blocking else "no-blocker")
+        summary[kind] += 1
+        print(f"{population_name}/{attribute}/{value} [{stratum or '-'}] legit hi {legit.hi:.4f} :: {kind}")
+        print(f"    blocking: {blocking}")
+        print(f"    admitting: {admitting}")
+print("== summary", dict(summary))
+
+def per_instance(pattern):
+    groups = defaultdict(list)
+    for tx in frame.tx:
+        if tx.group == pattern:
+            groups[tx.cluster].append(tx)
+    devices = [len({t.device for t in rows}) for rows in groups.values()]
+    merchants = [len({t.merchant for t in rows}) for rows in groups.values()]
+    countries = [len({t.country for t in rows}) for rows in groups.values()]
+    homes = [len(know.home_devices.get(rows[0].account, ())) for rows in groups.values()]
+    sizes = [len(rows) for rows in groups.values()]
+    med = statistics.median
+    print(f"== {pattern}: {len(groups)} instances; tx median {med(sizes)}; distinct devices median {med(devices)} max {max(devices)}; "
+          f"home devices median {med(homes)}; distinct merchants median {med(merchants)}; distinct countries median {med(countries)} max {max(countries)}")
+
+for pattern in ("VELOCITY_ATTACK", "CARD_TESTING"):
+    per_instance(pattern)
