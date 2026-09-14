@@ -892,7 +892,8 @@ def _ingest(
             if guard is not None:
                 guard.observation_unrecorded(HoleReason.REFUSED)
             state.metrics.degraded.add(1, {"reason": REASON_WRITE_FAILED})
-        except Exception:
+        except Exception as exc:
+            log.warning("feature_store_observe_failed", error=type(exc).__name__)
             if guard is not None:
                 guard.observation_unrecorded(HoleReason.UNREACHABLE)
             state.metrics.degraded.add(1, {"reason": REASON_REDIS})

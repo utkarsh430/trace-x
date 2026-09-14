@@ -48,6 +48,7 @@ from trace_core.features.context import Completeness
 from trace_core.features.definitions import ONLINE_FEATURES
 from trace_core.features.observation import transaction_observation
 from trace_core.features.state_plan import PLAN
+from trace_core.observability.logging import get_logger
 from trace_core.repositories.circuit_breaker import CircuitBreaker
 from trace_core.rules.engine import Evaluation, evaluate_pack
 from trace_core.rules.pack import CompiledPack
@@ -62,6 +63,8 @@ omits geography must produce UNAVAILABLE geo features rather than
 INSUFFICIENT_HISTORY ones, because the two mean different things and only one of
 them resolves with time (ADR-0022, ADR-0032).
 """
+
+log = get_logger(__name__)
 
 REASON_REDIS: Final = "redis_unavailable"
 REASON_RATE_LIMIT: Final = "rate_limit_unavailable"
@@ -260,8 +263,11 @@ class ScoringPipeline:
                 )
             except Exception:
                 context = empty
-        except Exception:
-            # Never re-raised: §18 says Redis loss degrades to rules-only and never 5xx.
+        except Exception as exc:
+            # Never re-raised: §18 says Redis loss degrades to rules-only and never 5xx. The
+            # type is logged and the message is not: a Redis error can quote a key, and a key
+            # names an account.
+            log.warning("feature_store_score_failed", error=type(exc).__name__)
             if self.breaker is not None:
                 self.breaker.record_failure()
             if guard is not None:
