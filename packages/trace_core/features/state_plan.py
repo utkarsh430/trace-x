@@ -58,10 +58,11 @@ NEEDS_VELOCITY: Final = frozenset({Aggregation.COUNT})
 divided by `WindowState.count`; since ADR-0046 it divides same-currency sums by the same-currency
 count of its own minute-aligned window, so no velocity set serves it."""
 
-BUCKET_DERIVED: Final = frozenset(
-    {Aggregation.AMOUNT_SUM, Aggregation.DECLINED_RATIO, Aggregation.AMOUNT_CV}
-)
+BUCKET_DERIVED: Final = frozenset({Aggregation.AMOUNT_SUM, Aggregation.AMOUNT_CV})
 """Aggregations answered from the minute-bucket hash.
+
+`DECLINED_RATIO` left this set with feature set 3.0.0 (ADR-0049 §5): it reads authorization
+outcomes, held as their own observations, and never a field a transaction's bucket carries.
 
 Named positively, not as "everything that is not a count": a new aggregation
 should have to say which primitive answers it, and a definition by exclusion

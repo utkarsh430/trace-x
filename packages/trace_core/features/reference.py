@@ -30,15 +30,20 @@ from __future__ import annotations
 
 import datetime as dt
 import functools
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Final
 
-from trace_core.contracts.canonical import CanonicalField
 from trace_core.domain.enums import AuthorizationOutcome, FeatureSource
 from trace_core.domain.time import EventTime, from_millis, to_millis
 from trace_core.features.context import FeatureContext, Observation, Profile, WindowState
-from trace_core.features.observation import POST_DECISION_FIELDS, Event, ObserveReceipt, ServedRead
+from trace_core.features.observation import (
+    Event,
+    IdentityNamespace,
+    ObserveReceipt,
+    ServedRead,
+    Verification,
+)
 from trace_core.features.profile_math import geodesic_medoid, robust_centre
 from trace_core.features.semantics import (
     ALIGNED_MINUTE_MS,
@@ -59,7 +64,6 @@ from trace_core.features.semantics import (
 )
 
 _LIFETIME_GAP_MS: Final = PROFILE_LIFETIME_GAP_S * 1000
-_OUTCOME_IS_POST_DECISION: Final = CanonicalField.AUTHORIZATION_OUTCOME in POST_DECISION_FIELDS
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +132,57 @@ def _aligned(observations: Sequence[Event], *, read: ReadScope, window: Window) 
     ]
 
 
+def verification(outcome: Event, transactions: Mapping[str, str]) -> Verification:
+    """Whether an authorization outcome may reach a feature (ADR-0049 §2).
+
+    `transactions` maps every transaction id the read may see to its account."""
+    account = transactions.get(outcome.event_id)
+    if account is None:
+        return Verification.PENDING
+    if account != outcome.account_id:
+        return Verification.REJECTED
+    return Verification.VERIFIED
+
+
+_OBSERVED_OUTCOMES: Final = frozenset(
+    {AuthorizationOutcome.APPROVED, AuthorizationOutcome.DECLINED}
+)
+
+
+def _outcome_window(
+    observations: Sequence[Event],
+    *,
+    read: ReadScope,
+    window: Window,
+    transactions: Mapping[str, str],
+) -> WindowState | None:
+    """`PRIOR_KNOWN` over authorization outcomes (ADR-0049 §5).
+
+    An outcome counts when it is verified against a transaction the read may see, when it was
+    decided strictly inside `(as_of - W, as_of)`, and when it is not the scored transaction's own,
+    whatever its time. One decided at `as_of` is not yet known; one exactly a window old is outside,
+    as for every window. A value neither approved nor declined counts in neither."""
+    lower_ms = read.as_of_ms - window.seconds * 1000
+    own = None if read.current is None else read.current.event_id
+    members = [
+        e
+        for e in observations
+        if lower_ms < e.occurred_ms < read.as_of_ms
+        and e.event_id != own
+        and verification(e, transactions) is Verification.VERIFIED
+        and e.authorization_outcome in _OBSERVED_OUTCOMES
+    ]
+    if not members:
+        return None
+    return WindowState(
+        count=len(members),
+        declined_count=sum(
+            1 for e in members if e.authorization_outcome is AuthorizationOutcome.DECLINED
+        ),
+        outcome_known_count=len(members),
+    )
+
+
 def window_state(
     observations: Sequence[Event],
     *,
@@ -135,23 +190,20 @@ def window_state(
     entity: Entity,
     stream: Stream,
     window: Window,
+    transactions: Mapping[str, str] | None = None,
 ) -> WindowState | None:
     from trace_core.features.state_plan import PLAN
 
+    if stream is Stream.AUTHORIZATION_OUTCOME:
+        return _outcome_window(
+            observations, read=read, window=window, transactions=transactions or {}
+        )
     declared = _declared_current(entity, stream, window)
     lower_ms = read.as_of_ms - window.seconds * 1000
     members = [
         e for e in observations if _in_window(e, lower_ms=lower_ms, read=read, declared=declared)
     ]
     same_currency = [e for e in members if e.currency == read.currency]
-    # The scored transaction's own outcome is decided after TRACE-X answers; it never
-    # enters its own features (observation.POST_DECISION_FIELDS).
-    outcomes = [
-        e
-        for e in members
-        if e.authorization_outcome is not None
-        and not (_OUTCOME_IS_POST_DECISION and e.identity == read.identity)
-    ]
     contributed = bool(members)
 
     distinct: dict[Dimension, int] = {}
@@ -193,10 +245,6 @@ def window_state(
         count=len(members),
         amount_sum_minor=sum(e.amount_minor for e in same_currency),
         amount_sum_squares=sum(e.amount_minor * e.amount_minor for e in same_currency),
-        declined_count=sum(
-            1 for e in outcomes if e.authorization_outcome is AuthorizationOutcome.DECLINED
-        ),
-        outcome_known_count=len(outcomes),
         distinct=distinct,
         aligned_count=len(aligned),
         aligned_amount_sum_minor=sum(e.amount_minor for e in aligned),
@@ -294,6 +342,10 @@ def build_context(
     from trace_core.features.state_plan import PLAN
 
     read = ReadScope(as_of_ms=as_of_ms, currency=currency, current=current, mode=mode)
+    # Every transaction this read may see, for verifying authorization outcomes (ADR-0049 §5).
+    known_transactions = {
+        e.event_id: e.account_id for e in visible if e.stream is Stream.TRANSACTION
+    }
     windows: dict[tuple[Entity, str, Stream, str], WindowState] = {}
     for entity, entity_id in ids.items():
         if entity_id is None:
@@ -303,7 +355,12 @@ def build_context(
             on_stream = [e for e in mine if e.stream is stream]
             for window in WINDOWS:
                 state = window_state(
-                    on_stream, read=read, entity=entity, stream=stream, window=window
+                    on_stream,
+                    read=read,
+                    entity=entity,
+                    stream=stream,
+                    window=window,
+                    transactions=known_transactions,
                 )
                 if state is not None:
                     windows[(entity, entity_id, stream, window.label)] = state
@@ -374,16 +431,28 @@ class ReferenceFeatureStore:
             self.complete_since = resume_at
 
     def observe(self, event: Event) -> ObserveReceipt:
-        """Record an observation unless its identity already was (ADR-0046 §1)."""
+        """Record an observation unless its identity already was (ADR-0046 §1).
+
+        An authorization outcome's receipt says whether it is verified yet (ADR-0049 §6)."""
         if (first := self._recorded.get(event.identity)) is not None:
             return ObserveReceipt(
                 position=len(self._log),
                 recorded=False,
                 conflicting=first.recorded_form() != event.recorded_form(),
+                verification=self._verification(first),
             )
         self._log.append(event)
         self._recorded[event.identity] = event
-        return ObserveReceipt(position=len(self._log), recorded=True)
+        return ObserveReceipt(
+            position=len(self._log), recorded=True, verification=self._verification(event)
+        )
+
+    def _verification(self, event: Event) -> Verification | None:
+        if event.stream is not Stream.AUTHORIZATION_OUTCOME:
+            return None
+        transaction = self._recorded.get(f"{IdentityNamespace.TRANSACTION.value}:{event.event_id}")
+        known = {} if transaction is None else {transaction.event_id: transaction.account_id}
+        return verification(event, known)
 
     def observe_all(self, events: Iterable[Event]) -> None:
         for event in events:
@@ -475,5 +544,6 @@ __all__ = [
     "event_time_complete_context",
     "lifetime_profile",
     "previous_observation",
+    "verification",
     "window_state",
 ]

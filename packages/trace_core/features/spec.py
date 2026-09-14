@@ -52,7 +52,7 @@ from trace_core.features.semantics import (
     WindowedAggregate,
 )
 
-FEATURE_SET_VERSION: Final = "2.0.0"
+FEATURE_SET_VERSION: Final = "3.0.0"
 """Bumped whenever a feature's MEANING changes.
 
 Recorded on every `RiskDecision` and in every run manifest: a latency or quality
@@ -60,8 +60,12 @@ number produced by a different feature set is not comparable to one produced by
 this one, and a version is how a reader can tell.
 """
 
-SERVED_FEATURES_CONFORM: Final = True
+SERVED_FEATURES_CONFORM: Final = False
 """Whether the online path the gateway runs actually serves `FEATURE_SET_VERSION`.
+
+False again from feature set 3.0.0 (ADR-0049 §5): `declined_ratio_1h` reads verified authorization
+outcomes, which the reference implementation serves and the Redis store and the gateway do not yet.
+It becomes True when they do and ADR-0049 §8's fixtures pass as served.
 
 False from ADR-0046's declaration until Phase 3 Step 1b made the Redis store and the gateway's
 score-time read conform to it: the store passes every literal fixture as served, recording and
@@ -80,7 +84,7 @@ def require_served_conformance(purpose: str) -> None:
             f"{purpose} refused: feature set {FEATURE_SET_VERSION} is declared (ADR-0046) but "
             f"the online store and the gateway's score-time read do not serve it yet, so any "
             f"record would carry a version its values were not computed with. This lifts when "
-            f"Phase 3 Step 1 sets SERVED_FEATURES_CONFORM."
+            f"they serve it and SERVED_FEATURES_CONFORM is set."
         )
 
 

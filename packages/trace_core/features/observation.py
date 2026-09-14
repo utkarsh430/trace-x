@@ -39,8 +39,9 @@ must return in tens of milliseconds"), and `AuthorizationOutcome` is "what the u
 authorization system did with the transaction" -- including `REVERSED`, which can only happen
 later. So a scored transaction's own outcome is post-decision information, and it **never
 contributes to that transaction's own features**: `declined_ratio_1h` counts the current
-observation's outcome as not yet known. Whether prior transactions' outcomes may be taken from
-their scoring requests at all is an open architecture conflict (ADR-0046 §7), not settled here.
+observation's outcome as not yet known. Since ADR-0049 no transaction's outcome is taken from its
+scoring request at all: outcomes arrive as their own dated events on `Stream.AUTHORIZATION_OUTCOME`,
+and a store does not record the field from a transaction.
 """
 
 
@@ -54,12 +55,17 @@ class IdentityNamespace(StrEnum):
 
     IDENTITY_EVENT = "identity_event"
     TRANSACTION = "transaction"
+    TRANSACTION_AUTHORIZATION = "transaction_authorization"
+    """An authorization outcome is identified by its transaction id, in its own namespace, so it
+    never collides with the transaction; the name sorts after `transaction`, so at one
+    millisecond an outcome orders after a transaction (ADR-0049 §5)."""
 
 
 NAMESPACES: Final[dict[Stream, IdentityNamespace]] = {
     Stream.TRANSACTION: IdentityNamespace.TRANSACTION,
     Stream.IDENTITY_FAILED_LOGIN: IdentityNamespace.IDENTITY_EVENT,
     Stream.IDENTITY_CHANGE: IdentityNamespace.IDENTITY_EVENT,
+    Stream.AUTHORIZATION_OUTCOME: IdentityNamespace.TRANSACTION_AUTHORIZATION,
 }
 """Declared per stream, never defaulted: a namespace also decides the order at one millisecond,
 so a new stream must say which it belongs to."""
@@ -145,7 +151,13 @@ class Event:
         Event time at the declared millisecond, and no post-decision field: a retry that only
         reports the authorization outcome learned since carries the same observation (ADR-0046 §7).
         """
-        skipped = {field.value for field in POST_DECISION_FIELDS}
+        # On the outcome stream the outcome IS the observation (ADR-0049 §6), so a redelivery with
+        # another outcome is a conflict there, and only there.
+        skipped = (
+            set()
+            if self.stream is Stream.AUTHORIZATION_OUTCOME
+            else {field.value for field in POST_DECISION_FIELDS}
+        )
         return tuple(
             self.occurred_ms if f.name == "occurred_at" else getattr(self, f.name)
             for f in dataclasses.fields(self)
@@ -175,6 +187,17 @@ class Event:
         return self.channel is TransactionChannel.CARD_PRESENT
 
 
+class Verification(StrEnum):
+    """Whether an authorization outcome may reach a feature (ADR-0049 §2)."""
+
+    VERIFIED = "VERIFIED"
+    """Its transaction, with the same account, is known."""
+    PENDING = "PENDING"
+    """Its transaction is not known yet. It reaches no feature until it is."""
+    REJECTED = "REJECTED"
+    """Its transaction is known with another account. It never reaches a feature."""
+
+
 @dataclass(frozen=True, slots=True)
 class ObserveReceipt:
     """What a store reports after it was asked to record an observation."""
@@ -192,6 +215,9 @@ class ObserveReceipt:
     """True when the identity had been recorded with a different observation -- another account,
     amount, time or place. The first delivery stays the observation (ADR-0046 §1), so a context a
     score returns is the first delivery's and must not be read as this payload's."""
+    verification: Verification | None = None
+    """For an authorization outcome: whether it may reach a feature yet, as the store stands after
+    this call (ADR-0049 §6). None for every other stream."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,7 +233,10 @@ class ServedRead:
 
 
 def transaction_observation(transaction: CanonicalTransaction) -> Event:
-    """The observation a scored transaction becomes. One mapping, shared by every implementation."""
+    """The observation a scored transaction becomes. One mapping, shared by every implementation.
+
+    Its own `authorization_outcome` is not recorded (ADR-0049 §3): it is post-decision, and every
+    outcome reaches the store as its own dated event (`authorization_observation`)."""
     return Event(
         stream=Stream.TRANSACTION,
         occurred_at=EventTime(transaction.occurred_at),
@@ -224,7 +253,34 @@ def transaction_observation(transaction: CanonicalTransaction) -> Event:
         latitude=transaction.latitude,
         longitude=transaction.longitude,
         channel=transaction.channel,
-        authorization_outcome=transaction.authorization_outcome,
+        authorization_outcome=None,
+    )
+
+
+_OBSERVED_OUTCOMES: Final = frozenset(
+    {AuthorizationOutcome.APPROVED, AuthorizationOutcome.DECLINED}
+)
+
+
+def authorization_observation(
+    *,
+    transaction_id: str,
+    account_id: str,
+    authorization_outcome: AuthorizationOutcome,
+    decided_at: EventTime,
+) -> Event:
+    """The observation an authorization outcome becomes: identified by its transaction, dated when
+    it was decided (ADR-0049 §5). Only approvals and declines are observations."""
+    if authorization_outcome not in _OBSERVED_OUTCOMES:
+        raise ValueError(
+            f"{authorization_outcome} is not an observed authorization outcome (ADR-0049 §2)"
+        )
+    return Event(
+        stream=Stream.AUTHORIZATION_OUTCOME,
+        occurred_at=decided_at,
+        account_id=account_id,
+        event_id=transaction_id,
+        authorization_outcome=authorization_outcome,
     )
 
 
@@ -234,6 +290,8 @@ __all__ = [
     "IdentityNamespace",
     "ObserveReceipt",
     "ServedRead",
+    "Verification",
+    "authorization_observation",
     "namespace_of",
     "transaction_observation",
 ]

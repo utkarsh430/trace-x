@@ -83,22 +83,44 @@ MUTANTS: Final[tuple[Mutant, ...]] = (
         (
             (
                 "reference",
-                "        and not (_OUTCOME_IS_POST_DECISION and e.identity == read.identity)\n",
+                "        and e.event_id != own\n",
                 "",
             ),
         ),
         "test_the_declined_ratio_never_reads_the_scored_transactions_own_outcome",
     ),
     Mutant(
-        "the declined ratio confined to one currency",
+        "an outcome reported for another account counted",
         (
             (
                 "reference",
-                "        for e in members\n        if e.authorization_outcome is not None",
-                "        for e in same_currency\n        if e.authorization_outcome is not None",
+                "    if account != outcome.account_id:\n        return Verification.REJECTED\n",
+                "",
             ),
         ),
-        "test_the_declined_ratio_spans_currencies",
+        "test_an_outcome_reported_for_another_account_never_counts",
+    ),
+    Mutant(
+        "a pending outcome counted",
+        (
+            (
+                "reference",
+                "        return Verification.PENDING\n",
+                "        return Verification.VERIFIED\n",
+            ),
+        ),
+        "test_a_pending_outcome_never_counts",
+    ),
+    Mutant(
+        "an outcome decided at as_of counted",
+        (
+            (
+                "reference",
+                "        if lower_ms < e.occurred_ms < read.as_of_ms\n",
+                "        if lower_ms < e.occurred_ms <= read.as_of_ms\n",
+            ),
+        ),
+        "test_the_outcome_window_is_open_at_both_edges",
     ),
     Mutant(
         "an observation exactly a window old counted",
@@ -640,8 +662,8 @@ MUTANTS: Final[tuple[Mutant, ...]] = (
         (
             (
                 "reference",
-                "        count=len(members),\n",
-                "        count=len([e for e in members if e.stream is not Stream.TRANSACTION or e.currency == read.currency]),\n",
+                "        count=len(members),\n        amount_sum_minor=",
+                "        count=len([e for e in members if e.stream is not Stream.TRANSACTION or e.currency == read.currency]),\n        amount_sum_minor=",
             ),
         ),
         "test_transaction_counts_span_currencies",

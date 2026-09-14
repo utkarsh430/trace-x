@@ -25,6 +25,8 @@ from trace_core.features.observation import (
     Event,
     IdentityNamespace,
     ObserveReceipt,
+    Verification,
+    authorization_observation,
 )
 from trace_core.features.profile_math import geodesic_medoid, robust_centre, whole_metres
 from trace_core.features.reference import ReferenceFeatureStore
@@ -86,8 +88,9 @@ def _tx(event_id: str, seconds: int) -> Event:
     )
 
 
-def test_the_feature_set_version_is_the_one_adr_0046_declares() -> None:
-    assert FEATURE_SET_VERSION == "2.0.0"
+def test_the_feature_set_version_is_the_one_adr_0049_declares() -> None:
+    """3.0.0: `declined_ratio_1h` changed its stream, time axis, verification and self-exclusion."""
+    assert FEATURE_SET_VERSION == "3.0.0"
 
 
 def test_every_identity_event_type_has_a_declared_stream() -> None:
@@ -105,7 +108,12 @@ def test_whether_the_scored_transaction_counts_is_declared_per_feature() -> None
     assert excluded == EXCLUDES_THE_SCORED_TRANSACTION
     for spec in ONLINE_FEATURES:
         if isinstance(spec.semantics, WindowedAggregate):
-            assert spec.current_observation is CurrentObservation.INCLUDED, spec.feature_id
+            expected = (
+                CurrentObservation.PRIOR_KNOWN
+                if spec.semantics.stream is Stream.AUTHORIZATION_OUTCOME
+                else CurrentObservation.INCLUDED
+            )
+            assert spec.current_observation is expected, spec.feature_id
 
 
 def test_a_registry_refuses_two_readings_of_one_window() -> None:
@@ -203,10 +211,88 @@ def test_the_identity_namespaces_and_their_order_are_pinned() -> None:
     """At one millisecond the namespace decides inclusion (ADR-0046 §1). A new namespace or a
     renamed one changes which same-millisecond observations a window holds, so it is a declared
     change, never a spelling accident."""
-    assert sorted(ns.value for ns in IdentityNamespace) == ["identity_event", "transaction"]
+    assert sorted(ns.value for ns in IdentityNamespace) == [
+        "identity_event",
+        "transaction",
+        "transaction_authorization",
+    ]
     assert set(NAMESPACES) == set(Stream)
     assert NAMESPACES == {
         Stream.TRANSACTION: IdentityNamespace.TRANSACTION,
         Stream.IDENTITY_FAILED_LOGIN: IdentityNamespace.IDENTITY_EVENT,
         Stream.IDENTITY_CHANGE: IdentityNamespace.IDENTITY_EVENT,
+        Stream.AUTHORIZATION_OUTCOME: IdentityNamespace.TRANSACTION_AUTHORIZATION,
     }
+    # ADR-0049 §5: at one millisecond an outcome orders after a transaction.
+    assert IdentityNamespace.TRANSACTION.value < IdentityNamespace.TRANSACTION_AUTHORIZATION.value
+
+
+# ------------------------------------------ ADR-0049: authorization outcomes ----
+
+
+def test_a_window_over_outcomes_must_declare_prior_known() -> None:
+    with pytest.raises(ValueError, match="PRIOR_KNOWN"):
+        WindowedAggregate(
+            Entity.ACCOUNT,
+            ONE_MINUTE,
+            Aggregation.DECLINED_RATIO,
+            stream=Stream.AUTHORIZATION_OUTCOME,
+        )
+
+
+def test_prior_known_is_refused_on_any_other_stream() -> None:
+    with pytest.raises(ValueError, match="post-decision"):
+        WindowedAggregate(
+            Entity.ACCOUNT,
+            ONE_MINUTE,
+            Aggregation.COUNT,
+            current_observation=CurrentObservation.PRIOR_KNOWN,
+        )
+
+
+def test_a_declined_ratio_is_refused_on_any_other_stream() -> None:
+    with pytest.raises(ValueError, match="authorization outcomes"):
+        WindowedAggregate(Entity.ACCOUNT, ONE_MINUTE, Aggregation.DECLINED_RATIO)
+
+
+def test_an_outcome_is_identified_by_its_transaction_and_its_outcome_is_the_observation() -> None:
+    first = authorization_observation(
+        transaction_id="tx_1",
+        account_id="acct_000001",
+        authorization_outcome=AuthorizationOutcome.APPROVED,
+        decided_at=T0,
+    )
+    assert first.identity == "transaction_authorization:tx_1"
+    changed = dataclasses.replace(first, authorization_outcome=AuthorizationOutcome.DECLINED)
+    assert first.recorded_form() != changed.recorded_form()
+    with pytest.raises(ValueError, match="not an observed"):
+        authorization_observation(
+            transaction_id="tx_1",
+            account_id="acct_000001",
+            authorization_outcome=AuthorizationOutcome.UNKNOWN,
+            decided_at=T0,
+        )
+
+
+def test_the_reference_store_verifies_an_outcome_against_its_transaction() -> None:
+    """ADR-0049 §6: pending until its transaction is recorded, then verified or rejected."""
+    store = ReferenceFeatureStore()
+    decided = event_time(T0 + dt.timedelta(seconds=1))
+    pending = authorization_observation(
+        transaction_id="tx_1",
+        account_id="acct_000001",
+        authorization_outcome=AuthorizationOutcome.DECLINED,
+        decided_at=decided,
+    )
+    assert store.observe(pending).verification is Verification.PENDING
+    assert store.observe(_tx("tx_1", 0)).verification is None
+    redelivered = store.observe(pending)
+    assert not redelivered.recorded and redelivered.verification is Verification.VERIFIED
+    store.observe(_tx("tx_2", 0))
+    mismatch = authorization_observation(
+        transaction_id="tx_2",
+        account_id="acct_000009",
+        authorization_outcome=AuthorizationOutcome.DECLINED,
+        decided_at=decided,
+    )
+    assert store.observe(mismatch).verification is Verification.REJECTED

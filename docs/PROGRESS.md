@@ -75,8 +75,11 @@ exit condition; each is owned by a Phase 3 step.
   Step 1, which re-runs the load gate, the manual replay and rule validation on the new values.
 * **`authorization_outcome` is post-decision information carried by a pre-decision contract**
   (ADR-0046 §7). Step 1 keeps a transaction's own outcome out of its own features. U7, decided on
-  2026-09-14, makes authorization decisions their own dated events (ADR-0049, Proposed). It is not
-  implemented yet: until Stage 2 step 7, earlier outcomes still come from scoring requests.
+  2026-09-14, makes authorization decisions their own dated events (ADR-0049, Proposed). Stage 2
+  step 7 is implementing it. Unit 2a declared feature set 3.0.0, in which a scoring request's
+  outcome reaches no feature, and the reference implementation serves it. Until unit 2b, the Redis
+  store and the gateway serve no outcome, so the served `declined_ratio_1h` is always insufficient
+  history, and run records are refused (`SERVED_FEATURES_CONFORM` is False).
 * **Phase 2's manual replay predates ADR-0044.** `benchmarks/gateway/triage-bands.md` was generated
   (`42f907c`) hours before completeness gating existed (`5c77025`), so its profile rules fired on a
   store that could not tell "not known" from "cannot tell". Replayed again by its own commit on a
@@ -547,14 +550,15 @@ both reports.
     Self-tests on hand-built rows cover every check at its stated boundaries, plus a smoke run on a
     small eval-v1-configured generation.
 
-    **Until ADR-0049 is implemented (step 7), every run is invalid or fails for two known
-    reasons:**
-    - no availability provider exists for feature set 3.0.0 (§4.6);
-    - `tx.authorization.v1` has no released schema, which S2c rule 1 flags.
+    **Until ADR-0049 is implemented (step 7), every run is invalid or fails.** Two known reasons,
+    one since resolved:
+    - no availability provider exists for feature set 3.0.0 (§4.6); step 7 unit 3 adds it;
+    - `tx.authorization.v1` had no released schema, which S2c rule 1 flags. Step 7 unit 1
+      released it.
 
-    **No code names the outcome topic yet.** The topic release gate forbids naming an unreleased
-    topic, so the OUT population is recorded as unreleased: outcome rows are derived only, and
-    step 7 sets the stream when it releases the schema.
+    **The outcome topic is named since step 7 unit 1.** Before it, the topic release gate forbade
+    naming an unreleased topic, so the OUT population was recorded as unreleased. Unit 1 set the
+    stream when it released the schema.
 
     **Verification slip, fixed.** Commit `78ad5ea` was made while `make verify` failed. Its output
     was piped through `grep`, which hid the exit status. Two gates had failed:
@@ -670,7 +674,7 @@ both reports.
 | U4 | Whether the Skeptic agent pays for its cost | Phase 9 Arm F — `UNUSUAL_LOCATION_DEVICE` was built deliberately ambiguous to give this ablation something real to measure |
 | U5 | LightGBM vs XGBoost on measured PR-AUC | Phase 4 |
 | U6 | Whether Phase 13 (Go gateway) is worth doing | Phase 13 entry |
-| **U7** | **Decided 2026-09-14: authorization decisions are their own dated events.** A transaction's own outcome is post-decision and never enters its own features. Outcomes arrive as `tx.authorization.v1` events (field `authorization_outcome`). PostgreSQL records them first and decides duplicates and conflicts; the Redis store holds derived state only. An outcome is pending until its transaction is known with the same account, and pending outcomes never count. `declined_ratio_1h` reads only verified outcomes decided before `as_of` and known before the read, never the scored transaction's own (`CurrentObservation.PRIOR_KNOWN`, feature set 3.0.0). Historical sources replay the transaction first and the decision after it, through the declared delay model DM-1. Designed in ADR-0049 (Proposed). **Not implemented:** until Stage 2 step 7, earlier outcomes still come from scoring requests | Decided; implementation in Stage 2 step 7 |
+| **U7** | **Decided 2026-09-14: authorization decisions are their own dated events.** A transaction's own outcome is post-decision and never enters its own features. Outcomes arrive as `tx.authorization.v1` events (field `authorization_outcome`). PostgreSQL records them first and decides duplicates and conflicts; the Redis store holds derived state only. An outcome is pending until its transaction is known with the same account, and pending outcomes never count. `declined_ratio_1h` reads only verified outcomes decided before `as_of` and known before the read, never the scored transaction's own (`CurrentObservation.PRIOR_KNOWN`, feature set 3.0.0). Historical sources replay the transaction first and the decision after it, through the declared delay model DM-1. Designed in ADR-0049 (Proposed). **Partly implemented (Stage 2 step 7):** the stream and its producers (unit 1), the declaration and the reference implementation (unit 2a). Until unit 2b, the served `declined_ratio_1h` is always insufficient history | Decided; implementation in Stage 2 step 7 |
 | **U9** | **Decided 2026-09-14: snake_case** for every data-platform identifier -- schema and table identifiers and the lake directories derived from them, streaming query and checkpoint names, Delta transaction app ids, Databricks job and task identifiers, and metric and manifest identifiers for the same logical name. CLAUDE.md §6 amended narrowly; no mapping layer; a consistency test pins it (ADR-0048) | Decided |
 | **U10** | **Decided 2026-09-14: R010 stays at `device_distinct_accounts_24h >= 5`.** The `eval-v1` replay delta -- 9 more legitimate and 3 more fraud high-risk decisions, all attributed to self-inclusion -- is expected semantic drift, not a regression. Not retuned on `eval-v1`, whose device-related label proxies would fit the ruleset to a flawed dataset. A threshold study follows on `eval-v2` (NEXT EXECUTABLE TASKS); any change is a separate, versioned ruleset decision | Decided |
 
@@ -790,11 +794,34 @@ Phase 3, in the wave order of `docs/PHASE3_PLAN.md` §5:
         - **Implementation reading, for review.** The gateway uses the transaction id as the
           outcome's correlation id, and the request's trace, as triage does: it holds no record of
           the transaction's own ids.
-      - **Unit 2 next: feature set 3.0.0.**
-        - `Stream.AUTHORIZATION_OUTCOME` and `PRIOR_KNOWN`.
-        - `declined_ratio_1h` over verified outcomes, in the reference and Redis stores.
-        - Online apply, with verification, pending outcomes and reconciliation.
-        - Fixtures F1–F17 and their mutations.
+      - **Unit 2a done: feature set 3.0.0, declared and served by the reference implementation.**
+        - `Stream.AUTHORIZATION_OUTCOME` and `CurrentObservation.PRIOR_KNOWN`. Each requires the
+          other, and the declined ratio is declared only on that stream.
+        - `declined_ratio_1h` reads outcome events decided strictly inside `(as_of - 1h, as_of)`,
+          never the scored transaction's own. A scoring request's outcome reaches no feature.
+        - An outcome is verified against the transactions the read may see: pending while its
+          transaction is unknown, rejected when the accounts differ. Only verified outcomes count,
+          and the reference store's receipts report which applies.
+        - Literal fixtures F1–F5, F7, F8, F10–F12, F16 and F17 in both evaluation modes, with
+          mutants for the scored transaction's own outcome, another account's outcome, a pending
+          outcome, and an outcome decided at `as_of`.
+        - **Two harness gaps found by the mutation run, fixed before commit.**
+          - The currency mutant's target line now also appeared in the outcome window, so it no
+            longer named one rule.
+          - F17 could not catch a zero ratio: without a completeness bound no window reached the
+            definition's guard. It now also scores from a store watched over the whole window,
+            whose empty window is a measured zero.
+        - **The served values do not conform, and this is enforced.** `SERVED_FEATURES_CONFORM` is
+          False, so gateway replay and load-test records are refused. The Redis store serves no
+          outcome yet, so the seven outcome fixtures fail as served on Redis, all as insufficient
+          history. `P3.semantics-hardening` is back to IN_PROGRESS until they pass.
+      - **Unit 2b next: Redis and the gateway serve 3.0.0.**
+        - Redis outcome state: verified outcomes per account, pending outcomes with an expiry,
+          reconciliation when their transaction is recorded.
+        - Online apply after the durable record: 409 on an account mismatch; a degraded counter and
+          a completeness hole when the store fails.
+        - F9, F13 and F14 against real Redis. `SERVED_FEATURES_CONFORM` becomes True once every
+          fixture passes as served.
       - **Then:** replay (the fourth stream, and derivation for eval-v1) and the `LPC-5`
         availability provider.
    8. Ablation controls.

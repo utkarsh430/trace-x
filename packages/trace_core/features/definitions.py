@@ -59,6 +59,7 @@ from trace_core.features.semantics import (
 from trace_core.features.semantics import (
     Aggregation,
     CardinalityStorage,
+    CurrentObservation,
     Dimension,
     Entity,
     PairwiseMetric,
@@ -219,12 +220,18 @@ _register_window(
     _count(_spec),
 )
 
-_spec = WindowedAggregate(Entity.ACCOUNT, W1H, Aggregation.DECLINED_RATIO)
+_spec = WindowedAggregate(
+    Entity.ACCOUNT,
+    W1H,
+    Aggregation.DECLINED_RATIO,
+    stream=Stream.AUTHORIZATION_OUTCOME,
+    current_observation=CurrentObservation.PRIOR_KNOWN,
+)
 _register_window(
     "declined_ratio_1h",
-    "Share of this account's authorised-or-declined transactions in the last hour "
-    "that were declined. A high ratio is the card-testing tell that survives when "
-    "amounts are deliberately small.",
+    "Share of this account's verified authorization outcomes decided in the last hour, and known "
+    "before this transaction was scored, that were declines. A high ratio is the card-testing tell "
+    "that survives when amounts are deliberately small.",
     _ACCOUNT_TX | {F.AUTHORIZATION_OUTCOME},
     _spec,
     _declined_ratio(_spec),

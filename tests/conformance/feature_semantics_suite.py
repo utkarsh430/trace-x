@@ -46,7 +46,11 @@ from trace_core.domain.enums import AuthorizationOutcome, TransactionChannel
 from trace_core.domain.time import EventTime, event_time
 from trace_core.features import FeatureContext, FeatureState
 from trace_core.features.definitions import ONLINE_FEATURES
-from trace_core.features.observation import Event, transaction_observation
+from trace_core.features.observation import (
+    Event,
+    authorization_observation,
+    transaction_observation,
+)
 from trace_core.features.semantics import ParityComparison, Stream
 
 T0: Final = event_time(dt.datetime(2026, 3, 1, 12, 0, 0, tzinfo=dt.UTC))
@@ -144,6 +148,22 @@ def identity_event(
     event_id: str, *, stream: Stream, occurred_at: EventTime, account_id: str = ACCOUNT
 ) -> Event:
     return Event(stream=stream, occurred_at=occurred_at, account_id=account_id, event_id=event_id)
+
+
+def outcome_event(
+    transaction_id: str,
+    *,
+    decided_at: EventTime,
+    outcome: AuthorizationOutcome = AuthorizationOutcome.DECLINED,
+    account_id: str = ACCOUNT,
+) -> Event:
+    """An authorization outcome for `transaction_id`, decided at `decided_at` (ADR-0049)."""
+    return authorization_observation(
+        transaction_id=transaction_id,
+        account_id=account_id,
+        authorization_outcome=outcome,
+        decided_at=decided_at,
+    )
 
 
 def transaction(
@@ -472,42 +492,142 @@ class FeatureSemanticsConformanceSuite(ABC):
             [Expectation("account_amount_sum_1h", 9_999 + 700)],
         )
 
+    # -- the declined ratio: verified outcomes known before the score (ADR-0049 §5, §8) --------
+
     def test_the_declined_ratio_never_reads_the_scored_transactions_own_outcome(self) -> None:
-        """Its outcome is decided after TRACE-X answers (ADR-0046 §7). Counted, it would read
-        3/4 for a declined subject and 2/4 for an approved one."""
-        history = [
-            tx_event(
-                "tx_d1", occurred_at=at(-10), authorization_outcome=AuthorizationOutcome.DECLINED
-            ),
-            tx_event(
-                "tx_d2", occurred_at=at(-20), authorization_outcome=AuthorizationOutcome.DECLINED
-            ),
-            tx_event(
-                "tx_a1", occurred_at=at(-30), authorization_outcome=AuthorizationOutcome.APPROVED
-            ),
-            tx_event("tx_n1", occurred_at=at(-40), authorization_outcome=None),
-        ]
-        for outcome in (AuthorizationOutcome.DECLINED, AuthorizationOutcome.APPROVED):
+        """F1. The scored transaction's own outcome is recorded before it is scored -- at its own
+        millisecond, and in a variant dated before it. Counted, the ratio would read 2/3."""
+        for own_decided_at in (T0, at_ms(-5)):
+            history = [
+                tx_event("tx_d1", occurred_at=at(-30), authorization_outcome=None),
+                tx_event("tx_a1", occurred_at=at(-25), authorization_outcome=None),
+                outcome_event("tx_d1", decided_at=at_ms(-19_700)),
+                outcome_event("tx_a1", decided_at=at(-10), outcome=AuthorizationOutcome.APPROVED),
+                outcome_event(SUBJECT, decided_at=own_decided_at),
+            ]
             self.check(
                 history,
-                transaction(authorization_outcome=outcome),
-                [Expectation("declined_ratio_1h", 2 / 3, tolerance=FLOAT)],
+                transaction(authorization_outcome=None),
+                [Expectation("declined_ratio_1h", 1 / 2, tolerance=FLOAT)],
             )
 
-    def test_the_declined_ratio_spans_currencies(self) -> None:
+    def test_an_outcome_known_before_a_later_score_counts(self) -> None:
+        """F2."""
+        history = [
+            tx_event("tx_s0", occurred_at=at(-10), authorization_outcome=None),
+            outcome_event("tx_s0", decided_at=at_ms(-9_700)),
+        ]
+        self.check(history, transaction(), [Expectation("declined_ratio_1h", 1.0, tolerance=FLOAT)])
+
+    def test_a_duplicate_outcome_counts_once(self) -> None:
+        """F4. A redelivery carries the same outcome and contributes nothing."""
+        history = [
+            tx_event("tx_d1", occurred_at=at(-30), authorization_outcome=None),
+            tx_event("tx_a1", occurred_at=at(-25), authorization_outcome=None),
+            outcome_event("tx_d1", decided_at=at(-20)),
+            outcome_event("tx_d1", decided_at=at(-20)),
+            outcome_event("tx_a1", decided_at=at(-15), outcome=AuthorizationOutcome.APPROVED),
+        ]
+        self.check(
+            history, transaction(), [Expectation("declined_ratio_1h", 1 / 2, tolerance=FLOAT)]
+        )
+
+    def test_a_conflicting_outcome_never_replaces_the_first(self) -> None:
+        """F5. The first delivery stays the observation, so the ratio reads the approval."""
+        history = [
+            tx_event("tx_x1", occurred_at=at(-30), authorization_outcome=None),
+            outcome_event("tx_x1", decided_at=at(-20), outcome=AuthorizationOutcome.APPROVED),
+            outcome_event("tx_x1", decided_at=at(-20), outcome=AuthorizationOutcome.DECLINED),
+        ]
+        self.check(history, transaction(), [Expectation("declined_ratio_1h", 0.0, tolerance=FLOAT)])
+
+    def test_an_outcome_decided_at_the_scored_millisecond_is_not_yet_known(self) -> None:
+        """F7. Neither the scored transaction's own outcome at T nor another's counts, in either
+        recording order."""
+        subject = transaction()
+        known = tx_event("tx_y1", occurred_at=at(-5), authorization_outcome=None)
+        theirs = outcome_event("tx_y1", decided_at=T0)
+        own = outcome_event(SUBJECT, decided_at=T0)
+        self.check(
+            [known, theirs, own],
+            subject,
+            [Expectation("declined_ratio_1h", None, state=INSUFFICIENT)],
+        )
+        log = [known, transaction_observation(subject), theirs, own]
+        self.check_log(
+            log, 1, subject, [Expectation("declined_ratio_1h", None, state=INSUFFICIENT)]
+        )
+
+    def test_the_outcome_window_is_open_at_both_edges(self) -> None:
+        """F8. Decided exactly a window before is outside, a millisecond later is inside, and at
+        the scored millisecond is not yet known: only the declined outcome counts."""
+        history = [
+            tx_event("tx_e1", occurred_at=at(-7_200), authorization_outcome=None),
+            tx_event("tx_e2", occurred_at=at(-7_100), authorization_outcome=None),
+            tx_event("tx_e3", occurred_at=at(-10), authorization_outcome=None),
+            outcome_event(
+                "tx_e1", decided_at=at_ms(-3_600_000), outcome=AuthorizationOutcome.APPROVED
+            ),
+            outcome_event("tx_e2", decided_at=at_ms(-3_599_999)),
+            outcome_event("tx_e3", decided_at=T0, outcome=AuthorizationOutcome.APPROVED),
+        ]
+        self.check(history, transaction(), [Expectation("declined_ratio_1h", 1.0, tolerance=FLOAT)])
+
+    def test_a_pending_outcome_never_counts(self) -> None:
+        """F10. No transaction for it is known."""
+        self.check(
+            [outcome_event("tx_p1", decided_at=at(-20))],
+            transaction(),
+            [Expectation("declined_ratio_1h", None, state=INSUFFICIENT)],
+        )
+
+    def test_a_pending_outcome_counts_once_its_transaction_is_known(self) -> None:
+        """F11. Its verifying transaction never counts its own outcome; a later score does."""
+        pending = outcome_event("tx_p1", decided_at=at(-20))
+        promoted = tx_event("tx_p1", occurred_at=at(-25), authorization_outcome=None)
+        self.check(
+            [pending, promoted],
+            transaction(),
+            [Expectation("declined_ratio_1h", 1.0, tolerance=FLOAT)],
+        )
+        own = transaction(occurred_at=at(-25), transaction_id="tx_p1", authorization_outcome=None)
+        self.check([pending], own, [Expectation("declined_ratio_1h", None, state=INSUFFICIENT)])
+
+    def test_an_outcome_reported_for_another_account_never_counts(self) -> None:
+        """F12. Its transaction is known with a different account, so it is rejected."""
+        history = [
+            outcome_event("tx_m1", decided_at=at(-20)),
+            tx_event(
+                "tx_m1", occurred_at=at(-25), account_id=OTHER_ACCOUNT, authorization_outcome=None
+            ),
+        ]
+        self.check(
+            history, transaction(), [Expectation("declined_ratio_1h", None, state=INSUFFICIENT)]
+        )
+
+    def test_the_transaction_field_is_never_read(self) -> None:
+        """F16. Earlier transactions say DECLINED in their own field, and no outcome is known."""
         history = [
             tx_event(
-                "tx_eur",
-                occurred_at=at(-10),
-                currency="EUR",
-                authorization_outcome=AuthorizationOutcome.DECLINED,
+                "tx_f1", occurred_at=at(-10), authorization_outcome=AuthorizationOutcome.DECLINED
             ),
             tx_event(
-                "tx_gbp",
-                occurred_at=at(-20),
-                currency="GBP",
-                authorization_outcome=AuthorizationOutcome.APPROVED,
+                "tx_f2", occurred_at=at(-20), authorization_outcome=AuthorizationOutcome.DECLINED
             ),
+        ]
+        self.check(
+            history,
+            transaction(authorization_outcome=AuthorizationOutcome.DECLINED),
+            [Expectation("declined_ratio_1h", None, state=INSUFFICIENT)],
+        )
+
+    def test_the_declined_ratio_spans_currencies(self) -> None:
+        """F17. Outcomes carry no currency; the ratio covers every transaction's."""
+        history = [
+            tx_event("tx_eur", occurred_at=at(-30), currency="EUR", authorization_outcome=None),
+            tx_event("tx_gbp", occurred_at=at(-25), currency="GBP", authorization_outcome=None),
+            outcome_event("tx_eur", decided_at=at(-10)),
+            outcome_event("tx_gbp", decided_at=at(-20), outcome=AuthorizationOutcome.APPROVED),
         ]
         self.check(
             history,
@@ -516,11 +636,18 @@ class FeatureSemanticsConformanceSuite(ABC):
         )
 
     def test_the_declined_ratio_is_absent_when_no_earlier_outcome_is_known(self) -> None:
-        self.check(
-            [tx_event("tx_n1", occurred_at=at(-10), authorization_outcome=None)],
-            transaction(authorization_outcome=AuthorizationOutcome.DECLINED),
-            [Expectation("declined_ratio_1h", None, state=INSUFFICIENT)],
-        )
+        """F17. No outcome in the window is not a zero ratio.
+
+        Also from a store watched over the whole window, whose empty window is a measured zero:
+        zero known outcomes is still no denominator."""
+        history = [tx_event("tx_n1", occurred_at=at(-10), authorization_outcome=None)]
+        for complete_since in (None, WATCHED_LONG_ENOUGH):
+            self.check(
+                history,
+                transaction(),
+                [Expectation("declined_ratio_1h", None, state=INSUFFICIENT)],
+                complete_since=complete_since,
+            )
 
     def test_merchant_cv_reads_same_currency_whole_minutes_plus_the_scored_transaction(
         self,
@@ -1373,7 +1500,7 @@ class FeatureSemanticsConformanceSuite(ABC):
             "account_tx_count_24h": 1.0,
             "account_amount_sum_1h": 5_000.0,
             "card_tx_count_5m": 1.0,
-            "declined_ratio_1h": None,  # its own outcome is not known when it is scored
+            "declined_ratio_1h": None,  # no outcome is known, and its own never counts
             "account_distinct_merchants_1h": 1.0,
             "account_distinct_mcc_5m": 1.0,
             "account_distinct_devices_24h": 1.0,
@@ -1407,6 +1534,30 @@ class FeatureSemanticsConformanceSuite(ABC):
 
 class AsServedConformanceSuite(FeatureSemanticsConformanceSuite):
     """What an online store serves: nothing delivered after the scored transaction counts."""
+
+    def test_an_outcome_recorded_after_the_score_cannot_change_it(self) -> None:
+        """F3 as served: the outcome arrived after the read."""
+        subject = transaction()
+        known = tx_event("tx_x1", occurred_at=at(-10), authorization_outcome=None)
+        late = outcome_event("tx_x1", decided_at=at_ms(-9_700))
+        self.check_log(
+            [known, transaction_observation(subject), late],
+            1,
+            subject,
+            [Expectation("declined_ratio_1h", None, state=INSUFFICIENT)],
+        )
+
+    def test_an_outcome_verified_after_the_score_does_not_count_in_it(self) -> None:
+        """F3 as served: the outcome was recorded first, its transaction only after the read."""
+        subject = transaction()
+        early = outcome_event("tx_x1", decided_at=at_ms(-9_700))
+        late = tx_event("tx_x1", occurred_at=at(-10), authorization_outcome=None)
+        self.check_log(
+            [early, transaction_observation(subject), late],
+            1,
+            subject,
+            [Expectation("declined_ratio_1h", None, state=INSUFFICIENT)],
+        )
 
     def test_a_same_millisecond_observation_counts_only_if_it_was_recorded_first(self) -> None:
         """At T0: `tx_zzz` (1 000) delivered first, the scored `tx_mmm` (5 000), then `tx_aaa`
@@ -1466,6 +1617,30 @@ class AsServedConformanceSuite(FeatureSemanticsConformanceSuite):
 
 class EventTimeCompleteConformanceSuite(FeatureSemanticsConformanceSuite):
     """What a complete history says: arrival order only decides which delivery came first."""
+
+    def test_an_outcome_recorded_after_the_score_counts_in_a_complete_history(self) -> None:
+        """F3 complete: arrival order is irrelevant, so the late outcome counts."""
+        subject = transaction()
+        known = tx_event("tx_x1", occurred_at=at(-10), authorization_outcome=None)
+        late = outcome_event("tx_x1", decided_at=at_ms(-9_700))
+        self.check_log(
+            [known, transaction_observation(subject), late],
+            1,
+            subject,
+            [Expectation("declined_ratio_1h", 1.0, tolerance=FLOAT)],
+        )
+
+    def test_an_outcome_whose_transaction_arrived_later_counts_in_a_complete_history(self) -> None:
+        """F3 complete: its transaction exists in the complete history, whatever the order."""
+        subject = transaction()
+        early = outcome_event("tx_x1", decided_at=at_ms(-9_700))
+        late = tx_event("tx_x1", occurred_at=at(-10), authorization_outcome=None)
+        self.check_log(
+            [early, transaction_observation(subject), late],
+            1,
+            subject,
+            [Expectation("declined_ratio_1h", 1.0, tolerance=FLOAT)],
+        )
 
     def test_same_millisecond_ties_break_by_identity_whatever_the_arrival_order(self) -> None:
         """At T0: `tx_aaa` (300) sorts before the scored `tx_mmm` (5 000); `tx_zzz` (1 000)

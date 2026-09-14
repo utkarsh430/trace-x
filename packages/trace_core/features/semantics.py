@@ -70,6 +70,10 @@ class Stream(StrEnum):
     TRANSACTION = "TRANSACTION"
     IDENTITY_FAILED_LOGIN = "IDENTITY_FAILED_LOGIN"
     IDENTITY_CHANGE = "IDENTITY_CHANGE"
+    AUTHORIZATION_OUTCOME = "AUTHORIZATION_OUTCOME"
+    """A transaction's authorization outcome, dated when it was decided (ADR-0049). A post-decision
+    stream: an observation on it exists only after a decision about the transaction it describes,
+    so every window over it declares `CurrentObservation.PRIOR_KNOWN`."""
 
 
 class Aggregation(StrEnum):
@@ -177,6 +181,12 @@ class CurrentObservation(StrEnum):
     observation -- where a transaction entering its own baseline would hide exactly the
     departure the feature measures. Other observations at the same millisecond as `as_of` are
     excluded too, so a baseline never depends on arrival order at a tie."""
+
+    PRIOR_KNOWN = "PRIOR_KNOWN"
+    """For a post-decision stream (ADR-0049 §5). An observation counts only when all three hold:
+    it is verified -- its transaction, with the same account, is known; it was decided strictly
+    inside `(as_of - W, as_of)`; and it does not describe the scored transaction itself, whatever
+    its time. As served, it must also have been recorded, and verified, before the read."""
 
 
 class ParityComparison(StrEnum):
@@ -359,6 +369,21 @@ class WindowedAggregate:
             )
         if not needs_dimension and self.storage is not None:
             raise ValueError(f"{self.aggregation} does not have a cardinality storage class")
+        post_decision = self.stream is Stream.AUTHORIZATION_OUTCOME
+        if post_decision and self.current_observation is not CurrentObservation.PRIOR_KNOWN:
+            raise ValueError(
+                "a window over AUTHORIZATION_OUTCOME must declare PRIOR_KNOWN: an outcome exists "
+                "only after a decision, so its own transaction may never read it (ADR-0049 §5)"
+            )
+        if self.current_observation is CurrentObservation.PRIOR_KNOWN and not post_decision:
+            raise ValueError(
+                f"PRIOR_KNOWN reads a post-decision stream; {self.stream} is not one (ADR-0049 §5)"
+            )
+        if self.aggregation is Aggregation.DECLINED_RATIO and not post_decision:
+            raise ValueError(
+                "DECLINED_RATIO is computed over authorization outcomes only, never over a field "
+                "a transaction carries (ADR-0049 §5)"
+            )
 
     @property
     def parity(self) -> ParityComparison:
