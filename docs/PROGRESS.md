@@ -76,6 +76,11 @@ exit condition; each is owned by a Phase 3 step.
 * **`authorization_outcome` is post-decision information carried by a pre-decision contract**
   (ADR-0046 §7). Step 1 keeps a transaction's own outcome out of its own features; how earlier
   outcomes may be used is an open architecture decision (U7).
+* **Phase 2's manual replay predates ADR-0044.** `benchmarks/gateway/triage-bands.md` was generated
+  (`42f907c`) hours before completeness gating existed (`5c77025`), so its profile rules fired on a
+  store that could not tell "not known" from "cannot tell". Replayed again by its own commit on a
+  store vouching for the whole replay, it reproduces exactly: it stands as a complete-store baseline,
+  and a cold-store run is not comparable with it. Found and controlled for in Step 1.
 * **`eval-v1` has label proxies in its transaction rows**, found by the Step E generator work and by
   ADR-0046 §7: no legitimate transaction uses a non-home device (fraudulent ones often do), planted
   high-value and unusual-location transactions carry whole-second timestamps, and `DECLINED` occurs
@@ -382,7 +387,8 @@ both reports.
 
 ## WORK IN PROGRESS
 
-* **Step 1 — feature semantics and online-store correctness (lead).**
+* **Step 1 — feature semantics and online-store correctness (lead): complete.** `P3.semantics-hardening`
+  is PASS, with the user decisions it surfaced listed under U7, U9 and U10.
   * **Step 1a is committed** (`1ecd6a5`). ADR-0046 (Proposed) declares the semantics. The reference
     implements both evaluation modes and passes the hand-derived literal fixtures; 58 mutants and the
     mode-agreement properties keep the fixtures honest. The durable hole ledger (migration 0004) and
@@ -416,9 +422,34 @@ both reports.
       test had handed the app an already-open pool and could not see it; it now builds the pool
       closed, as `build_state` does, and a new clean-restart test fails without the fix.
     * `SERVED_FEATURES_CONFORM` is true: all four of ADR-0046 §5's conditions hold.
-  * **Not done yet:** the Phase 2 load gate, manual replay and rule re-validation on feature set
-    2.0.0, against a rebuilt gateway image. Thresholds stay as declared; a legitimate-traffic
-    regression is reported, not tuned away.
+  * **The Phase 2 gates are re-met on feature set 2.0.0, with every threshold unchanged.**
+    * **Load gate:** `run_id: load-20260914-gateway-b43a75ce` passes every exit condition on the
+      representative profile, from a cold store, on a clean tree (`benchmarks/gateway/REPORT.md`).
+      An earlier run on `3020401` was refused by the harness and wrote no record: 26 iterations were
+      dropped, and one decision was degraded when a feature-store call failed while Redis ran an
+      unusually slow script, most likely on the gateway's 20 ms timeout. The gateway handled that as
+      designed -- a hole recorded and completeness withdrawn -- but did not log the failure's type;
+      it now does (`b43a75c`). The rerun from an identical cold start passed. One run each cannot
+      show whether Step 1b makes such stalls likelier.
+    * **Manual replay:** `benchmarks/gateway/triage-bands.md`, the 60,000-transaction `eval-v1`
+      prefix on a cold store. The profile rules cannot fire there: on a store younger than their
+      30-day horizon, known-device, habitual and tenure features are absent by design (ADR-0044).
+    * **Rule re-validation, controlled.** Phase 2's replay report predates ADR-0044 (below), so a
+      cold run is not comparable with it. The Phase 2 acceptance commit `c86c6cd` (feature set 1.0.0)
+      and this code were replayed back to back on a store vouching for the whole replay, through the
+      same client; the Phase 2 code reproduced its committed report exactly. Against it, 2.0.0:
+      * fires the velocity rules R001, R003, R004 and R005 more often on fraud and still never on
+        legitimate traffic -- self-inclusion, as ADR-0046 §2 declares;
+      * **fires R010 on 9 more legitimate transactions, and 3 more fraud**, taking legitimate
+        HIGH-or-CRITICAL decisions from 19 to 28 of 59,678. `eval/replay/attribute_rule_changes.py`
+        attributes all of it to self-inclusion: exactly those transactions reach R010's five distinct
+        accounts on their device only when their own account counts, and the ones that reach it
+        either way match the 1.0.0 run's R010 counts. R010's threshold is unchanged; changing it is a
+        ruleset decision (U10);
+      * no longer fires R017 (4 fraud and 2 legitimate before): Q4c's home needs three located
+        observations, and most accounts in the prefix have fewer;
+      * fires R008 on 4 fraud transactions rather than 6, consistent with ADR-0046 §4 no longer
+        counting a successful login as an identity change (the prefix holds two).
   * **Known limits and risks, recorded rather than resolved:**
     * A score decodes its account's last 25 hours in the gateway, so scoring cost grows with the
       account's velocity. A diagnostic measurement without a `run_id` showed it material for
@@ -500,6 +531,7 @@ both reports.
 | U6 | Whether Phase 13 (Go gateway) is worth doing | Phase 13 entry |
 | **U7** | How authorization outcomes reach features. The scored transaction's own outcome is post-decision and is excluded (ADR-0046 §7). Earlier transactions' outcomes are still taken from their scoring requests. Recommended: an authorization-result event dated when the outcome is known | User decision (new event contract) |
 | **U9** | Lake table and streaming-query identifiers in snake_case, which Unity Catalog SQL needs unquoted, versus CLAUDE.md §6's kebab-case file paths. A rule interpretation, so it needs user approval | User decision, before Step 3 lands |
+| **U10** | Whether R010's threshold (`device_distinct_accounts_24h >= 5`) should change now that the scored transaction's own account counts (ADR-0046 §2). On the `eval-v1` replay prefix it adds 9 legitimate and 3 fraud HIGH-or-CRITICAL decisions, all attributed to self-inclusion (`eval/replay/attribute_rule_changes.py`). Kept as declared until then | User decision: a ruleset change, separate from Step 1 |
 
 ---
 
@@ -507,9 +539,8 @@ both reports.
 
 Phase 3, in the wave order of `docs/PHASE3_PLAN.md` §5:
 
-1. **Step 1 close-out:** commit Step 1b, rebuild the gateway image, and re-run the Phase 2 load gate
-   on the representative profile, the manual replay and rule re-validation on feature set 2.0.0,
-   recording each with its `run_id`.
+1. **User decisions Step 1 surfaced:** U10 (R010's threshold now that self-inclusion counts the scored
+   account), acceptance of ADR-0046, and the open U7 and U9.
 2. **Integrate Steps 2 and 3** from their worktrees: self-review, the requested doc edits,
    `make verify`, commit.
 3. **Step E stage 1d**, the label-proxy audit; stage 2 after U7.
@@ -542,6 +573,7 @@ the local stack up and `.env` loaded: `pytest -m integration tests/integration` 
 skipped, and `tests/chaos/test_redis_down.py` with `tests/chaos/test_feature_store_holes.py` passed 9.
 After the start-up fix, `make verify` at 2026-09-14T03:54:36Z again reported VERIFY OK, 11 passed; the guard's
 unit tests and both restart chaos tests passed on that code.
+At the Step 1 close-out, `make verify` at 2026-09-14T04:41:22Z again reported VERIFY OK, 11 passed.
 
-**Acceptance status: 20 PASS · 1 IN_PROGRESS · 45 NOT_STARTED · 0 FAIL · 0 BLOCKED** across 66 tracked
+**Acceptance status: 21 PASS · 0 IN_PROGRESS · 45 NOT_STARTED · 0 FAIL · 0 BLOCKED** across 66 tracked
 capabilities. `tests/acceptance/status.json` is the authoritative machine-readable record.
