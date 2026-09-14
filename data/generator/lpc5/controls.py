@@ -140,7 +140,12 @@ ABLATION_CHECKS: Mapping[str, Callable[[Lpc5Report], bool]] = {
     "M1": lambda r: _rule_failed(r, ("R3",), "TX_REPEATED_EXACT_COORDINATES"),
     "M2": lambda r: _rule_failed(r, ("R1'", "R2'", "R3'"), "TX_EXACT_HOME_POINT"),
     "M3": lambda r: _rule_failed(r, ("R6",), "TX_CNP_ECOMMERCE"),
-    "M4": lambda r: has_finding(r, ("R7",), attributes=("hour", "daypart")),
+    "M4": lambda r: has_finding(
+        r,
+        ("R7",),
+        attributes=("hour", "daypart"),
+        groups=tuple(p.value for p in FP if p not in (FP.ACCOUNT_TAKEOVER, FP.IMPOSSIBLE_TRAVEL)),
+    ),
     "M5": lambda r: has_finding(r, ("R7",), attributes=("merchant_popularity",)),
     "M6": lambda r: has_finding(
         r,

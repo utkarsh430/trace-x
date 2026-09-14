@@ -124,12 +124,20 @@ def tally(
 class Allowlist:
     """§6.3 statuses, read from the declaration."""
 
-    def __init__(self, rows: Sequence[d.AllowRow] = d.ALLOWLIST) -> None:
+    def __init__(
+        self,
+        rows: Sequence[d.AllowRow] = d.ALLOWLIST,
+        episodes: Sequence[d.EpisodeConsequence] = d.EPISODE_CONSEQUENCES,
+    ) -> None:
         self.rows = tuple(rows)
         self._by: dict[tuple[str, d.Population], list[d.AllowRow]] = defaultdict(list)
         for row in self.rows:
             for population in row.populations:
                 self._by[(row.scenario.value, population)].append(row)
+        self._episode: dict[tuple[str, d.Population], set[str]] = defaultdict(set)
+        for episode in episodes:
+            for population in episode.populations:
+                self._episode[(episode.scenario.value, population)] |= episode.attributes
 
     def rows_of(self, scenario: str, population: d.Population) -> list[d.AllowRow]:
         return self._by.get((scenario, population), [])
@@ -147,12 +155,16 @@ class Allowlist:
         self, scenario: str, population: d.Population, name: str, value: str
     ) -> str | None:
         for row in self.rows_of(scenario, population):
-            if row.attribute != name:
-                continue
-            if value in row.none:
-                return "none"
-            if value in row.rare:
-                return "rare"
+            if row.attribute == name:
+                if value in row.none:
+                    return "none"
+                if value in row.rare:
+                    return "rare"
+            elif name in row.consequences_in(population):
+                if value in row.consequence_none.get(name, frozenset()):
+                    return "none"
+                if value in row.consequence_rare.get(name, frozenset()):
+                    return "rare"
         return None
 
     def consequence_of(
@@ -169,26 +181,42 @@ class Allowlist:
                     return row
         return None
 
+    def episode_consequence(self, scenario: str, population: d.Population, name: str) -> bool:
+        """§6.6: an attribute an episode-consequence entry of the scenario lists, or via §4.7."""
+        names = self._episode.get((scenario, population), set())
+        if name in names:
+            return True
+        if name.startswith(d.AVAIL_PREFIX):
+            return d.DEPENDS[name.removeprefix(d.AVAIL_PREFIX)] in names
+        return False
+
     def is_ordinary(self, scenario: str, population: d.Population, name: str, value: str) -> bool:
         return (
             not self.allowlisted(scenario, population, name, value)
             and self.consequence_of(scenario, population, name) is None
+            and not self.episode_consequence(scenario, population, name)
         )
 
-    def pooled_exempt(self, population: d.Population, name: str, table: Table) -> bool:
-        """R8's exemption: named or a consequence for a scenario above 10 % of planted rows."""
-        planted = Counter(group for group in table.groups if group != d.LEGIT)
-        total = sum(planted.values())
-        if total == 0:
-            return False
-        for scenario, count in planted.items():
-            if count / total <= d.POOLED_EXEMPTION_SHARE:
+    def pooled_exempt(
+        self, population: d.Population, name: str, stratum: str, value: str, counts: Tally
+    ) -> bool:
+        """R8's exemption (revision 3): every scenario contributing the pooled cell admits `value`.
+
+        A scenario contributes when its own point share of the value, within the stratum, exceeds
+        `hiF`. With no contributing scenario, or one that does not admit the value, the cell is
+        judged. No realised share of planted rows enters the rule."""
+        legit = counts.share(d.LEGIT, stratum, (value,))
+        floor = max(legit.hi, d.LEGIT_SHARE_FLOOR)
+        contributors = []
+        for group, cell_stratum, cell_value in counts.cells():
+            if group in (d.LEGIT, d.POOLED) or cell_stratum != stratum or cell_value != value:
                 continue
-            if name in self.named(scenario, population):
-                return True
-            if self.consequence_of(scenario, population, name) is not None:
-                return True
-        return False
+            share = counts.share(group, stratum, (value,))
+            if share.r and share.x / share.r > floor:
+                contributors.append(group)
+        return bool(contributors) and all(
+            not self.is_ordinary(scenario, population, name, value) for scenario in contributors
+        )
 
 
 def _scenarios(table: Table) -> list[str]:
@@ -215,14 +243,13 @@ def r7_r8(
             table, {d.Klass.BEHAVIOUR, d.Klass.REPRESENTATION, d.Klass.AVAILABILITY}
         ):
             counts = tally(table, spec.name)
-            pooled_exempt = allow.pooled_exempt(population, spec.name, table)
             for group, stratum, value in counts.cells():
                 if group == d.LEGIT:
                     continue
                 legit = counts.share(d.LEGIT, stratum, (value,))
                 share = counts.share(group, stratum, (value,))
                 if group == d.POOLED:
-                    if pooled_exempt:
+                    if allow.pooled_exempt(population, spec.name, stratum, value, counts):
                         continue
                     judged8 += 1
                     if stats.enriched(share, legit):
@@ -301,9 +328,11 @@ def s1_unconditional(tables: Mapping[d.Population, Table], allow: Allowlist) -> 
     for population, table in tables.items():
         for spec in _specs(table, {d.Klass.BEHAVIOUR, d.Klass.AVAILABILITY}):
             counts = tally(table, spec.name)
-            pooled_exempt = allow.pooled_exempt(population, spec.name, table)
             for group, stratum, value in counts.cells():
-                if group == d.LEGIT or (group == d.POOLED and pooled_exempt):
+                if group == d.LEGIT or (
+                    group == d.POOLED
+                    and allow.pooled_exempt(population, spec.name, stratum, value, counts)
+                ):
                     continue
                 share = counts.share(group, stratum, (value,))
                 if share.lo <= d.S1_TRIGGER:
@@ -396,7 +425,7 @@ def s1_conditional(tables: Mapping[d.Population, Table], allow: Allowlist) -> Ch
                 continue
             named = allow.named(scenario, population)
             for spec in _specs(table, {d.Klass.BEHAVIOUR, d.Klass.AVAILABILITY}):
-                if spec.name in named:
+                if spec.name in named or allow.episode_consequence(scenario, population, spec.name):
                     continue
                 owner = allow.consequence_of(scenario, population, spec.name)
                 if owner is not None and owner is not row:
@@ -648,6 +677,8 @@ def s7_effects(tables: Mapping[d.Population, Table], allow: Allowlist) -> CheckR
     judged = 0
     judged_rows: set[str] = set()
     for row in allow.rows:
+        if row.e_min is None:
+            continue  # an allowed effect with no minimum (revision 3)
         for population in row.populations:
             table = tables.get(population)
             if table is None or row.attribute not in table.columns:
@@ -674,5 +705,7 @@ def s7_effects(tables: Mapping[d.Population, Table], allow: Allowlist) -> CheckR
                         f"E_min {row.e_min} and >= {threshold:.4f} (legitimate hi {legit.hi:.4f})",
                     )
                 )
-    unjudged = tuple(row.row_id for row in allow.rows if row.row_id not in judged_rows)
+    unjudged = tuple(
+        row.row_id for row in allow.rows if row.e_min is not None and row.row_id not in judged_rows
+    )
     return CheckResult("S7b", judged, tuple(findings), unjudged)

@@ -94,6 +94,8 @@ These are recorded as `LPC-5` revision 2, §11, each with its check.
   - Card testing uses one device, drawn the way the account's legitimate payments are.
   - Credential stuffing's logins share one device (the documented `DEVICE_SHARING`); its transacting
     accounts pay from their own devices.
+  - Velocity attacks pay from the account's own devices (added by `LPC-5` revision 3, 2026-09-14): the
+    signature documents a burst, not device multiplicity.
 - **G5 — spacing.** Takeover, fraud-ring and device-farm transactions take independent uniform times
   inside their documented spans, because no burst is documented for them.
 - **G6 — merchant collusion through structure.**
@@ -122,8 +124,9 @@ These follow ADR-0030 rule 1: a key is listed only if the injection creates the 
 - **Card testing.** Once G4 draws the card-testing device from the account's own devices, the
   mechanism no longer creates device sharing. Keeping the key would make it uncausal.
 
-  *This row follows from the user's device decision rather than from an explicit instruction, and is
-  flagged for confirmation.*
+  *Confirmed by the user on 2026-09-14 (Step 9 decisions), on the condition that the documented
+  behaviour stays: probing "from one device" is unchanged and checked per instance (`LPC-5` S7a). Only
+  the classification changes, because one device on one account is not device sharing.*
 - **Documentation.** `docs/FRAUD_SCENARIOS.md` records both key sets per dataset version when the
   generator change lands. The catalogue test compares the code's gated and ungated key sets with it.
 

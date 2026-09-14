@@ -35,7 +35,6 @@ def test_the_frozen_criterion_digest_is_pinned() -> None:
 
 def test_the_statistical_constants_are_pinned() -> None:
     assert (d.Z, d.ENRICHMENT_BOUND, d.MIN_EXCESS, d.LEGIT_SHARE_FLOOR) == (1.645, 2.0, 0.02, 0.001)
-    assert d.POOLED_EXEMPTION_SHARE == 0.10
     assert (d.S1_TRIGGER, d.PRECISION_BOUND) == (0.02, 0.25)
     assert (d.SUPPORT_MIN_ROWS, d.SUPPORT_MIN_ACCOUNTS, d.SUPPORT_MIN_SHARE) == (30, 20, 0.001)
     assert (d.STRATUM_MIN_ROWS, d.STRATUM_MIN_ACCOUNTS) == (30, 20)
@@ -97,7 +96,7 @@ def test_the_generator_rules_are_pinned() -> None:
     }
 
 
-def test_the_allowlist_has_the_revision_2_rows() -> None:
+def test_the_allowlist_has_the_revision_3_rows() -> None:
     ids = [row.row_id for row in d.ALLOWLIST]
     assert len(ids) == len(set(ids)) == 55
     assert "MC-3" not in ids
@@ -109,12 +108,41 @@ def test_the_allowlist_has_the_revision_2_rows() -> None:
     assert by_id["CT-9"].attribute == "authorization_outcome"
     assert by_id["IT-2"].none == {"≥1000"}
     assert by_id["ATO-4"].populations == (d.Population.TX, d.Population.ID)
+    # Revision 3: no minimum effect for MC-5 and DF-5; value-specific support exemptions.
+    assert {row.row_id for row in d.ALLOWLIST if row.e_min is None} == {"MC-5", "DF-5"}
+    assert by_id["ATO-3"].rare == {"EMAIL_CHANGE", "PHONE_CHANGE"}
+    assert not by_id["CT-1"].rare
+    assert by_id["CT-1"].none == {"3-4", "5-9", "10-19", "20+"}
+    assert by_id["CT-2"].rare == {"3-4"}
+    assert by_id["CT-2"].none == {"5-9", "10-19", "20+"}
+    assert by_id["CT-4"].rare == by_id["CT-2"].rare and by_id["CT-4"].none == by_id["CT-2"].none
+    assert not by_id["CT-3"].rare
+    assert by_id["CT-3"].none == {"5-9", "10-19", "20+"}
+    assert dict(by_id["CT-3"].consequence_rare) == {"tx_count_24h": {"10-19"}}
+    assert by_id["CT-6"].none == by_id["CT-10"].none == by_id["VA-6"].none == {"5-9", "10+"}
+    assert by_id["CT-11"].rare == {"(0,0.4)"}
+    assert by_id["VA-1"].none == {"3-4", "5-9", "10-19", "20+"}
+    assert by_id["VA-2"].none == by_id["VA-4"].none == {"5-9", "10-19", "20+"}
+    assert by_id["VA-3"].none == {"5-9", "10-19", "20+"}
+    assert dict(by_id["VA-3"].consequence_rare) == {"tx_count_24h": {"10-19"}}
+    assert dict(by_id["VA-3"].consequence_none) == {"tx_count_24h": {"20+"}}
+    assert not by_id["CS-6"].rare
+    assert by_id["CS-6"].none == {"5+"}
+    assert dict(by_id["FR-1"].consequence_rare) == {"device_accounts_24h": {"5+"}}
 
 
 def test_every_allowlist_row_is_structurally_sound() -> None:
     for row in d.ALLOWLIST:
         where = row.row_id
-        assert 0.0 < row.e_min <= 1.0, where
+        assert row.e_min is None or 0.0 < row.e_min <= 1.0, where
+        for name, exempt in (*row.consequence_rare.items(), *row.consequence_none.items()):
+            owners = [pop for pop in row.populations if name in row.consequences_in(pop)]
+            assert owners, f"{where}: {name} carries exemptions but is not a consequence"
+            for population in owners:
+                spec = d.attribute(population, name)
+                assert spec.values is None or exempt <= set(spec.values), (where, name)
+        for name in set(row.consequence_rare) & set(row.consequence_none):
+            assert not row.consequence_rare[name] & row.consequence_none[name], (where, name)
         assert row.rare <= row.values and row.none <= row.values, where
         assert not row.rare & row.none, where
         assert (row.composition is None) == (len(row.values) == 1), where
@@ -158,6 +186,47 @@ def test_no_attribute_is_both_named_and_a_consequence_for_one_scenario() -> None
             assert not ambiguous, (scenario, population, ambiguous)
 
 
+def test_episode_consequences_are_declared_once_and_never_named_or_row_consequences() -> None:
+    by_id = {episode.row_id: episode for episode in d.EPISODE_CONSEQUENCES}
+    assert list(by_id) == ["ATO-E1", "ATO-E2", "IT-E1"]
+    assert by_id["ATO-E1"].attributes == {
+        "tx_count_1h",
+        "tx_count_24h",
+        "gap_prev",
+        "distinct_merchants_1h",
+        "prior_decisions_1h",
+        "prior_declined_share_1h",
+    }
+    assert by_id["ATO-E2"].attributes == by_id["IT-E1"].attributes == {"hour", "daypart"}
+    incidental = {e.row_id for e in d.EPISODE_CONSEQUENCES if e.kind is d.EpisodeKind.INCIDENTAL}
+    assert incidental == {"ATO-E2", "IT-E1"}
+    for episode in d.EPISODE_CONSEQUENCES:
+        rows = [row for row in d.ALLOWLIST if row.scenario is episode.scenario]
+        for population in episode.populations:
+            named = {row.attribute for row in rows if population in row.populations}
+            consequences = {name for row in rows for name in row.consequences_in(population)}
+            for name in episode.attributes:
+                spec = d.attribute(population, name)
+                assert spec.klass is d.Klass.BEHAVIOUR, (episode.row_id, population, name)
+                assert name not in named | consequences, (episode.row_id, population, name)
+
+
+def test_optional_field_attributes_exist_and_are_behavioural() -> None:
+    assert {
+        population: dict(fields) for population, fields in d.OPTIONAL_FIELD_ATTRIBUTES.items()
+    } == {
+        d.Population.ID: {
+            "ip": ("ip_datacenter", "ip_login_accounts"),
+            "device": ("device_home", "device_age", "device_login_accounts"),
+            "user_agent": ("user_agent",),
+        }
+    }
+    for population, fields in d.OPTIONAL_FIELD_ATTRIBUTES.items():
+        for names in fields.values():
+            for name in names:
+                assert d.attribute(population, name).klass is d.Klass.BEHAVIOUR, name
+
+
 def _catalogue_sections() -> dict[str, str]:
     text = (ROOT / "docs" / "FRAUD_SCENARIOS.md").read_text(encoding="utf-8")
     sections: dict[str, str] = {}
@@ -194,6 +263,11 @@ def test_every_citation_is_verbatim_in_its_scenario_subsection() -> None:
             else:
                 for fragment in source.fragments:
                     assert _normalised(fragment) in _normalised(body), (row.row_id, fragment)
+    for episode in d.EPISODE_CONSEQUENCES:
+        body = sections[d.CATALOGUE_SECTIONS[episode.scenario]]
+        assert episode.source.kind is not d.SourceKind.KEY, episode.row_id
+        for fragment in episode.source.fragments:
+            assert _normalised(fragment) in _normalised(body), (episode.row_id, fragment)
 
 
 def test_key_citations_admit_only_values_the_map_allows() -> None:

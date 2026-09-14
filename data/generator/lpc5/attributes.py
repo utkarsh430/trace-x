@@ -844,6 +844,25 @@ def _side_table(
         if event.device is not None:
             device_login_accounts[event.device].add(event.account)
     label = "ID" if population is d.Population.ID else "DEV"
+    # §4.8 (revision 3): an attribute of an optional field is not applicable to an event type no row
+    # of which carries the field, when the type occurs among legitimate rows. Such rows stay unset.
+    not_applicable: dict[str, set[str]] = {}
+    optional = d.OPTIONAL_FIELD_ATTRIBUTES.get(population, {})
+    if optional:
+        legitimate_types = {row.event_type for row in rows if row.group == d.LEGIT}
+        carrying: dict[str, set[str]] = defaultdict(set)
+        for row in rows:
+            for source in optional:
+                if getattr(row, source) is not None:
+                    carrying[source].add(row.event_type)
+        for source, names in optional.items():
+            absent_types = legitimate_types - carrying[source]
+            for name in names:
+                not_applicable[name] = absent_types
+
+    def applicable(name: str, event_type: str) -> bool:
+        return event_type not in not_applicable.get(name, ())
+
     for i, row in enumerate(rows):
         columns["event_type"].put(i, row.event_type)
         hour, daypart, weekday = calendar(row.t)
@@ -858,10 +877,12 @@ def _side_table(
                 i, "first-reference" if stamp == (row.t, row.order) else _age(row.t - stamp[0])
             )
         if population is d.Population.ID:
-            columns["user_agent"].put(i, row.user_agent or "absent")
+            if row.user_agent or applicable("user_agent", row.event_type):
+                columns["user_agent"].put(i, row.user_agent or "absent")
             if row.ip is None:
-                columns["ip_datacenter"].put(i, "absent")
-                columns["ip_login_accounts"].put(i, "absent")
+                for name in ("ip_datacenter", "ip_login_accounts"):
+                    if applicable(name, row.event_type):
+                        columns[name].put(i, "absent")
             else:
                 columns["ip_datacenter"].put(
                     i, "datacenter" if know.ip_datacenter.get(row.ip, False) else "not"
@@ -871,9 +892,9 @@ def _side_table(
                     i, "absent" if accounts == 0 else band(accounts, (2, 3, 6), d.ACCOUNTS_DATASET)
                 )
             if row.device is None:
-                columns["device_home"].put(i, "absent")
-                columns["device_age"].put(i, "absent")
-                columns["device_login_accounts"].put(i, "absent")
+                for name in ("device_home", "device_age", "device_login_accounts"):
+                    if applicable(name, row.event_type):
+                        columns[name].put(i, "absent")
             else:
                 columns["device_login_accounts"].put(
                     i,

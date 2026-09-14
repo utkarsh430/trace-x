@@ -1478,7 +1478,7 @@ def test_g1_every_planted_amount_is_the_one_lpc5_recomputes(
             assert payload["amount_minor"] == expected, (instance.instance_id, _ordinal(row))
 
 
-def test_g4_card_testing_and_stuffing_pay_from_devices_the_account_knows(
+def test_g4_card_testing_stuffing_and_velocity_pay_from_devices_the_account_knows(
     gate_on: list[GeneratedRow], plan: tuple[Universe, BaselinePlan]
 ) -> None:
     universe, baseline = plan
@@ -1496,10 +1496,11 @@ def test_g4_card_testing_and_stuffing_pay_from_devices_the_account_knows(
 
     testing = _by_instance(_planted_tx(gate_on, FraudPattern.CARD_TESTING))
     stuffing = _planted_tx(gate_on, FraudPattern.CREDENTIAL_STUFFING)
-    assert testing and stuffing
+    velocity = _planted_tx(gate_on, FraudPattern.VELOCITY_ATTACK)
+    assert testing and stuffing and velocity
     for rows in testing.values():
         assert len({r.event["payload"]["device_id"] for r in rows}) == 1
-    for row in [*(r for rows in testing.values() for r in rows), *stuffing]:
+    for row in [*(r for rows in testing.values() for r in rows), *stuffing, *velocity]:
         payload = row.event["payload"]
         assert known(payload["account_id"], payload["device_id"], _millis(row)), payload
     logins = [

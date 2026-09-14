@@ -78,20 +78,20 @@ def _cells(result: CheckResult, check: str) -> set[tuple[str | None, str | None,
 
 def test_a_planted_only_value_fails_support_precision_and_enrichment() -> None:
     build = Build()
-    build.column("hour", ["3"] * 2_000, ["4"] * 40)
+    build.column("weekday", ["Mon"] * 2_000, ["Tue"] * 40)
     tables = {TX: build.table()}
     r7, r8 = r7_r8(tables, ALLOW)
     s1u = s1_unconditional(tables, ALLOW)
-    assert ("hour", "4", ATO) in _cells(r7, "R7")
-    assert ("hour", "4", d.POOLED) in _cells(r8, "R8")
-    assert ("hour", "4", ATO) in _cells(s1u, "S1-U(a)")
-    assert ("hour", "4", d.POOLED) in _cells(s1u, "S1-U(a)")
-    assert ("hour", "4", ATO) in _cells(s1u, "S1-U(b)")
+    assert ("weekday", "Tue", ATO) in _cells(r7, "R7")
+    assert ("weekday", "Tue", d.POOLED) in _cells(r8, "R8")
+    assert ("weekday", "Tue", ATO) in _cells(s1u, "S1-U(a)")
+    assert ("weekday", "Tue", d.POOLED) in _cells(s1u, "S1-U(a)")
+    assert ("weekday", "Tue", ATO) in _cells(s1u, "S1-U(b)")
 
 
 def test_an_attribute_distributed_like_legitimate_rows_passes() -> None:
     build = Build()
-    build.column("hour", ["3", "4"] * 1_000, ["3", "4"] * 20)
+    build.column("weekday", ["Mon", "Tue"] * 1_000, ["Mon", "Tue"] * 20)
     tables = {TX: build.table()}
     r7, r8 = r7_r8(tables, ALLOW)
     s1u = s1_unconditional(tables, ALLOW)
@@ -116,18 +116,19 @@ def test_an_allowlisted_value_keeps_its_support_check_but_skips_precision_and_en
 
 
 def test_support_needs_thirty_rows_twenty_accounts_and_the_share_unless_exempt() -> None:
-    def judged(legit_with_value: int, value: str) -> CheckResult:
+    def judged(legit_with_value: int, value: str, name: str = "tx_count_1m") -> CheckResult:
         build = Build(legit_rows=40_000, legit_accounts=4_000, planted=((CT, 40),))
         legit = ["1"] * 40_000
         for k in range(legit_with_value):
             legit[k * 10] = value  # one row per account: accounts 0..k-1
-        build.column("tx_count_1m", legit, [value] * 40)
+        build.column(name, legit, [value] * 40)
         return s1_unconditional({TX: build.table()}, ALLOW)
 
-    # "3-4" is a `rare` value of CT-1: 30 rows from 30 accounts suffice below the 0.1 % share.
-    assert ("tx_count_1m", "3-4", CT) not in _cells(judged(30, "3-4"), "S1-U(a)")
-    assert ("tx_count_1m", "3-4", CT) in _cells(judged(29, "3-4"), "S1-U(a)")
-    # "5-9" is a `none` value: no legitimate row is needed.
+    # "3-4" is a `rare` value of CT-2: 30 rows from 30 accounts suffice below the 0.1 % share.
+    assert ("tx_count_5m", "3-4", CT) not in _cells(judged(30, "3-4", "tx_count_5m"), "S1-U(a)")
+    assert ("tx_count_5m", "3-4", CT) in _cells(judged(29, "3-4", "tx_count_5m"), "S1-U(a)")
+    # "3-4" and "5-9" are `none` values of CT-1 (revision 3): no legitimate row is needed.
+    assert ("tx_count_1m", "3-4", CT) not in _cells(judged(0, "3-4"), "S1-U(a)")
     assert ("tx_count_1m", "5-9", CT) not in _cells(judged(0, "5-9"), "S1-U(a)")
     # "2" is allowlisted without exemption: the share condition applies.
     assert ("tx_count_1m", "2", CT) in _cells(judged(30, "2"), "S1-U(a)")
@@ -135,20 +136,20 @@ def test_support_needs_thirty_rows_twenty_accounts_and_the_share_unless_exempt()
 
 def test_the_trigger_leaves_a_small_planted_share_unjudged() -> None:
     build = Build()
-    build.column("hour", ["3"] * 2_000, ["9"] + ["3"] * 39)
+    build.column("weekday", ["Mon"] * 2_000, ["Wed"] + ["Mon"] * 39)
     result = s1_unconditional({TX: build.table()}, ALLOW)
-    assert ("hour", "9", ATO) not in _cells(result, "S1-U(a)")
+    assert ("weekday", "Wed", ATO) not in _cells(result, "S1-U(a)")
 
 
 def test_s1b_judges_ordinary_attributes_and_consequences_inside_the_stratum() -> None:
     build = Build()
     legit_home = ["not"] * 100 + ["home"] * 1_900
     build.column("device_home", legit_home, ["not"] * 40)
-    build.column("hour", ["3"] * 2_000, ["4"] * 40)
+    build.column("weekday", ["Mon"] * 2_000, ["Tue"] * 40)
     build.column("device_accounts", ["2"] * 100 + ["1"] * 1_900, ["2"] * 40)
     tables = {TX: build.table()}
     result = s1_conditional(tables, ALLOW)
-    assert ("hour", "4", ATO) in _cells(result, "S1-B(i)")
+    assert ("weekday", "Tue", ATO) in _cells(result, "S1-B(i)")
     assert ("device_accounts", "2", ATO) not in _cells(result, "S1-B(i)")
     r7, _ = r7_r8(tables, ALLOW)
     assert ("device_accounts", "2", ATO) not in _cells(r7, "R7")  # a consequence: S1-B only
@@ -189,13 +190,78 @@ def test_representation_values_may_not_be_planted_only_or_differ() -> None:
     assert s2_representation({TX: same.table()}).passed
 
 
-def test_pooled_enrichment_is_exempt_only_through_a_scenario_above_ten_percent() -> None:
+def test_pooled_enrichment_is_exempt_only_when_every_contributing_scenario_admits_it() -> None:
+    """Revision 3: no realised share of planted rows. Takeovers admit `device_home = not` (ATO-4);
+    card testing does not, so it blocks the exemption once its own share exceeds the legitimate
+    bound, and not while its share stays at the legitimate level."""
+    legit = ["not"] * 10 + ["home"] * 1_990
+
+    def pooled_cells(ct_not: int) -> set[tuple[str | None, str | None, str | None]]:
+        build = Build(planted=((ATO, 10), (CT, 90)))
+        build.column("device_home", legit, ["not"] * (10 + ct_not) + ["home"] * (90 - ct_not))
+        tables = {TX: build.table()}
+        _, r8 = r7_r8(tables, ALLOW)
+        s1u = s1_unconditional(tables, ALLOW)
+        return {cell for result in (r8, s1u) for cell in _cells(result, result.check)} | {
+            (f.attribute, f.value, f.group) for f in s1u.findings
+        }
+
+    assert ("device_home", "not", d.POOLED) not in pooled_cells(0)
+    assert ("device_home", "not", d.POOLED) not in pooled_cells(1)
+    assert ("device_home", "not", d.POOLED) in pooled_cells(30)
+    # Realised shares of planted rows play no part: a small scenario that contributes and does not
+    # admit the value makes the cell judged, and one whose only contributor admits it is exempt.
     build = Build(planted=((ATO, 90), (CT, 10)))
     build.column("device_home", ["home"] * 2_000, ["not"] * 100)
     build.column("tx_count_1m", ["1"] * 2_000, ["1"] * 90 + ["5-9"] * 10)
     _, r8 = r7_r8({TX: build.table()}, ALLOW)
-    assert ("device_home", "not", d.POOLED) not in _cells(r8, "R8")
-    assert ("tx_count_1m", "5-9", d.POOLED) in _cells(r8, "R8")
+    assert ("device_home", "not", d.POOLED) in _cells(
+        r8, "R8"
+    )  # CT contributes; no CT row admits it
+    assert ("tx_count_1m", "5-9", d.POOLED) not in _cells(
+        r8, "R8"
+    )  # only CT contributes; CT-1 admits
+
+
+def test_an_episode_consequence_skips_enrichment_but_keeps_its_support_check() -> None:
+    """Revision 3 §6.6: a takeover's hourly count is its documented episode, judged for support
+    only; the same shape stays judged for a scenario whose episode it is not."""
+    build = Build(planted=((ATO, 40), (IT, 40)))
+    build.column("tx_count_1h", ["1"] * 1_960 + ["3-4"] * 40, ["3-4"] * 80)
+    build.column("device_home", ["not"] * 100 + ["home"] * 1_900, ["not"] * 40 + ["home"] * 40)
+    tables = {TX: build.table()}
+    r7, _ = r7_r8(tables, ALLOW)
+    s1u = s1_unconditional(tables, ALLOW)
+    s1b = s1_conditional(tables, ALLOW)
+    assert ("tx_count_1h", "3-4", ATO) not in _cells(r7, "R7")
+    assert ("tx_count_1h", "3-4", ATO) not in _cells(s1u, "S1-U(b)")
+    assert ("tx_count_1h", "3-4", ATO) not in _cells(s1b, "S1-B(i)")
+    assert ("tx_count_1h", "3-4", IT) in _cells(r7, "R7")
+    unsupported = Build()
+    unsupported.column("tx_count_1h", ["1"] * 2_000, ["3-4"] * 40)
+    result = s1_unconditional({TX: unsupported.table()}, ALLOW)
+    assert ("tx_count_1h", "3-4", ATO) in _cells(result, "S1-U(a)")
+    hours = Build(planted=((ATO, 40), (CT, 40)))
+    hours.column("hour", ["3"] * 2_000, ["4"] * 80)
+    r7_hours, _ = r7_r8({TX: hours.table()}, ALLOW)
+    assert ("hour", "4", ATO) not in _cells(r7_hours, "R7")  # incidental for takeovers
+    assert ("hour", "4", CT) in _cells(r7_hours, "R7")
+
+
+def test_a_consequence_value_can_carry_its_own_support_exemption() -> None:
+    """Revision 3: `tx_count_24h = 10-19` is `rare` for CT-3's consequence; `5-9` is not exempt."""
+
+    def support(value: str, legit_rows: int) -> CheckResult:
+        build = Build(legit_rows=40_000, legit_accounts=4_000, planted=((CT, 40),))
+        legit = ["1"] * 40_000
+        for k in range(legit_rows):
+            legit[k * 10] = value
+        build.column("tx_count_24h", legit, [value] * 40)
+        return s1_unconditional({TX: build.table()}, ALLOW)
+
+    assert ("tx_count_24h", "10-19", CT) not in _cells(support("10-19", 30), "S1-U(a)")
+    assert ("tx_count_24h", "10-19", CT) in _cells(support("10-19", 29), "S1-U(a)")
+    assert ("tx_count_24h", "5-9", CT) in _cells(support("5-9", 30), "S1-U(a)")
 
 
 def test_the_pooled_calendar_rule_sees_concentration_and_absence() -> None:
@@ -250,6 +316,21 @@ def test_a_documented_effect_must_stand_out_even_when_legitimate_rows_share_the_
         "channel", ["CARD_PRESENT"] * 920 + ["CARD_NOT_PRESENT"] * 1_080, ["CARD_PRESENT"] * 40
     )
     assert s7_effects({TX: usual.table()}, ALLOW).passed
+
+
+def test_an_allowed_effect_without_a_minimum_is_not_judged_by_s7b() -> None:
+    """Revision 3: MC-5 keeps its allowlisted status and has no E_min, so S7b neither judges it
+    nor reports it unjudged."""
+    collusion = FraudPattern.MERCHANT_COLLUSION.value
+    build = Build(planted=((collusion, 40),))
+    build.column(
+        "mcc_habitual",
+        ["unhabitual"] * 200 + ["habitual"] * 1_800,
+        ["unhabitual"] * 5 + ["habitual"] * 35,
+    )
+    result = s7_effects({TX: build.table()}, ALLOW)
+    assert "S7b/MC-5" not in {f.check for f in result.findings}
+    assert "MC-5" not in result.unjudged and "DF-5" not in result.unjudged
 
 
 def test_non_vacuity_needs_legitimate_and_planted_clusters() -> None:

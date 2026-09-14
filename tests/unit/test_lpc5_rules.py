@@ -279,4 +279,4 @@ def test_evaluate_reports_every_check_and_why_an_eval_v1_run_cannot_pass(
     assert controls.has_finding(report, ("S2c/3",))
     assert controls.has_finding(report, ("S2c/7",))
     assert controls.has_finding(report, ("S8/disclosure",))
-    assert "LPC-5 revision 2" in report.format()
+    assert f"LPC-5 revision {d.REVISION}" in report.format()

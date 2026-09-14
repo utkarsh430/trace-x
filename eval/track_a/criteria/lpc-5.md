@@ -1,6 +1,6 @@
 # `LPC-5` — the eval-v2 label-proxy acceptance criterion
 
-- **Status:** FROZEN, revision 2 (§20). Declared 2026-09-14, before any eval-v2 candidate dataset exists and
+- **Status:** FROZEN, revision 3 (§20). Declared 2026-09-14, before any eval-v2 candidate dataset exists and
   before any code implementing this revision.
 - **Freeze.** The commit that adds this file. Its sha256 is recorded in `docs/PROGRESS.md`. The
   acceptance command must refuse to run when this file's digest differs from the digest named in the
@@ -11,6 +11,9 @@
   - Authorization decisions reach features as their own dated events: ADR-0049.
   - Revision 2 (2026-09-14): the user's blocking corrections — the rare-scenario calendar rule, G2
     disclosure, the `authorization_outcome` field name, and the frozen generator decisions G3–G7.
+  - Revision 3 (2026-09-14): the user's Step 9 decisions after the diagnostic quarter-scale probe —
+    episode consequences, value-specific support exemptions, applicability by event type, R8's
+    contributor rule, G4 for velocity attacks, and no minimum effect for MC-5 and DF-5.
 - **What it replaces.** It replaces, as eval-v2's acceptance criterion, LPC-1 to LPC-4 of the eval-v2
   draft ADR.
   - Their rules are restated in §5, so this file is complete on its own.
@@ -352,7 +355,26 @@ A feature added later is not part of revision 1.
 | `failed_logins_1h` | `failed_logins_1h` |
 
 `avail:f` is a consequence of an allowlist row `e` (§6.3) exactly when `DEPENDS(f)` is `e`'s attribute or
-one of `e`'s declared consequences. Otherwise its status is ORDINARY.
+one of `e`'s declared consequences. It is an episode consequence of `s` exactly when `DEPENDS(f)` is an
+attribute of an episode-consequence entry of `s` (§6.6). Otherwise its status is ORDINARY.
+
+### 4.8 Applicability by event type (revision 3)
+
+An ID attribute derived from an optional payload field is not applicable to the rows of an
+`event_type` when both hold:
+- no ID row of that type, legitimate or planted, carries the field;
+- the type occurs among legitimate ID rows.
+
+| Field | Attributes |
+|---|---|
+| `ip_id` | `ip_datacenter`, `ip_login_accounts` |
+| `device_id` | `device_home`, `device_age`, `device_login_accounts` |
+| `user_agent` | `user_agent` |
+
+A row whose attribute is not applicable takes no part in any cell of that attribute. This is not an
+exemption: the field is structurally absent for that kind of event, so its absence says nothing about
+the label. One row of the type carrying the field makes the attribute applicable to every row of the
+type, and `absent` is judged as usual.
 
 ## 5. S0 — the inherited rules
 
@@ -438,8 +460,11 @@ Windows are `[t − W, t)`, and account attribution uses the payload `account_id
   - R attributes are always ORDINARY.
 - **R8 — pooled enrichment.**
   - The same test with `g = POOLED`.
-  - Exempt attributes: any attribute that is ALLOWLISTED or CONSEQUENCE for some scenario contributing
-    more than 0.10 of `P`'s planted rows.
+  - **Exempt cells (revision 3).** A scenario `s` contributes to the pooled cell of `v` when its own
+    point share `x_s(v) / r_s`, within the stratum, exceeds `hiF`. The cell is exempt when at least one
+    scenario contributes and every contributing scenario admits `v`: `v` is not ORDINARY for it (§6.3).
+    A cell with any contributing scenario that does not admit `v` is judged. No realised share of
+    planted rows enters the rule.
 - **R9 — non-vacuity.** Fails if any of these holds:
   - a population has fewer than 30 legitimate rows or fewer than 30 legitimate clusters;
   - TX has fewer than 30 planted clusters.
@@ -505,32 +530,44 @@ They are the R attributes (§4) and the exact rules of §8 S2c, and they are che
   - `none`: S1-U's support check is skipped. Declared only where the documented behaviour is defined as
     beyond legitimate activity, or a legitimate count at that level is not plausible for a consumer
     account.
+  - **Consequence exempt values (revision 3):** a row may declare `rare` or `none` values of one of its
+    consequence attributes, with the same meanings, where the consequence counts the documented
+    behaviour over a longer window or through a related attribute.
 - **Composition,** either `judged` or `documented`.
   - `judged`: the mix of values inside `V*` must match legitimate rows (§7 S1-B(iii)).
   - `documented`: the quoted text determines the mix.
-- **`E_min`:** the least lower bound the documented effect must reach (§13 S7b).
+- **`E_min`:** the least lower bound the documented effect must reach (§13 S7b). `—` marks an allowed
+  effect with no minimum (revision 3): S7b does not judge it, and it keeps every other status and
+  check.
 - **Consequences:** attributes of `P` judged only within `e`'s stratum (§7 S1-B), never unconditionally.
 
 **Status, for a scenario `s` and a value `v` of an attribute `b` of `P`.**
 - **ALLOWLISTED** if some row of `s` names `b` in `P` with `v ∈ V*`.
 - **CONSEQUENCE(e)** if row `e` of `s` lists `b`, or through §4.7. Every value of `b` then has this
   status.
+- **EPISODE CONSEQUENCE** if an episode-consequence entry of `s` (§6.6) lists `b` in `P`, or through
+  §4.7. Every value of `b` then has this status.
 - **ORDINARY** otherwise — including the values of an allowlisted attribute that lie outside `V*`.
 
-A declaration test rejects an attribute that a row of `s` names and that is also a consequence for `s`.
+A declaration test rejects an attribute that a row of `s` names and that is also a consequence, or an
+episode consequence, for `s`.
 
 **Effect.**
 - ALLOWLISTED values skip S1-U's precision check and R7. R8 exempts their attribute through its own
   rule.
 - CONSEQUENCE values skip S1-U's precision check and R7. They are judged for enrichment only in S1-B.
-- Every value keeps S1-U's support check, unless it is an exempt value of a row of `s`.
+- EPISODE CONSEQUENCE values skip S1-U's precision check, R7 and S1-B's sweep for `s`. Nothing judges
+  them for enrichment.
+- Every value keeps S1-U's support check, unless it is an exempt value, or an exempt consequence value,
+  of a row of `s`.
 
 ### 6.4 Entries
 
 **How to read the tables.**
 - Source `S` is the §3 signature line; `N` is a note in the subsection.
 - `K` is a causal-key token, admissible through §6.1's map.
-- **Exempt** lists the `rare` and `none` values (§6.3).
+- **Exempt** lists the `rare` and `none` values (§6.3), and after a consequence attribute's name, that
+  consequence's exempt values.
 - A bracketed `[review]` marks an entry that rests on an implication of its fragment. It is listed in §18
   for confirmation.
 
@@ -540,7 +577,7 @@ A declaration test rejects an attribute that a row of `s` names and that is also
 |---|---|---|---|---|---|---|---|---|
 | ATO-1 | TX | `prior_events_24h` | `identity-change` | — | — | 0.80 | S "An identity change, then within hours" | — |
 | ATO-2 | TX | `hours_since_identity_change` | `<1h`, `[1h,6h)` | rare: `<1h`, `[1h,6h)` | documented | 0.80 | S "then within hours" | — |
-| ATO-3 | ID | `event_type` | the Q4e set | — | judged | 0.80 | S "An identity change" | — |
+| ATO-3 | ID | `event_type` | the Q4e set | rare: `EMAIL_CHANGE`, `PHONE_CHANGE` | judged | 0.80 | S "An identity change" | — |
 | ATO-4 | TX, ID | `device_home` | `not` | — | — | 0.80 | S "a device the account has never used" | TX: `device_accounts`, `device_accounts_24h`, `distinct_devices_24h`, `device_account_tx`; ID: `device_login_accounts` |
 | ATO-5 | TX, ID | `device_age` | `first-use`/`first-reference`, `<1h`, `[1h,24h)` | — | judged | 0.80 | S "a device the account has never used" | — |
 | ATO-6 | TX | `amount_vs_account` | `[2,5)`, `[5,20)`, `≥20` | rare: `≥20` | judged | 0.80 | S "spending well above profile" | `amount_decile`, `amount_z` |
@@ -551,17 +588,17 @@ A declaration test rejects an attribute that a row of `s` names and that is also
 
 | # | P | Attribute | V* | Exempt | Composition | E_min | Source | Consequences |
 |---|---|---|---|---|---|---|---|---|
-| CT-1 | TX | `tx_count_1m` | `2`, `3-4`, `5-9`, `10-19`, `20+` | rare: `3-4`; none: `5-9`, `10-19`, `20+` | documented | 0.30 | S "Many sub-threshold authorisations" + "inside a few minutes" | — |
-| CT-2 | TX | `tx_count_5m` | `2`, `3-4`, `5-9`, `10-19`, `20+` | rare: `5-9`; none: `10-19`, `20+` | documented | 0.60 | as CT-1 | — |
-| CT-3 | TX | `tx_count_1h` | `2`, `3-4`, `5-9`, `10-19`, `20+` | rare: `10-19`; none: `20+` | documented | 0.80 | as CT-1 | `tx_count_24h` |
+| CT-1 | TX | `tx_count_1m` | `2`, `3-4`, `5-9`, `10-19`, `20+` | none: `3-4`, `5-9`, `10-19`, `20+` | documented | 0.30 | S "Many sub-threshold authorisations" + "inside a few minutes" | — |
+| CT-2 | TX | `tx_count_5m` | `2`, `3-4`, `5-9`, `10-19`, `20+` | rare: `3-4`; none: `5-9`, `10-19`, `20+` | documented | 0.60 | as CT-1 | — |
+| CT-3 | TX | `tx_count_1h` | `2`, `3-4`, `5-9`, `10-19`, `20+` | none: `5-9`, `10-19`, `20+`; `tx_count_24h`: rare `10-19` | documented | 0.80 | as CT-1 | `tx_count_24h` |
 | CT-4 | TX | `card_count_5m` | as CT-2 | as CT-2 | documented | 0.60 | as CT-1 | — |
 | CT-5 | TX | `gap_prev` | `<10s`, `[10s,60s)`, `[1,10)min` | — | judged | 0.50 | S "inside a few minutes" | — |
-| CT-6 | TX | `distinct_merchants_1h` | `2`, `3-4`, `5-9`, `10+` | rare: `5-9`; none: `10+` | documented | 0.60 | S "across many distinct merchants" | `merchant_habitual`, `merchant_popularity@merchant_habitual`, `merchant_accounts_1h` |
+| CT-6 | TX | `distinct_merchants_1h` | `2`, `3-4`, `5-9`, `10+` | none: `5-9`, `10+` | documented | 0.60 | S "across many distinct merchants" | `merchant_habitual`, `merchant_popularity@merchant_habitual`, `merchant_accounts_1h` |
 | CT-7 | TX | `distinct_mcc_5m` | `2`, `3-4`, `5+` | rare: `3-4`; none: `5+` | documented | 0.40 | S "many distinct merchants and MCCs" + "inside a few minutes" | `merchant_mcc`, `mcc_habitual` |
 | CT-8 | TX | `amount_vs_account` | `<0.1`, `[0.1,0.5)` | — | documented | 0.60 | S "Many sub-threshold authorisations" | `amount_decile`, `amount_z` |
 | CT-9 | OUT | `authorization_outcome` | `DECLINED` | — | — | 0.20 | S "a substantial share declined" | — |
-| CT-10 | TX | `prior_decisions_1h` | `1`, `2-4`, `5-9`, `10+` | rare: `5-9`; none: `10+` | documented | 0.60 | as CT-1 | — |
-| CT-11 | TX | `prior_declined_share_1h` | `0`, `(0,0.4)`, `≥0.4` | — | documented | 0.60 | S "a substantial share declined" | — |
+| CT-10 | TX | `prior_decisions_1h` | `1`, `2-4`, `5-9`, `10+` | none: `5-9`, `10+` | documented | 0.60 | as CT-1 | — |
+| CT-11 | TX | `prior_declined_share_1h` | `0`, `(0,0.4)`, `≥0.4` | rare: `(0,0.4)` | documented | 0.60 | S "a substantial share declined" | — |
 
 **`IMPOSSIBLE_TRAVEL` (§3.3).**
 
@@ -576,12 +613,12 @@ above its own short-window baseline".
 
 | # | P | Attribute | V* | Exempt | Composition | E_min | Consequences |
 |---|---|---|---|---|---|---|---|
-| VA-1 | TX | `tx_count_1m` | `2`, `3-4`, `5-9`, `10-19`, `20+` | rare: `3-4`; none: `5-9`, `10-19`, `20+` | documented | 0.30 | — |
-| VA-2 | TX | `tx_count_5m` | `2`, `3-4`, `5-9`, `10-19`, `20+` | rare: `5-9`; none: `10-19`, `20+` | documented | 0.60 | — |
-| VA-3 | TX | `tx_count_1h` | `2`, `3-4`, `5-9`, `10-19`, `20+` | rare: `10-19`; none: `20+` | documented | 0.80 | `tx_count_24h` |
+| VA-1 | TX | `tx_count_1m` | `2`, `3-4`, `5-9`, `10-19`, `20+` | none: `3-4`, `5-9`, `10-19`, `20+` | documented | 0.30 | — |
+| VA-2 | TX | `tx_count_5m` | `2`, `3-4`, `5-9`, `10-19`, `20+` | none: `5-9`, `10-19`, `20+` | documented | 0.60 | — |
+| VA-3 | TX | `tx_count_1h` | `2`, `3-4`, `5-9`, `10-19`, `20+` | none: `5-9`, `10-19`, `20+`; `tx_count_24h`: rare `10-19`, none `20+` | documented | 0.80 | `tx_count_24h` |
 | VA-4 | TX | `card_count_5m` | as VA-2 | as VA-2 | documented | 0.60 | — |
 | VA-5 | TX | `gap_prev` | `<10s`, `[10s,60s)`, `[1,10)min` | — | judged | 0.50 | — |
-| VA-6 | TX | `prior_decisions_1h` | `1`, `2-4`, `5-9`, `10+` | rare: `5-9`; none: `10+` | documented | 0.60 | `prior_declined_share_1h` |
+| VA-6 | TX | `prior_decisions_1h` | `1`, `2-4`, `5-9`, `10+` | none: `5-9`, `10+` | documented | 0.60 | `prior_declined_share_1h` |
 
 **`DEVICE_FARM` (§3.5).**
 
@@ -591,13 +628,13 @@ above its own short-window baseline".
 | DF-2 | TX | `device_accounts_24h` | `3-4`, `5+` | rare: `5+` | documented | 0.50 | as DF-1 | — |
 | DF-3 | TX | `device_account_tx` | `1`, `2` | — | documented | 0.80 | S "each account transacting only once or twice" | — |
 | DF-4 | TX | `device_home` | `not` | — | — | 0.80 | K "`DEVICE_NOVELTY`" | `distinct_devices_24h` |
-| DF-5 | TX | `device_age` | `first-use`, `<1h` | — | judged | 0.80 | K "`DEVICE_NOVELTY`" | — |
+| DF-5 | TX | `device_age` | `first-use`, `<1h` | — | judged | — | K "`DEVICE_NOVELTY`" | — |
 
 **`FRAUD_RING` (§3.6).**
 
 | # | P | Attribute | V* | Exempt | Composition | E_min | Source | Consequences |
 |---|---|---|---|---|---|---|---|---|
-| FR-1 | TX | `device_accounts` | `3-5`, `6+` | — | judged | 0.60 | S "Several accounts sharing a small pool of devices and IPs" | `device_home`, `device_age`, `device_accounts_24h`, `distinct_devices_24h`, `device_account_tx` |
+| FR-1 | TX | `device_accounts` | `3-5`, `6+` | `device_accounts_24h`: rare `5+` | judged | 0.60 | S "Several accounts sharing a small pool of devices and IPs" | `device_home`, `device_age`, `device_accounts_24h`, `distinct_devices_24h`, `device_account_tx` |
 | FR-2 | TX | `ip_accounts` | `6+` | — | — | 0.50 | as FR-1 | `ip_home`, `ip_accounts_1h` |
 | FR-3 | TX | `shared_merchant_link` | `yes` | — | — | 0.60 | S "converging on a shared merchant set" | `merchant_habitual`, `merchant_popularity@merchant_habitual`, `merchant_mcc`, `mcc_habitual`, `merchant_country`, `merchant_country_home`, `merchant_accounts_1h` |
 | FR-4 | TX | `joint_link` | `yes` | — | — | 0.60 | as FR-1 | — |
@@ -609,7 +646,7 @@ above its own short-window baseline".
 | MC-1 | TX | `merchant_same_amount_accounts_24h` | `5+` | — | — | 0.50 | S "unusually uniform amounts from many unrelated accounts" | `merchant_amount_cv_24h` |
 | MC-2 | TX | `amount_decile` | `8`, `9` | — | judged | 0.80 | S "high, unusually uniform amounts" | — |
 | MC-4 | TX | `merchant_habitual` | `unhabitual` | — | — | 0.80 | S "One merchant" + "from many unrelated accounts" | `merchant_popularity@merchant_habitual` |
-| MC-5 | TX | `mcc_habitual` | `unhabitual` | — | — | 0.50 | K "`MCC_ANOMALY`" | `merchant_mcc` |
+| MC-5 | TX | `mcc_habitual` | `unhabitual` | — | — | — | K "`MCC_ANOMALY`" | `merchant_mcc` |
 
 **`CREDENTIAL_STUFFING` (§3.8).**
 
@@ -620,7 +657,7 @@ above its own short-window baseline".
 | CS-3 | ID | `ip_login_accounts` | `6+` | — | — | 0.80 | S "across many unrelated accounts" | — |
 | CS-4 | ID | `device_login_accounts` | `3-5`, `6+` | — | documented | 0.50 | K "`DEVICE_SHARING`" | `device_home`, `device_age` |
 | CS-5 | TX | `ip_datacenter` | `datacenter` | — | — | 0.80 | K "`IP_REPUTATION`" | `ip_home`, `ip_accounts`, `ip_accounts_1h` |
-| CS-6 | TX | `ip_login_accounts_1h` | `2-4`, `5+` | rare: `5+` | documented | 0.50 | S "A burst of failed logins across many unrelated accounts" | — |
+| CS-6 | TX | `ip_login_accounts_1h` | `2-4`, `5+` | none: `5+` | documented | 0.50 | S "A burst of failed logins across many unrelated accounts" | — |
 | CS-7 | TX | `prior_events_24h` | `other-identity`, `failed-login` | — | judged | 0.60 | S "a minority succeeding and transacting immediately" | `failed_logins_1h` |
 
 **`ANOMALOUS_HIGH_VALUE` (§3.9).**
@@ -661,13 +698,35 @@ These were in LPC-4's allowlist or were considered for this one.
 | `CREDENTIAL_STUFFING` TX `joint_link` (CS-8 of revision 1) | Removed in revision 2: transacting accounts pay from their own devices (G4). |
 | Any entry sourced from `IDENTITY_CHANGE` for `CREDENTIAL_STUFFING` | The mechanism emits logins, which are not identity changes (§18, item 8). |
 
+### 6.6 Episode consequences (revision 3)
+
+A documented multi-event episode changes some attributes as a whole: its documented timing puts several
+transactions of one account close together, or at a time of day that follows from its span. These
+entries are not allowlist rows and not signatures. They carry no `E_min`, no composition and no S7b
+check, and nothing may cite them as fraud evidence.
+
+| # | Scenario | P | Attributes | Source | Kind |
+|---|---|---|---|---|---|
+| ATO-E1 | `ACCOUNT_TAKEOVER` | TX | `tx_count_1h`, `tx_count_24h`, `gap_prev`, `distinct_merchants_1h`, `prior_decisions_1h`, `prior_declined_share_1h` | S "then within hours" | behavioural |
+| ATO-E2 | `ACCOUNT_TAKEOVER` | TX, OUT | `hour`, `daypart` | S "then within hours" | incidental |
+| IT-E1 | `IMPOSSIBLE_TRAVEL` | TX, OUT | `hour`, `daypart` | S "great-circle distance over elapsed time" | incidental |
+
+- **ATO-E1.** Several transactions within hours of one change raise the account's hourly and daily
+  counts, shorten the gap to its previous transaction, reach several merchants in the hour, and give
+  each later transaction the earlier ones' decisions: `prior_decisions_1h`, and the declined share
+  defined from them.
+- **Incidental.** An episode spanning hours ends later in the day than it starts. `hour` and `daypart`
+  are exempt for these two scenarios only because of that span. They are not a fraud signature, and
+  eval-v2 evidence alone may not justify them as a model feature (`docs/ROADMAP.md` Phase 4).
+- **Checks.** §6.3 gives the status and its effect. S1-U's support check still applies to every value.
+
 ## 7. S1 — no undocumented exclusivity or enrichment
 
 **S1-U — unconditional.**
 - **Scope.** Every population `P`, attribute `b` of class B or V (within its stratum), value `v`, and
   group `g`, where `g` is either:
   - any scenario `s`; or
-  - `POOLED`, for an attribute not exempt under R8's rule.
+  - `POOLED`, for a cell not exempt under R8's rule.
 - **Trigger.** A cell is checked when `lo_g(v) > 0.02`.
 - **Failure.** The checked cell fails if either condition holds:
   - (a) `not SUPPORTED({v})`. For a `rare` value of a row of `s` for `b`, the 0.001 share condition is
@@ -680,8 +739,8 @@ These were in LPC-4's allowlist or were considered for this one.
   conditional.
 - **Reference.** `ref` is the LEGIT rows in `σ` if they number ≥ 30 and come from ≥ 20 accounts.
   Otherwise it is all LEGIT rows of `P`, within `b`'s stratum.
-- **(i) Sweep.** For every attribute `b` of class B or V that no row of `s` names in `P`, and that is not
-  a consequence of another row of `s`: for every value `v`, fail if `ENRICHED`, where `g` is `s`'s rows
+- **(i) Sweep.** For every attribute `b` of class B or V that no row of `s` names in `P`, that is not a
+  consequence of another row of `s`, and that is not an episode consequence of `s`: for every value `v`, fail if `ENRICHED`, where `g` is `s`'s rows
   in `σ` and the legitimate side is `ref`.
 - **(ii) Consequences are judged only here.** A consequence of `e` is exempt, for `s`, from R7 and from
   S1-U's precision check. S1-U still checks its support.
@@ -810,8 +869,10 @@ with the check named.
     - Its ID rows carry one shared `device_id` (the documented `DEVICE_SHARING`).
     - Each transacting account's TX row uses that account's legitimate payment-device draw.
     - It keeps the pool IP (`IP_REPUTATION`).
+  - **`VELOCITY_ATTACK` (revision 3).** Each TX row uses that account's legitimate payment-device draw.
+    The catalogue documents a burst, not device multiplicity.
   - **Check.** S7a (one device per card-testing instance), plus R7 on the now ORDINARY `device_home`
-    and `device_age`.
+    and `device_age`, and for velocity attacks `distinct_devices_24h`.
 - **G5 — randomised spacing where no burst is documented.** All draws use
   `derive(seed, "scenario-time", f"{instance_id}:{ordinal}")`.
   - **`ACCOUNT_TAKEOVER`.** TX times are drawn independently and uniformly in
@@ -908,7 +969,8 @@ with the check named.
     - The device is not a home device.
 11. **Every instance** has ≥ 1 TX row.
 
-**S7b — documented effect.** For every allowlist row `e = (s, P, a, V*)`, with the value set `V*`, fail
+**S7b — documented effect.** For every allowlist row `e = (s, P, a, V*)` with an `E_min`, with the value
+set `V*`, fail
 unless both hold:
 - `lo_s ≥ E_min`;
 - `lo_s ≥ min(2.0 × hiF, hiF + 0.25)`.
@@ -950,7 +1012,7 @@ A row that names two populations is judged in each.
    | M1 | §5.3 `TX_REPEATED_EXACT_COORDINATES`, R3 |
    | M2 | §5.3 `TX_EXACT_HOME_POINT`, R1′–R3′ |
    | M3 | §5.3 R6 |
-   | M4 time of day | §5.4 R7, `hour` or `daypart` |
+   | M4 time of day | §5.4 R7, `hour` or `daypart`, for a scenario other than `ACCOUNT_TAKEOVER` and `IMPOSSIBLE_TRAVEL` |
    | M5 merchant choice | §5.4 R7, `merchant_popularity@merchant_habitual` |
    | M6 channel | §5.4 R7, `channel`, for a scenario other than `IMPOSSIBLE_TRAVEL` |
    | N1 legitimate non-home IPs | §7 S1-U (a), TX `ip_home = not` |
@@ -985,7 +1047,7 @@ A row that names two populations is judged in each.
    - S4, on K1, K2 or K7;
    - S3, for `POOLED`;
    - S5b, for any group;
-   - S7b, for any row.
+   - S7b, for any row with an `E_min`.
 
 ## 15. Reported, not gated
 
@@ -1111,7 +1173,8 @@ route. None is resolved by editing this criterion.
     - `DEVICE_FARM`, a repeat about a minute after the first.
 
     Resolved in revision 2 by G5. The documented "within hours" of a takeover still puts several
-    transactions into one day, so the probe may show residual enrichment of `tx_count_24h`.
+    transactions into one day, so the probe may show residual enrichment of `tx_count_24h`. The
+    diagnostic probe showed it; revision 3 declares it as ATO-E1 (§6.6).
 
 ## 19. Known limits
 
@@ -1124,6 +1187,8 @@ route. None is resolved by editing this criterion.
   store. Their agreement is ADR-0046's parity obligation.
 - **Catalogue.** The allowlist is only as right as the catalogue it cites.
 - **Thresholds.** All thresholds are chosen.
+- **Episode consequences.** ATO-E1, ATO-E2 and IT-E1 are judged for support only, so an enrichment of
+  those attributes beyond what the episode causes would pass.
 
 ## 20. Revision log
 
@@ -1144,3 +1209,28 @@ route. None is resolved by editing this criterion.
      - The `joint_link` causal-key mapping removed.
      - The N4 ablation check follows MC-1.
    - **Nothing else changed:** no other threshold, attribute or rule.
+3. **2026-09-14, revision 3.** The user's Step 9 decisions. No eval-v2 candidate exists. It follows two
+   diagnostic runs, disclosed under the revision rule: the quarter-scale eval-v2 probe (250,000
+   transactions, seed 43, `eval/track_a/audits/stage-2-evidence/lpc5-eval-v2-probe-quarter-scale.txt`),
+   which failed R7, R8, S1-U, S1-B, S2b and S7b; and the M4 acceptance experiment
+   (`eval/track_a/audits/stage-2-evidence/m4-episode-acceptance-experiment.txt`).
+   - **Episode consequences (§6.6).** ATO-E1 for the takeover's clustering within hours; ATO-E2 and
+     IT-E1 for `hour` and `daypart`, as incidental consequences of multi-hour spans. G5 is unchanged,
+     and no time-of-day calibration is added.
+   - **M4's ablation (§14.3)** is judged on scenarios other than takeover and impossible travel.
+   - **Value-specific support exemptions (§6.4).** The support thresholds are unchanged.
+     - `rare` where the probe's legitimate rows had the value below the share floor: ATO-3
+       `EMAIL_CHANGE` and `PHONE_CHANGE`; CT-2 and CT-4 `3-4`; CT-11 `(0,0.4)`; `tx_count_24h` `10-19`
+       for CT-3 and VA-3; `device_accounts_24h` `5+` for FR-1.
+     - `none` where the documented burst is defined as beyond the account's baseline and the probe's
+       legitimate rows had essentially none: `3-4` for CT-1 and VA-1; `5-9` for CT-2, CT-3, CT-4,
+       CT-6, CT-10, VA-2, VA-3, VA-4 and VA-6; `10-19` for CT-3 and VA-3; `tx_count_24h` `20+` for
+       VA-3; `5+` for CS-6.
+   - **Applicability by event type (§4.8).** Identity changes carry no IP, legitimate or planted.
+   - **R8 (§5.4).** The contributor rule replaces the 0.10 realised-share exemption.
+   - **G4 (§11).** Velocity attacks pay from the account's legitimate devices.
+   - **S7b (§13).** MC-5 and DF-5 keep their allowlisted status with no minimum effect; S7b and its
+     non-vacuity judge rows with an `E_min`.
+   - **Card testing's `DEVICE_SHARING`.** Its removal as a causal key is confirmed; the documented
+     "from one device" stays a per-instance invariant (S7a, G4).
+   - **Not changed:** the CT-3 and MC-2 near misses, the S2b ingest-lag finding, and every threshold.

@@ -7,9 +7,10 @@ required relationships or documented signature:
 - **G1 (N9) amounts.** Ordinary amounts come from the account's own sampler, restricted to the
   documented region where one is documented; card-testing probes and anomalous high values keep
   their documented absolute and far-beyond mechanisms.
-- **G4 devices.** Card-testing and credential-stuffing transactions lose their planted device; the
-  engine gives them the account's own payment device once the legitimate device plan exists. The
-  stuffing logins keep their one shared device (the documented `DEVICE_SHARING`).
+- **G4 devices.** Card-testing, credential-stuffing and velocity-attack transactions lose their
+  planted device; the engine gives them the account's own payment device once the legitimate device
+  plan exists. The stuffing logins keep their one shared device (the documented `DEVICE_SHARING`).
+  A velocity attack's catalogue documents a burst, not device multiplicity (`LPC-5` revision 3).
 - **G6 merchant collusion.** One price per instance; payers for whom that price is ordinary.
 - **G7 causal keys.** Only what the revised mechanism creates.
 - **M5 merchants.** Popularity-weighted, as legitimate spend outside the habitual set is. A takeover
@@ -81,7 +82,9 @@ EVAL_V2_CAUSAL_KEYS: Final[dict[FraudPattern, frozenset[EvidenceKind]]] = {
 }
 """G7: scenarios whose eval-v2 keys differ from eval-v1's. Every other keeps its own."""
 
-LEGITIMATE_DEVICE_PATTERNS: Final = frozenset({FP.CARD_TESTING, FP.CREDENTIAL_STUFFING})
+LEGITIMATE_DEVICE_PATTERNS: Final = frozenset(
+    {FP.CARD_TESTING, FP.CREDENTIAL_STUFFING, FP.VELOCITY_ATTACK}
+)
 """G4: transactions the engine gives the account's own payment device."""
 
 _CHANNEL_FREE: Final = frozenset(

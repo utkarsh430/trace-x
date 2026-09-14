@@ -24,11 +24,11 @@ from trace_core.contracts.topics import TX_AUTHORIZATION_V1
 from trace_core.domain.enums import FraudPattern
 
 CRITERION_ID: Final = "LPC-5"
-REVISION: Final = 2
+REVISION: Final = 3
 CRITERION_PATH: Final = "eval/track_a/criteria/lpc-5.md"
 # The frozen document's public sha256, not a credential.
 CRITERION_SHA256: Final = (
-    "49f401d1a469bd9874157a72915e33f88f9dfdaa88ecfaea2c5e0e35a8dc2b06"  # pragma: allowlist secret
+    "40b5733b5296c3cf32329b74e8331cb241fa56e95f5d60c6d7fbedd76b24f8fc"  # pragma: allowlist secret
 )
 
 # ------------------------------------------------------------------ §3 statistics --------------
@@ -36,7 +36,6 @@ Z: Final = 1.645
 ENRICHMENT_BOUND: Final = 2.0
 MIN_EXCESS: Final = 0.02
 LEGIT_SHARE_FLOOR: Final = 0.001
-POOLED_EXEMPTION_SHARE: Final = 0.10
 S1_TRIGGER: Final = 0.02
 SUPPORT_MIN_ROWS: Final = 30
 SUPPORT_MIN_ACCOUNTS: Final = 20
@@ -426,12 +425,21 @@ class AllowRow:
     populations: tuple[Population, ...]
     attribute: str
     values: frozenset[str]
-    e_min: float
+    e_min: float | None
+    """The least lower bound S7b requires. None for an allowed effect with no minimum (§13,
+    revision 3): the row keeps every other status and check."""
     sources: tuple[Source, ...]
     composition: Composition | None = None
     rare: frozenset[str] = frozenset()
     none: frozenset[str] = frozenset()
     consequences: Mapping[Population, tuple[str, ...]] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
+    consequence_rare: Mapping[str, frozenset[str]] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
+    """Exempt values of a consequence attribute, by attribute (§6.3, revision 3)."""
+    consequence_none: Mapping[str, frozenset[str]] = field(
         default_factory=lambda: MappingProxyType({})
     )
 
@@ -453,13 +461,15 @@ def _row(
     populations: tuple[Population, ...],
     name: str,
     values: tuple[str, ...],
-    e_min: float,
+    e_min: float | None,
     sources: tuple[Source, ...],
     *,
     composition: Composition | None = None,
     rare: tuple[str, ...] = (),
     none: tuple[str, ...] = (),
     consequences: tuple[str, ...] | Mapping[Population, tuple[str, ...]] = (),
+    consequence_rare: Mapping[str, tuple[str, ...]] | None = None,
+    consequence_none: Mapping[str, tuple[str, ...]] | None = None,
 ) -> AllowRow:
     mapped = (
         dict(consequences)
@@ -478,6 +488,12 @@ def _row(
         rare=frozenset(rare),
         none=frozenset(none),
         consequences=MappingProxyType(mapped),
+        consequence_rare=MappingProxyType(
+            {name: frozenset(v) for name, v in (consequence_rare or {}).items()}
+        ),
+        consequence_none=MappingProxyType(
+            {name: frozenset(v) for name, v in (consequence_none or {}).items()}
+        ),
     )
 
 
@@ -525,6 +541,7 @@ ALLOWLIST: Final[tuple[AllowRow, ...]] = (
         0.80,
         (_s("An identity change"),),
         composition=JUDGED,
+        rare=("EMAIL_CHANGE", "PHONE_CHANGE"),
     ),
     _row(
         "ATO-4",
@@ -602,8 +619,7 @@ ALLOWLIST: Final[tuple[AllowRow, ...]] = (
         0.30,
         (_CT_BURST,),
         composition=DOCUMENTED,
-        rare=("3-4",),
-        none=("5-9", "10-19", "20+"),
+        none=("3-4", "5-9", "10-19", "20+"),
     ),
     _row(
         "CT-2",
@@ -614,8 +630,8 @@ ALLOWLIST: Final[tuple[AllowRow, ...]] = (
         0.60,
         (_CT_BURST,),
         composition=DOCUMENTED,
-        rare=("5-9",),
-        none=("10-19", "20+"),
+        rare=("3-4",),
+        none=("5-9", "10-19", "20+"),
     ),
     _row(
         "CT-3",
@@ -626,9 +642,9 @@ ALLOWLIST: Final[tuple[AllowRow, ...]] = (
         0.80,
         (_CT_BURST,),
         composition=DOCUMENTED,
-        rare=("10-19",),
-        none=("20+",),
+        none=("5-9", "10-19", "20+"),
         consequences=("tx_count_24h",),
+        consequence_rare={"tx_count_24h": ("10-19",)},
     ),
     _row(
         "CT-4",
@@ -639,8 +655,8 @@ ALLOWLIST: Final[tuple[AllowRow, ...]] = (
         0.60,
         (_CT_BURST,),
         composition=DOCUMENTED,
-        rare=("5-9",),
-        none=("10-19", "20+"),
+        rare=("3-4",),
+        none=("5-9", "10-19", "20+"),
     ),
     _row(
         "CT-5",
@@ -661,8 +677,7 @@ ALLOWLIST: Final[tuple[AllowRow, ...]] = (
         0.60,
         (_s("across many distinct merchants"),),
         composition=DOCUMENTED,
-        rare=("5-9",),
-        none=("10+",),
+        none=("5-9", "10+"),
         consequences=("merchant_habitual", "merchant_popularity", "merchant_accounts_1h"),
     ),
     _row(
@@ -707,8 +722,7 @@ ALLOWLIST: Final[tuple[AllowRow, ...]] = (
         0.60,
         (_CT_BURST,),
         composition=DOCUMENTED,
-        rare=("5-9",),
-        none=("10+",),
+        none=("5-9", "10+"),
     ),
     _row(
         "CT-11",
@@ -719,6 +733,7 @@ ALLOWLIST: Final[tuple[AllowRow, ...]] = (
         0.60,
         (_s("a substantial share declined"),),
         composition=DOCUMENTED,
+        rare=("(0,0.4)",),
     ),
     # --- IMPOSSIBLE_TRAVEL (§3.3)
     _row(
@@ -763,8 +778,7 @@ ALLOWLIST: Final[tuple[AllowRow, ...]] = (
         0.30,
         (_VA_BURST,),
         composition=DOCUMENTED,
-        rare=("3-4",),
-        none=("5-9", "10-19", "20+"),
+        none=("3-4", "5-9", "10-19", "20+"),
     ),
     _row(
         "VA-2",
@@ -775,8 +789,7 @@ ALLOWLIST: Final[tuple[AllowRow, ...]] = (
         0.60,
         (_VA_BURST,),
         composition=DOCUMENTED,
-        rare=("5-9",),
-        none=("10-19", "20+"),
+        none=("5-9", "10-19", "20+"),
     ),
     _row(
         "VA-3",
@@ -787,9 +800,10 @@ ALLOWLIST: Final[tuple[AllowRow, ...]] = (
         0.80,
         (_VA_BURST,),
         composition=DOCUMENTED,
-        rare=("10-19",),
-        none=("20+",),
+        none=("5-9", "10-19", "20+"),
         consequences=("tx_count_24h",),
+        consequence_rare={"tx_count_24h": ("10-19",)},
+        consequence_none={"tx_count_24h": ("20+",)},
     ),
     _row(
         "VA-4",
@@ -800,8 +814,7 @@ ALLOWLIST: Final[tuple[AllowRow, ...]] = (
         0.60,
         (_VA_BURST,),
         composition=DOCUMENTED,
-        rare=("5-9",),
-        none=("10-19", "20+"),
+        none=("5-9", "10-19", "20+"),
     ),
     _row(
         "VA-5",
@@ -822,8 +835,7 @@ ALLOWLIST: Final[tuple[AllowRow, ...]] = (
         0.60,
         (_VA_BURST,),
         composition=DOCUMENTED,
-        rare=("5-9",),
-        none=("10+",),
+        none=("5-9", "10+"),
         consequences=("prior_declined_share_1h",),
     ),
     # --- DEVICE_FARM (§3.5)
@@ -874,7 +886,7 @@ ALLOWLIST: Final[tuple[AllowRow, ...]] = (
         (TX,),
         "device_age",
         ("first-use", "<1h"),
-        0.80,
+        None,
         (_k("DEVICE_NOVELTY"),),
         composition=JUDGED,
     ),
@@ -895,6 +907,7 @@ ALLOWLIST: Final[tuple[AllowRow, ...]] = (
             "distinct_devices_24h",
             "device_account_tx",
         ),
+        consequence_rare={"device_accounts_24h": ("5+",)},
     ),
     _row(
         "FR-2",
@@ -962,7 +975,7 @@ ALLOWLIST: Final[tuple[AllowRow, ...]] = (
         (TX,),
         "mcc_habitual",
         ("unhabitual",),
-        0.50,
+        None,
         (_k("MCC_ANOMALY"),),
         consequences=("merchant_mcc",),
     ),
@@ -1024,7 +1037,7 @@ ALLOWLIST: Final[tuple[AllowRow, ...]] = (
         0.50,
         (_s("A burst of failed logins across many unrelated accounts"),),
         composition=DOCUMENTED,
-        rare=("5+",),
+        none=("5+",),
     ),
     _row(
         "CS-7",
@@ -1103,6 +1116,80 @@ ALLOWLIST: Final[tuple[AllowRow, ...]] = (
     ),
 )
 
+
+class EpisodeKind(StrEnum):
+    BEHAVIOURAL = "behavioural"
+    INCIDENTAL = "incidental"
+    """A consequence of the episode's documented span, never a fraud signature (§6.6)."""
+
+
+@dataclass(frozen=True, slots=True)
+class EpisodeConsequence:
+    """§6.6 (revision 3): attributes a documented multi-event episode changes as a whole.
+
+    Not an allowlist row and not a signature: no `E_min`, no composition, no S7b. The status skips
+    S1-U's precision check, R7 and S1-B's sweep for the scenario; S1-U's support check stays."""
+
+    row_id: str
+    scenario: FraudPattern
+    populations: tuple[Population, ...]
+    attributes: frozenset[str]
+    source: Source
+    kind: EpisodeKind
+
+
+EPISODE_CONSEQUENCES: Final[tuple[EpisodeConsequence, ...]] = (
+    EpisodeConsequence(
+        "ATO-E1",
+        FP.ACCOUNT_TAKEOVER,
+        (TX,),
+        frozenset(
+            {
+                "tx_count_1h",
+                "tx_count_24h",
+                "gap_prev",
+                "distinct_merchants_1h",
+                "prior_decisions_1h",
+                "prior_declined_share_1h",
+            }
+        ),
+        _s("then within hours"),
+        EpisodeKind.BEHAVIOURAL,
+    ),
+    EpisodeConsequence(
+        "ATO-E2",
+        FP.ACCOUNT_TAKEOVER,
+        (TX, OUT),
+        frozenset({"hour", "daypart"}),
+        _s("then within hours"),
+        EpisodeKind.INCIDENTAL,
+    ),
+    EpisodeConsequence(
+        "IT-E1",
+        FP.IMPOSSIBLE_TRAVEL,
+        (TX, OUT),
+        frozenset({"hour", "daypart"}),
+        _s("great-circle distance over elapsed time"),
+        EpisodeKind.INCIDENTAL,
+    ),
+)
+
+OPTIONAL_FIELD_ATTRIBUTES: Final[Mapping[Population, Mapping[str, tuple[str, ...]]]] = (
+    MappingProxyType(
+        {
+            ID: MappingProxyType(
+                {
+                    "ip": ("ip_datacenter", "ip_login_accounts"),
+                    "device": ("device_home", "device_age", "device_login_accounts"),
+                    "user_agent": ("user_agent",),
+                }
+            )
+        }
+    )
+)
+"""§4.8 (revision 3): an attribute derived from an optional field is not applicable to an event type
+no row of which, legitimate or planted, carries that field, when the type occurs among legitimate
+rows. Keyed by the `SideRow` field name."""
 KEY_MAP: Final[Mapping[str, tuple[tuple[Population, str, frozenset[str]], ...]]] = MappingProxyType(
     {
         "DEVICE_SHARING": (
@@ -1283,7 +1370,12 @@ ABLATIONS: Final[Mapping[str, Expectation]] = MappingProxyType(
         "M1": _e("S0/LPC-3/R3", note="TX_REPEATED_EXACT_COORDINATES"),
         "M2": _e("S0/LPC-3/R3'", note="TX_EXACT_HOME_POINT"),
         "M3": _e("S0/LPC-3/R6", note="TX_CNP_ECOMMERCE"),
-        "M4": _e("R7", TX, "hour", note="hour or daypart"),
+        "M4": _e(
+            "R7",
+            TX,
+            "hour",
+            note="hour or daypart, outside ACCOUNT_TAKEOVER and IMPOSSIBLE_TRAVEL",
+        ),
         "M5": _e("R7", TX, "merchant_popularity"),
         "M6": _e("R7", TX, "channel", note="a scenario other than IMPOSSIBLE_TRAVEL"),
         "N1": _e("S1-U(a)", TX, "ip_home", ("not",)),

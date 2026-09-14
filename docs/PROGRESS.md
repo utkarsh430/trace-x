@@ -602,7 +602,7 @@ both reports.
     - To be recorded as a decision that updates ADR-0030 (Stage 2 step 5).
   * **U7 decided.** See UNRESOLVED DECISIONS; designed in ADR-0049 (Proposed), not implemented.
   * **`LPC-5` amended and frozen** as `eval/track_a/criteria/lpc-5.md`. Revision 1 was committed
-    first; **revision 2**, the current freeze, has sha256 `49f401d1a469bd9874157a72915e33f88f9dfdaa88ecfaea2c5e0e35a8dc2b06`.
+    first; **revision 2**, the current freeze, has sha256 `40b5733b5296c3cf32329b74e8331cb241fa56e95f5d60c6d7fbedd76b24f8fc`.
     - **Revision 2 applies the user's blocking corrections** of the same day:
       - a thirds rule for per-scenario calendar coverage, with the pooled 20-slice rule unchanged;
       - disclosure whenever the G2 coverage floor changes the natural scenario mix;
@@ -640,6 +640,7 @@ both reports.
 | D8 | macOS Docker keychain helper hangs, blocking cold registry pulls | Workaround in `LOCAL_DEVELOPMENT.md` | Environment, not code |
 | D9 | Role passwords in `.env.example` are `change_me_locally` | Fine locally; a shared deployment must supply real values | Before any shared deployment |
 | D11 | CI job logs need repo-admin rights to download | CI-only failures are diagnosed by local reproduction | Optional (`gh auth login`) |
+| D12 | `hour` and `daypart` for takeovers and impossible travel are exempt in `LPC-5` only as incidental consequences of synthetic episode spans (revision 3 §6.6) | A model trained on eval-v2 could learn time of day as a shortcut | Phase 4: feature selection may not admit them on eval-v2 evidence alone (`docs/ROADMAP.md` Phase 4) |
 | **D12** | **Generation throughput below the ROADMAP budget** | Slower dataset builds; no correctness impact. ADR-0029 names the batched-substream scheme as the first thing to try | Revisit if dataset size grows |
 | **D13** | `identity.events.v1` / `device.events.v1` are produced but nothing consumes them yet | The contracts are exercised by the generator only | Phase 3 Steps 4–6 |
 | ~~D1, D2, D3, D6, D7~~ | ~~Migrations, CI, OTel, lockfile, compose targets~~ | **RESOLVED in Phase 0** | done |
@@ -961,6 +962,31 @@ Phase 3, in the wave order of `docs/PHASE3_PLAN.md` §5:
           distance-derived travel gap). It is routed with the others: treating `hour` and `daypart`
           as consequences of those episodes is a criterion revision.
       - **Step 10 is blocked** on those decisions.
+      - **Step 9 decisions (user, 2026-09-14): `LPC-5` revision 3, then one more probe.**
+        - Episode consequences (§6.6), judged for support only and never signatures:
+          - ATO-E1 for the takeover's clustering: hourly and daily counts, `gap_prev`, distinct
+            merchants in the hour, and the prior-decision count and share derived from them;
+          - ATO-E2 and IT-E1 for `hour` and `daypart`, incidental consequences of multi-hour spans.
+        - G5 is unchanged and no time-of-day calibration is added. M4's ablation is judged on the
+          other scenarios.
+        - Value-specific support exemptions, with the support thresholds unchanged:
+          - `rare` where legitimate rows exist below the share floor;
+          - `none` where the documented burst is beyond the account's baseline.
+        - Applicability by event type (§4.8): an ID attribute of an optional field is not judged for
+          a legitimate event type no row of which carries that field.
+        - R8: a pooled cell is exempt only when every contributing scenario admits the value. The
+          realised-share rule is gone.
+        - G4: velocity attacks pay from the account's legitimate devices (generator changed).
+        - MC-5 and DF-5 keep their allowlisted status with no minimum effect.
+        - Card testing's `DEVICE_SHARING` removal is confirmed; "from one device" stays an S7a
+          invariant. ADR-0050 is updated.
+        - Not changed: the CT-3 and MC-2 near misses, the S2b ingest-lag finding, every threshold.
+        - **Reading to review.** ATO-E1 includes `prior_decisions_1h` and `prior_declined_share_1h`
+          beyond the literal decision: each later transaction of the episode sees the earlier ones'
+          decisions, the same hourly count through the outcome stream, as VA-6 already lists.
+        - **For §14.1.** The eval-v1 negative control recorded in step 3 ran under revision 2. Its
+          `R7 hour` expectation now rests on scenarios other than takeover and impossible travel.
+          The controls rerun in step 11.
    10. Final candidate.
    11. Frozen `LPC-5` acceptance.
    12. Freeze the manifest and digests.

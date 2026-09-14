@@ -115,3 +115,19 @@ def test_the_runner_judges_an_ablation_end_to_end() -> None:
     assert lpc5_control.control_unmet(correction, lpc5_control.evaluate_config(config)) == []
     baseline = lpc5_control.evaluate_config(candidate)
     assert not controls.ABLATION_CHECKS["N12"](baseline)
+
+
+def test_the_m4_ablation_check_is_judged_away_from_multi_hour_episodes() -> None:
+    """Revision 3: takeover and impossible-travel time of day is an incidental episode consequence,
+    so M4's control reads R7 on the scenarios whose time of day M4 alone controls."""
+    from types import SimpleNamespace
+
+    from data.generator.lpc5.judge import CheckResult, Finding
+
+    def report(group: str) -> Any:
+        finding = Finding("R7", d.Population.TX, "daypart", "00-05", group)
+        return SimpleNamespace(checks={"R7": CheckResult("R7", 1, (finding,))})
+
+    assert not controls.ABLATION_CHECKS["M4"](report("ACCOUNT_TAKEOVER"))
+    assert not controls.ABLATION_CHECKS["M4"](report("IMPOSSIBLE_TRAVEL"))
+    assert controls.ABLATION_CHECKS["M4"](report("CARD_TESTING"))

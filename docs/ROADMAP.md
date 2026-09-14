@@ -303,6 +303,9 @@ decisions, and no target or exit condition was lowered.
 - LightGBM + Isolation Forest + robust-z control; isotonic calibration; temporal splits.
 - MLflow tracking and registry; ensemble threshold selection.
 - Artifact pinning by digest with boot-time verification; SHAP top-k in `RiskScore`; PSI drift job.
+- Feature selection does not admit `hour` or `daypart` on eval-v2 evidence alone. Their shift for
+  takeovers and impossible travel is an incidental consequence of synthetic episode spans, not a fraud
+  signature (`LPC-5` revision 3 §6.6).
 
 **AUTOMATED TESTS**
 - Leakage: shuffled labels ⇒ PR-AUC ≈ base rate.

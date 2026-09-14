@@ -609,16 +609,17 @@ def _resolve_planted_devices(
     planted: list[tuple[int, int, int, Any]],
     payment: Mapping[int, PaymentDevices],
 ) -> list[tuple[int, int, int, Any]]:
-    """G4: card-testing and credential-stuffing transactions pay from the account's own devices.
+    """G4: card-testing, credential-stuffing and velocity-attack transactions pay from the account's
+    own devices.
 
     - **Card testing.** Every transaction of an instance uses the device the account's payment
       mechanism picks for the instance's first transaction, from
       `derive(seed, "scenario-device", instance_id)`.
-    - **Credential stuffing.** Each transaction uses the pick for itself, from
-      `derive(seed, "scenario-device", f"{instance_id}:{ordinal}")`. The logins keep their one
-      shared device.
+    - **Credential stuffing and velocity attacks.** Each transaction uses the pick for itself, from
+      `derive(seed, "scenario-device", f"{instance_id}:{ordinal}")`. The stuffing logins keep their
+      one shared device.
 
-    Neither is guaranteed new to the account, because neither scenario documents device novelty.
+    None is guaranteed new to the account, because none of these scenarios documents device novelty.
     Runs on final times, so a device enrolled at that moment is known exactly as T1 knows it."""
     seed = config.seed
     first: dict[str, tuple[int, int, int]] = {}

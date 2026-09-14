@@ -80,7 +80,8 @@ minutes from one device, a substantial share declined, followed by one larger ch
 at which anyone looks. The payoff charge is what makes the probing worth detecting. Under the eval-v2
 gate every probe and the payoff use one device, the account's own payment device, because no device
 novelty is documented (ADR-0050, G4). The injection then creates no device sharing, so eval-v2 does
-not claim it.
+not claim it. Probing "from one device" stays part of the signature and is checked per instance
+(`LPC-5` S7a).
 
 ### 3.3 `IMPOSSIBLE_TRAVEL`
 
@@ -103,7 +104,9 @@ innocent explanation.
 
 **Notes.** Amounts stay ordinary on purpose, so velocity is detectable on its own rather than as a
 side effect of an amount anomaly. Otherwise this scenario and `ANOMALOUS_HIGH_VALUE` would not be
-distinguishable, and per-pattern metrics would be measuring the same thing twice.
+distinguishable, and per-pattern metrics would be measuring the same thing twice. Under the eval-v2
+gate each transaction pays from the account's own payment device, because the signature documents a
+burst, not device multiplicity (ADR-0050, G4; `LPC-5` revision 3).
 
 ### 3.5 `DEVICE_FARM`
 

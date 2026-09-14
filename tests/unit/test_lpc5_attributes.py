@@ -236,8 +236,10 @@ def test_side_rows_age_devices_by_first_reference_in_any_stream() -> None:
     tables = _tables(rows, knowledge(datacenter_ips=frozenset({"ip_00005"})))
     ident = tables[d.Population.ID]
     dev = tables[d.Population.DEV]
-    assert ident.column("device_age").values() == ["first-reference", "absent"]
-    assert ident.column("device_home").values() == ["not", "absent"]
+    # §4.8 (revision 3): no LOGIN_SUCCEEDED row carries a device, and legitimate logins occur, so
+    # the login's device attributes are not applicable rather than `absent`.
+    assert ident.column("device_age").values() == ["first-reference", None]
+    assert ident.column("device_home").values() == ["not", None]
     assert ident.column("ip_datacenter").values() == ["absent", "datacenter"]
     assert ident.column("ip_login_accounts").values() == ["absent", "1"]
     assert dev.column("device_age").values() == ["<1h"]
@@ -256,3 +258,31 @@ def test_amount_attributes_bin_against_the_accounts_own_distribution() -> None:
     assert tx.column("amount_z").values() == ["<-2", "[-0.5,0)", "≥2"]
     assert tx.column("amount_roundness").values() == ["x100", "x100", "x1000"]
     assert tx.column("amount_decile").values() == ["3", "6", "9"]  # edges: nearest-rank legit
+
+
+def test_an_attribute_no_row_of_its_event_type_provides_is_not_applicable() -> None:
+    """Revision 3 §4.8: identity changes carry no IP, legitimate or planted, so IP attributes are
+    not judged for them; logins carry one and are. One carrying row makes the type applicable."""
+    takeover = FraudPattern.ACCOUNT_TAKEOVER
+    rows = Rows()
+    rows.tx(T0 - HOUR, A0)
+    rows.identity(T0, A0, "LOGIN_FAILED", ip="ip_00009")
+    rows.identity(T0 + MIN, A0, "PASSWORD_CHANGE")
+    rows.identity(T0 + 2 * MIN, A1, "PASSWORD_CHANGE", pattern=takeover)
+    table = _tables(rows)[d.Population.ID]
+    assert table.column("ip_datacenter").values() == ["not", None, None]
+    assert table.column("ip_login_accounts").values()[1:] == [None, None]
+    assert table.column("device_home").values()[1] is not None  # the device is carried
+
+    carried = Rows()
+    carried.tx(T0 - HOUR, A0)
+    carried.identity(T0, A0, "PASSWORD_CHANGE")
+    carried.identity(T0 + MIN, A1, "PASSWORD_CHANGE", pattern=takeover, ip="ip_00009")
+    assert _tables(carried)[d.Population.ID].column("ip_datacenter").values() == ["absent", "not"]
+
+    planted_only = Rows()
+    planted_only.tx(T0 - HOUR, A0)
+    planted_only.identity(T0, A0, "LOGIN_FAILED", ip="ip_00009")
+    planted_only.identity(T0 + MIN, A1, "MFA_RESET", pattern=takeover)
+    values = _tables(planted_only)[d.Population.ID].column("ip_datacenter").values()
+    assert values == ["not", "absent"]  # no legitimate MFA_RESET shows the absence is structural
