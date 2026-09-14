@@ -201,6 +201,20 @@ each topic's declared identity, so publishing again is safe.
 **Action:** never delete a checkpoint to "fix" a stuck job — that silently reprocesses or skips data.
 Diagnose first. If a checkpoint must be reset, record it as a data-lineage event.
 
+### Streaming query refused at start
+
+**Detect:** `CheckpointRefusedError`, `StreamingSourceRetentionError` or `TableDriftError` before a
+query runs; the message names every reason.
+**Behaviour:** the query does not start. Each refusal is a state in which starting would silently lose
+or duplicate rows (ADR-0048): a target that already holds this query's commits without a checkpoint, a
+target restored, recreated or ahead of its checkpoint, a changed source or target set, a Delta source
+that no longer retains the log a restart needs, or a table that differs from its declaration.
+**Action:** never delete the checkpoint or repair the table to make the refusal go away -- Delta's own
+advice to delete the checkpoint is what turns a loud failure into loss or duplication. If reprocessing
+is the right answer, `reset_checkpoint` publishes a new checkpoint version with a mandatory reason and
+deletes nothing; a Kafka source may never restart from `latest`. A drifted table is an operator's
+decision: rows written while it drifted may violate its declaration.
+
 ### Neo4j unavailable
 **Detect:** health probe.
 **Behaviour:** `GraphStore` falls back to `PostgresGraphStore`; graph evidence carries reduced

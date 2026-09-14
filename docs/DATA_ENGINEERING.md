@@ -34,7 +34,8 @@ in every run manifest; changing one invalidates prior benchmark comparability an
 > **Being superseded in Phase 3.** The approved plan (`docs/PHASE3_PLAN.md` §2–§4) replaces parts of
 > §2–§4 below: Silver keeps every accepted event (late events are tagged and copied to `late_events`,
 > not removed) and is exactly deduplicated by a declared identity; Spark rejects go to a Delta
-> quarantine table; Gold is computed in batch; and reconstruction rebuilds the online store's
+> quarantine table; every table is created from its declaration before a query writes it (ADR-0048); Gold
+> is computed in batch; and reconstruction rebuilds the online store's
 > primitives rather than writing feature values back. Each section is rewritten by the step that
 > implements it, and until then the plan is authoritative where the two differ.
 
@@ -71,11 +72,11 @@ only to measure lag.** Confusing them silently corrupts every windowed aggregate
 | Concern | Implementation |
 |---|---|
 | Watermark | `withWatermark("occurred_at", "10 minutes")` on every stateful stage |
-| Deduplication | `dropDuplicatesWithinWatermark(["event_id"])` |
+| Deduplication | By each topic's declared identity (`deploy/kafka/topics.yaml`): deterministically within each micro-batch, then an insert-only MERGE through the query's checkpoint. Both are needed: Delta inserts every duplicate a MERGE source carries (ADR-0048) |
 | Out-of-order | Normal and expected. All aggregation is event-time windowed |
 | Late data | Beyond the watermark → `late_events` Delta table + counter. **Never silently dropped** |
 | Stateful ops | `flatMapGroupsWithState` with explicit TTL for session and velocity state |
-| Checkpoints | Per query under `_checkpoints/{query}/` |
+| Checkpoints | `<lake root>/_checkpoints/<query>/v<N>/`, beside the tiers: each version owns its Delta app id and is the only way its query writes (ADR-0048) |
 | Replay | `availableNow` trigger for bounded batch reprocessing from any offset |
 | Local sizing | `spark.sql.shuffle.partitions=8`, driver 2g, executor 2g — sized for an 8 GB VM |
 

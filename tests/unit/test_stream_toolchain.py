@@ -374,3 +374,9 @@ def test_the_jar_lock_is_exactly_what_the_lock_command_pins() -> None:
         assert "sha1" in entry["cross_checked"], entry["coordinate"]
         assert set(entry["cross_checked"]) <= {"sha1", "sha256", "sha512"}
         assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", entry["locked_at"]), entry["coordinate"]
+
+
+def test_spark_manages_nothing_outside_the_lake_root() -> None:
+    """A managed table created without a path lands under the lake root's `_warehouse`, never in a
+    `spark-warehouse` beside whichever directory a job started in, and no caller can redirect it."""
+    assert "spark.sql.warehouse.dir" in RESERVED_KEYS

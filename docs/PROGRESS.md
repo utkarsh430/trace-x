@@ -491,9 +491,43 @@ both reports.
     * where the mirrored §4.3 timing constants live (Step 6);
     * the `tx.scored.v1` byte reservation, budgeted but undeclared until that topic is released;
     * every broker started from this image sharing its default cluster id.
-* **Step 3 — Delta spike and lake conventions.** Implemented in its worktree, with every first-pass
-  critic finding fixed; the second critic pass did not run. Awaits the lead's self-review and
-  integration. The snake_case naming of lake tables needs a user decision (U9).
+* **Step 3 — Delta spike and lake conventions: integrated on the local branch
+  `phase/03-step3-delta`, not merged** (ADR-0048, Proposed). It waits for U9, because its table and
+  query names are snake_case. Built in the Delta agent's worktree with every first-pass critic finding
+  fixed; a single-agent self-review took the place of the critic's second pass.
+  * **Observed on the pinned Delta 4.0.1**, each asserted by `tests/stream/test_delta_capabilities.py`:
+    * how idempotent commits behave;
+    * the silent-loss states: a reused app id, a second write in one batch, a log cleaned under a
+      running query, and vacuumed files skipped under `ignoreMissingFiles`;
+    * which protocol features each table property adds;
+    * per-table VACUUM floors;
+    * liquid clustering applied only by `OPTIMIZE`;
+    * what a scan selected against what it read.
+  * **Conventions built on it:**
+    * one lake root (`TRACE_DELTA_ROOT`, anchored to the checkout);
+    * `TableRef`, and declarations that cannot quietly add protocol features;
+    * tables created from their declaration in one commit, and refused, never repaired, on drift;
+    * provenance on every commit;
+    * checkpoints that own their app id, read their own evidence and refuse the silent-loss states;
+    * scan measurement that refuses rather than under-reports.
+  * **Lead's additions:**
+    * the merged `LakeContractError` family;
+    * Spark's warehouse directory under the lake root, reserved against override;
+    * the `delta` toolchain scope entry;
+    * DATA_ENGINEERING, TESTING and OPERATIONS.
+  * **Corrections ADR-0048 proposes to the approved plan, pending approval:**
+    * deduplicate within each micro-batch before the insert-only MERGE, because Delta inserts every
+      in-batch duplicate;
+    * weigh the protocol cost of constraints and clustering in Q6;
+    * declare VACUUM retention per table (Step 11);
+    * guard data loss twice: a reader that forces `failOnDataLoss=true`, and the pre-start guard;
+    * in the layout benchmark, report selected bytes and bytes read separately (Step 14);
+    * create every table from its declaration before its first query (Steps 5–7).
+  * **Evidence:** `make verify` with the lake unit tests. The full `-m stream` suite on Temurin 17
+    passed 50 of 51: the one failure was the lead's own regression. The warehouse change made every
+    Spark session log the lake root to stdout, ahead of the refusal line a toolchain test reads. The
+    session factory now resolves the root quietly, and `tests/stream/test_session.py`, rerun after the
+    fix, 9 passed, 1 warning. `tests/stream/test_delta_capabilities.py` passed in full.
 * **Step E — `eval-v2`.** Stages 1, 1b and 1c are complete in its worktree:
   * legitimate identity, device and decline activity;
   * planted-row markers removed;
@@ -553,7 +587,7 @@ both reports.
 | U5 | LightGBM vs XGBoost on measured PR-AUC | Phase 4 |
 | U6 | Whether Phase 13 (Go gateway) is worth doing | Phase 13 entry |
 | **U7** | How authorization outcomes reach features. The scored transaction's own outcome is post-decision and is excluded (ADR-0046 §7). Earlier transactions' outcomes are still taken from their scoring requests. Recommended: an authorization-result event dated when the outcome is known | User decision (new event contract) |
-| **U9** | Lake table and streaming-query identifiers in snake_case, which Unity Catalog SQL needs unquoted, versus CLAUDE.md §6's kebab-case file paths. A rule interpretation, so it needs user approval | User decision, before Step 3 lands |
+| **U9** | Lake table and streaming-query identifiers in snake_case, which Unity Catalog SQL needs unquoted, versus CLAUDE.md §6's kebab-case file paths. A rule interpretation, so it needs user approval. ADR-0048 recommends snake_case, recorded as an exception to the file-path rule, over kebab-case directories with a tested mapping. Step 3 is integrated on `phase/03-step3-delta` and merges once this is decided | User decision, before Step 3 lands |
 | **U10** | Whether R010's threshold (`device_distinct_accounts_24h >= 5`) should change now that the scored transaction's own account counts (ADR-0046 §2). On the `eval-v1` replay prefix it adds 9 legitimate and 3 fraud HIGH-or-CRITICAL decisions, all attributed to self-inclusion (`eval/replay/attribute_rule_changes.py`). Kept as declared until then | User decision: a ruleset change, separate from Step 1 |
 
 ---
@@ -564,8 +598,7 @@ Phase 3, in the wave order of `docs/PHASE3_PLAN.md` §5:
 
 1. **User decisions Step 1 surfaced:** U10 (R010's threshold now that self-inclusion counts the scored
    account), acceptance of ADR-0046, and the open U7 and U9.
-2. **Integrate Step 3** (Delta) from its worktree: self-review, the requested doc edits, `make verify`,
-   commit. U9 (lake naming) is needed before it lands.
+2. **Merge Step 3** from `phase/03-step3-delta` once U9 is decided.
 3. **Step E stage 1d**, the label-proxy audit; stage 2 after U7.
 4. **Confirm the first `test-stream` CI run on GitHub** executed Spark: it has only been reproduced
    locally so far (macOS session, and a Linux container for the hashed install).

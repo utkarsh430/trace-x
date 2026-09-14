@@ -65,6 +65,8 @@ SCOPE_REQUIREMENTS = {
     # confluent_kafka. Both are installed everywhere now, from the lock.
     "pyspark": "stream",
     "confluent_kafka": "stream",
+    # Step 3's lake modules import delta-spark's Python API (`delta`), from the same lock.
+    "delta": "stream",
 }
 
 EXTRAS_RE = re.compile(r'install[^\n]*-e\s+"\.\[([a-z,\s]+)\]"')

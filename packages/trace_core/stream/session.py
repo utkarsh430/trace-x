@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from trace_core.domain.errors import ToolchainMismatchError
 from trace_core.stream import toolchain
+from trace_core.stream.lake import WAREHOUSE_DIRNAME, LakeConfig
 
 if TYPE_CHECKING:
     from pyspark.sql import SparkSession
@@ -63,9 +64,11 @@ RESERVED_KEYS: Final = frozenset(
         "spark.jars.ivySettings",
         "spark.driver.extraClassPath",
         "spark.executor.extraClassPath",
+        "spark.sql.warehouse.dir",
     }
 )
-"""Every setting that can add jars or resolve them from a repository, plus the contract."""
+"""Every setting that can add jars or resolve them from a repository, the contract, and where
+Spark puts what it manages without a path (the lake root's `_warehouse`, ADR-0048)."""
 
 LOCAL_DRIVER_CONF: Final[dict[str, str]] = {
     "spark.driver.bindAddress": "127.0.0.1",
@@ -172,6 +175,9 @@ def build_session(
         "spark.sql.shuffle.partitions": str(shuffle_partitions),
         "spark.driver.memory": driver_memory,
         "spark.ui.enabled": "true" if ui else "false",
+        # Resolved quietly: the job that uses the lake logs its root; a session factory that logged
+        # it on every build polluted the output of every process, a refused one included.
+        "spark.sql.warehouse.dir": str(LakeConfig.from_env(log=False).root / WAREHOUSE_DIRNAME),
         **(extra_conf or {}),
     }
     builder: Any = SparkSession.builder.appName(app_name).master(master)

@@ -224,3 +224,92 @@ class NonConformantFeatureSetError(TraceXError):
     Raised before any work, so a load test or replay can never produce a record whose
     `feature_set_version` names semantics the values were not computed with.
     """
+
+
+# ---------------------------------------------------- the Delta lake (Phase 3) ---
+
+
+class LakeContractError(TraceXError):
+    """A lake convention was violated, so the operation that depended on it did not run.
+
+    The conventions cover naming, table declarations, drift, checkpoints, streaming
+    sources and scan measurement (`trace_core.stream.lake`, `tables`, `checkpoints`).
+    Every subclass is raised BEFORE the unsafe action -- a write, a query start, a
+    published measurement -- because in each case the alternative is a Delta or Spark
+    behaviour that succeeds with a wrong result.
+    """
+
+
+class LakeConfigError(LakeContractError):
+    """`TRACE_DELTA_ROOT` cannot be used as a local lake root.
+
+    Raised for a set-but-blank value, a URI, a path a `delta.`<path>`` identifier cannot
+    quote, or a relative path with no source checkout to anchor it to. A blank value is
+    refused rather than defaulted: a deployment that meant to point somewhere and wrote
+    nothing would otherwise put its lake wherever it happened to start.
+    """
+
+
+class LakeNameError(LakeContractError):
+    """A table name, query name or transaction app id does not follow the lake's naming rules.
+
+    The name becomes a directory, a Unity Catalog identifier and part of a Delta
+    transaction app id; a name valid for one of those and not the others would make one
+    logical table resolve differently locally and on Databricks.
+    """
+
+
+class TableDeclarationError(LakeContractError):
+    """A table declaration contradicts itself or the lake contract, so no table is created.
+
+    Examples: clustering and partitioning together, a property that is not on the
+    allow-list or that adds a protocol feature without an opt-in, or session settings that
+    Delta would add to every new table.
+    """
+
+
+class TableDriftError(LakeContractError):
+    """A live table no longer matches its declaration, so the job refuses to write to it.
+
+    The message lists every difference at once -- schema, properties, constraints, layout,
+    protocol versions and features -- because fixing drift one symptom per restart is how
+    an operator learns to switch the check off.
+    """
+
+
+class ProvenanceError(LakeContractError):
+    """A commit's `userMetadata` claims to be TRACE-X provenance but cannot be trusted as such.
+
+    Foreign or absent metadata is simply not ours. Metadata that carries our marker and is
+    malformed is an error, because the checkpoint guard attributes commits from it, and a
+    guess would attribute a commit to the wrong query.
+    """
+
+
+class StreamingSourceRetentionError(LakeContractError):
+    """A streaming source cannot be read without risking silently skipped data.
+
+    Raised before a query starts: its checkpoint needs Delta log versions the source no
+    longer retains, the source was replaced, or the reader or session carries a setting
+    whose purpose is to tolerate loss (`failOnDataLoss=false`, `ignoreMissingFiles`, ...).
+    """
+
+
+class CheckpointRefusedError(LakeContractError):
+    """A streaming query was refused a start, a reset or a write, because its checkpoint
+    cannot be trusted to pair with the tables it reads and writes.
+
+    Every refusal names its evidence -- table ids, transaction app ids, batch ids, start
+    positions -- and its remedy. The remedy is never "delete the checkpoint": that is the
+    action that creates the silent-skip and silent-duplication states this error prevents.
+    """
+
+
+class ScanMeasurementError(LakeContractError):
+    """A query's file scans could not be measured completely, so no measurement is returned.
+
+    Raised when adaptive execution dropped a scan that ran, when a scan's reads are absent
+    from Spark's status store, when the plan's root executes differently from the path the
+    measurement uses, or when Spark's metric names change. A partial measurement published
+    as a benchmark number would be a plausible, wrong one.
+    """

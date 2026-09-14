@@ -59,6 +59,7 @@ been thought through.
 | [0045](0045-phase3-toolchain-contract.md) | The Phase 3 toolchain contract: hashed installs, verified JVM jars, and Java 17 enforced by the repository | 3 | Accepted |
 | [0046](0046-feature-semantics-precision.md) | Feature semantics made precise: one declared meaning per feature, and an idempotent, order-independent online store | 3 | Proposed |
 | [0047](0047-event-transport.md) | Event transport: declared topics, one producer factory, and a scheduled fault overlay | 3 | Proposed |
+| [0048](0048-delta-capabilities-and-lake-conventions.md) | What Delta 4.0.1 actually does, and the lake conventions built on it | 3 | Proposed |
 
 ## Notes on status
 

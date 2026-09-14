@@ -53,6 +53,16 @@ def test_no_dependency_is_resolved_from_maven_at_run_time(spark: Any) -> None:
     assert {jar.parent for jar in jars} == {toolchain.jars_dir()}
 
 
+def test_spark_manages_nothing_outside_the_lake_root(spark: Any) -> None:
+    """A managed table created without a path lands under the lake root's `_warehouse`, never in a
+    `spark-warehouse` beside whichever directory the job started in (ADR-0048)."""
+    from trace_core.stream.lake import WAREHOUSE_DIRNAME, LakeConfig
+
+    value = str(spark.conf.get("spark.sql.warehouse.dir"))
+    path = "/" + value.split(":", 1)[1].lstrip("/") if value.startswith("file:") else value
+    assert Path(path) == LakeConfig.from_env().root / WAREHOUSE_DIRNAME
+
+
 def test_a_delta_table_round_trips_with_millisecond_utc_event_time(
     spark: Any, tmp_path: Path
 ) -> None:
