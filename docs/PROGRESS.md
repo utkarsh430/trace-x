@@ -647,6 +647,8 @@ both reports.
 | **D13** | `identity.events.v1` / `device.events.v1` are produced but nothing consumes them yet | The contracts are exercised by the generator only | Phase 3 Steps 4–6 |
 | ~~D1, D2, D3, D6, D7~~ | ~~Migrations, CI, OTel, lockfile, compose targets~~ | **RESOLVED in Phase 0** | done |
 | ~~D10~~ | ~~No declarative SQLAlchemy models, so autogenerate is unused~~ | Still true and still correct: migrations 0001 and 0002 are hand-written because they are security-critical grants. Re-evaluate when ordinary application tables arrive | Phase 2 |
+| **D15** | **Deferred evaluation hardening:** `LPC-5` §14 controls at acceptance scale on the frozen eval-v2 candidate -- the zero-rate control and the 21 full-scale ablations -- were not run (user decision, 2026-09-14). Unit self-tests, smoke-scale controls and the control framework exist | An ablation that would not fail its check at full scale is unverified at full scale | Only for a final research or evaluation release; not Phase 3 |
+| **D16** | **Research-grade synthetic-data work:** eval-v2's `LPC-5` Category B consequences outside the declared values, and its Category C support and power limits at acceptance scale (rare burst values, MC-1 and MC-2 near misses) | eval-v2 is disclosed as not `LPC-5` compliant; no Category A defect is known | Deferred; reopened only by a downstream Category A finding |
 | **D14** | CI provisions no Redis or PostgreSQL, so the Redis conformance suite, the Redis store tests, the hole-ledger tests and the other service-backed integration tests skip there, loudly. Their evidence is local runs | CI cannot catch a regression in the online store or the ledger | Before Phase 3 exit: provision the services in `test-integration.yml`, or start throwaway containers in those fixtures as the capacity test does |
 
 ---
@@ -1105,7 +1107,75 @@ Phase 3, in the wave order of `docs/PHASE3_PLAN.md` §5:
          its scenario mix is a coverage floor, not natural prevalence (§14.4).
        - `python -m eval.track_a.freeze_candidate --check` regenerated the candidate and reproduced
          every recorded value. Evidence: `eval/track_a/audits/stage-2-evidence/eval-v2-candidate-freeze.txt`.
-   11. Frozen `LPC-5` acceptance.
+   11. **Frozen `LPC-5` acceptance: FAIL (2026-09-14), with no Category A finding.**
+       - **Run.** `lpc5_control --control eval-v2 --candidate eval/track_a/eval-v2.candidate.manifest.json`
+         on candidate run_id `gen-20260914-eval-v2-7dac6635`, from a clean tree at `fbf2190`. The four
+         stream digests and row counts were verified before any check ran. Evidence:
+         `eval/track_a/audits/stage-2-evidence/lpc5-eval-v2-acceptance-rev4.txt`.
+       - **Verdict.** FAIL on R7, R8, S1-U, S1-B, S2b and S7b. S0, S2c, S3, S4, S5a, S5b, G3, S6a,
+         S7a and every S8 check pass.
+       - **First attempt: no result.** The host stopped it for low memory, after about half an hour.
+         - A diagnostic profile at a tenth and a twentieth of acceptance scale traced the peak to the
+           availability step, which held a validated model per transaction through its loop, and to
+           S0's sorted copy of every row.
+         - `fbf2190` restructures both, keeps tie ranks in per-population lists and interns payload
+           keys. Nothing it computes changes: the complete report hashes identically to `8e7759e` on
+           two generations, and the quarter-scale report is byte-identical to revision 4's re-judge,
+           at under half the peak footprint (`lpc5-memory-bounded-equivalence.txt`,
+           `lpc5-memory-bounded-quarter-scale.txt`).
+       - **Category A: none.** The candidates were checked against the generator code:
+         - takeover and high-value `merchant_accounts_1h` and `shared_merchant_link`: planted
+           merchants use the same popularity draw as legitimate spend outside the habitual set;
+         - unusual-location and device-farm device-history availability: the feature reports
+           insufficient history for a never-seen device until the account is watched for its horizon
+           (ADR-0044), which a new device meets by construction;
+         - unusual-location recent-prior-transaction findings inside ULD-3: one uniformly placed
+           transaction in a distant city, which G3 only rejects above 900 km/h, so the recent home
+           activity is the documented mechanism and not a placement offset;
+         - high-value amount digits (S2b): the amount formula gives uniform last digits, and the
+           observed tail is among the chance results expected across the S2b cells judged.
+       - **Category B, outside the declared list, left judged:**
+         - takeover and high-value merchant effects, takeover inside ATO-5, ATO-6 and ATO-8, and its
+           `device_age` composition;
+         - velocity `distinct_devices_24h` `2`, `leg_speed`, and daily counts inside VA-3;
+         - card-testing activity `51+`, `device_age` `<1h`, `leg_speed`, and findings inside CT-3,
+           CT-6, CT-7 and CT-8;
+         - device-farm `device_age` and device-history findings, and profile depth inside DF-5;
+         - unusual-location availability, profile, amount-decile and recent-activity findings inside
+           its strata;
+         - ring device, IP and merchant findings inside FR-1 to FR-3, and its `device_accounts`
+           composition;
+         - impossible travel's gaps inside IT-2;
+         - merchant collusion's per-hour payers inside MC-1 and popularity inside MC-4;
+         - pooled R8 and S1-U cells whose enriched contributors do not admit the value.
+       - **Category C:**
+         - support short of thirty legitimate rows for `tx_count_24h` `10-19` and
+           `prior_declined_share_1h` `(0,0.4)`, which probe 2 predicted would stay short at full
+           scale;
+         - the MC-1 and MC-2 near misses in S7b;
+         - high-value amount digits (S2b);
+         - takeover device-event hour, weekday cells concentrated in a few instances, and single
+           merchant codes and countries inside FR-3, MC-1, MC-4, MC-5 and the ULD rows.
+       - **Consequence (user decision, 2026-09-14).** The `LPC-5` research loop is closed.
+         - No revision 5, no threshold tuning after seeing the frozen candidate, and no generator
+           tuning to make `LPC-5` green.
+         - eval-v2 is still the frozen Phase 3 dataset, and steps 12 and 13 run anyway.
+         - Recorded wherever eval-v2 is described: **`LPC-5` strict acceptance FAIL; Category A
+           findings 0**, with the Category B and C reasons above. It is never described as `LPC-5`
+           compliant, and no natural fraud prevalence is claimed from it.
+         - Only an actual Category A correctness or leakage defect found downstream reopens `LPC-5`.
+           Category B or C findings do not.
+       - **Controls (§14): deferred evaluation hardening (D15).**
+         - By the user's decision, the acceptance-scale zero-rate control and the 21 full-scale
+           ablations were not started: they cannot turn the verdict into PASS and do not block Phase 3.
+         - The in-flight eval-v1 negative control finished before the runner stopped: **§14.1 MET**,
+           with eval-v1's manifest digests verified
+           (`eval/track_a/audits/stage-2-evidence/lpc5-eval-v1-negative-control-rev4.txt`).
+         - The first acceptance attempt's out-of-memory stop is kept as diagnostic history
+           (`lpc5-acceptance-attempt1-oom.txt`), not as a result.
+         - The unit and self-tests, the smoke controls and the control framework are unchanged.
+         - The host slept on low battery at 21:44:37Z, 25 s into the eval-v1 control, and resumed on AC
+           at 22:05:51Z. That run's wall time includes the pause; its result does not depend on it.
    12. Freeze the manifest and digests.
    13. Re-run replay validation, rules validation, the R010 study and the Phase 2 manual comparison.
 

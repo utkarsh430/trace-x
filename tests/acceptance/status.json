@@ -374,7 +374,7 @@
         "verified_at": null,
         "result": null
       },
-      "notes": "Lead-added tracker for the user-approved Q5 requirements (docs/PHASE3_PLAN.md §3); not a separately approved capability. IN_PROGRESS (Phase 3 Step E Stage 2, 2026-09-14): LPC-5 frozen at revision 4; the eval-v2 candidate is frozen (eval/track_a/eval-v2.candidate.manifest.json, run_id gen-20260914-eval-v2-7dac6635) and its regeneration reproduced every recorded value. Pending: step 11, LPC-5 acceptance on the candidate and the §14 controls at acceptance scale. No PASS before that evidence exists."
+      "notes": "Lead-added tracker for the user-approved Q5 requirements (docs/PHASE3_PLAN.md §3); not a separately approved capability. IN_PROGRESS (Phase 3 Step E Stage 2, 2026-09-14): LPC-5 frozen at revision 4; the eval-v2 candidate is frozen (eval/track_a/eval-v2.candidate.manifest.json, run_id gen-20260914-eval-v2-7dac6635) and its regeneration reproduced every recorded value. Step 11 (2026-09-14): LPC-5 acceptance on the candidate is FAIL with no Category A finding (eval/track_a/audits/stage-2-evidence/lpc5-eval-v2-acceptance-rev4.txt; classification in docs/PROGRESS.md); by the user's decision eval-v2 remains the frozen Phase 3 dataset with that status disclosed, its acceptance-scale controls are deferred evaluation hardening (D15), and Stage 2 steps 12-13 proceed. Not PASS: the capability's label-proxy acceptance is not met, and eval-v2 is never described as LPC-5 compliant."
     },
     {
       "id": "P4.training",

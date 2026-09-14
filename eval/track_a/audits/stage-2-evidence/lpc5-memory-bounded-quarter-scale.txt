@@ -1,0 +1,122 @@
+# DIAGNOSTIC -- not acceptance evidence (eval/track_a/criteria/lpc-5.md §1.3).
+# Stage 2 step 11: the memory-bounded evaluation (fbf2190) against the revision-4 re-judge (5b2bd91),
+# on the same generation and command: 250,000 rows, seed 44, gate on, every finding printed.
+# Command: python -m eval.track_a.lpc5_control --control eval-v2 --seed 44 --rows 250000 --accounts 10000
+#          --merchants 750 --devices 12000 --ips 5000 --fraud-rate 0.005 --limit 5000
+# Run from a detached worktree at fbf2190, clean (first line below); trailing block is /usr/bin/time -l.
+#
+#                          5b2bd91 (lpc5-eval-v2-probe-quarter-scale-rev4.txt)   fbf2190 (below)
+# peak memory footprint    3,147,647,640 bytes                                    1,451,329,048 bytes
+# maximum resident set     2,622,423,040 bytes                                    1,738,768,384 bytes
+# wall                     410 s                                                  442 s
+# report text (87 lines, from the verdict line to the instance counts): byte-identical.
+
+HEAD fbf21905decc661f47e504cda79b949d57e5f210 status ''
+diagnostic (not acceptance evidence): control=eval-v2 rows=250000 seed=44
+LPC-5 revision 4: FAIL
+  S0                 judged        49  pass
+  R7                 judged      2691  FAIL (9)
+      R7 TX/shared_merchant_link/yes/ACCOUNT_TAKEOVER: ACCOUNT_TAKEOVER 30/100 (clusters 20, lo 0.1639, hi 0.4838) vs LEGIT 18689/247529 (clusters 10000, lo 0.0713, hi 0.0800)
+      R7 TX/leg_speed/<100/VELOCITY_ATTACK: VELOCITY_ATTACK 497/557 (clusters 20, lo 0.7287, hi 0.9623) vs LEGIT 87001/247529 (clusters 10000, lo 0.3437, hi 0.3594)
+      R7 TX/leg_speed/[100,500)/CARD_TESTING: CARD_TESTING 45/314 (clusters 20, lo 0.0576, hi 0.3140) vs LEGIT 1334/247529 (clusters 10000, lo 0.0043, hi 0.0067)
+      R7 TX/device_age/[1h,24h)/DEVICE_FARM: DEVICE_FARM 78/283 (clusters 20, lo 0.1458, hi 0.4589) vs LEGIT 4416/247529 (clusters 10000, lo 0.0158, hi 0.0202)
+      R7 TX/ip_accounts/1/ANOMALOUS_HIGH_VALUE: ANOMALOUS_HIGH_VALUE 2/24 (clusters 24, lo 0.0280, hi 0.2231) vs LEGIT 1354/247529 (clusters 10000, lo 0.0044, hi 0.0068)
+      R7 TX/prior_events_24h/failed-login/ANOMALOUS_HIGH_VALUE: ANOMALOUS_HIGH_VALUE 4/24 (clusters 24, lo 0.0771, hi 0.3238) vs LEGIT 6553/247529 (clusters 10000, lo 0.0240, hi 0.0292)
+      R7 TX/avail:device_is_known_for_account/INSUFFICIENT_HISTORY/DEVICE_FARM: DEVICE_FARM 131/283 (clusters 20, lo 0.2951, hi 0.6395) vs LEGIT 19572/247529 (clusters 10000, lo 0.0747, hi 0.0836)
+      R7 DEV/hour/22/ACCOUNT_TAKEOVER: ACCOUNT_TAKEOVER 4/20 (clusters 20, lo 0.0931, hi 0.3784) vs LEGIT 332/9355 (clusters 5749, lo 0.0317, hi 0.0397)
+      R7 OUT/decision_latency/[40,100)/ANOMALOUS_HIGH_VALUE: ANOMALOUS_HIGH_VALUE 5/24 (clusters 24, lo 0.1053, hi 0.3705) vs LEGIT 11680/247529 (clusters 10000, lo 0.0438, hi 0.0508)
+  R8                 judged       423  FAIL (3)
+      R8 TX/shared_merchant_link/yes/POOLED: POOLED 602/2471 (clusters 204, lo 0.1978, hi 0.2962) vs LEGIT 18689/247529 (clusters 10000, lo 0.0713, hi 0.0800)
+      R8 TX/device_age/[1h,24h)/POOLED: POOLED 198/2471 (clusters 204, lo 0.0541, hi 0.1172) vs LEGIT 4416/247529 (clusters 10000, lo 0.0158, hi 0.0202)
+      R8 DEV/hour/22/POOLED: POOLED 4/20 (clusters 20, lo 0.0931, hi 0.3784) vs LEGIT 332/9355 (clusters 5749, lo 0.0317, hi 0.0397)
+  R9                 judged         5  pass
+  S1-U               judged      2075  FAIL (6)
+      S1-U(a) TX/tx_count_24h/10-19/VELOCITY_ATTACK: VELOCITY_ATTACK 196/557 (clusters 20, lo 0.2037, hi 0.5353) vs LEGIT 5/247529 (clusters 10000, lo 0.0000, hi 0.0003); exemption rare
+      S1-U(a) TX/tx_count_24h/10-19/CARD_TESTING: CARD_TESTING 137/314 (clusters 20, lo 0.2725, hi 0.6153) vs LEGIT 5/247529 (clusters 10000, lo 0.0000, hi 0.0003); exemption rare
+      S1-U(a) TX/distinct_mcc_5m/3-4/VELOCITY_ATTACK: VELOCITY_ATTACK 160/557 (clusters 20, lo 0.1544, hi 0.4709) vs LEGIT 14/247529 (clusters 10000, lo 0.0000, hi 0.0004); exemption rare
+      S1-U(a) TX/distinct_mcc_5m/3-4/CARD_TESTING: CARD_TESTING 61/314 (clusters 20, lo 0.0893, hi 0.3721) vs LEGIT 14/247529 (clusters 10000, lo 0.0000, hi 0.0004); exemption rare
+      S1-U(a) TX/prior_declined_share_1h/(0,0.4)/CARD_TESTING: CARD_TESTING 107/314 (clusters 20, lo 0.1950, hi 0.5245) vs LEGIT 3/247529 (clusters 10000, lo 0.0000, hi 0.0003); exemption rare
+      S1-U(a) TX/account_activity/51+/VELOCITY_ATTACK: VELOCITY_ATTACK 378/557 (clusters 20, lo 0.4947, hi 0.8200) vs LEGIT 319/247529 (clusters 10000, lo 0.0008, hi 0.0020)
+  S1-B               judged      8194  FAIL (42)
+      S1-B(i) TX/shared_merchant_link/yes/ACCOUNT_TAKEOVER: ACCOUNT_TAKEOVER 30/100 (clusters 20, lo 0.1639, hi 0.4838) vs LEGIT 1804/26429 (clusters 9993, lo 0.0642, hi 0.0725); within ATO-5 (device_age in ['<1h', '[1h,24h)', 'first-reference', 'first-use']); reference stratum
+      S1-B(i) TX/profile_depth/3-19/ACCOUNT_TAKEOVER: ACCOUNT_TAKEOVER 74/100 (clusters 20, lo 0.5573, hi 0.8655) vs LEGIT 7083/26429 (clusters 9993, lo 0.2608, hi 0.2754); within ATO-5 (device_age in ['<1h', '[1h,24h)', 'first-reference', 'first-use']); reference stratum
+      S1-B(i) TX/profile_depth/20-127/ACCOUNT_TAKEOVER: ACCOUNT_TAKEOVER 20/100 (clusters 20, lo 0.0931, hi 0.3784) vs LEGIT 544/26429 (clusters 9993, lo 0.0184, hi 0.0231); within ATO-5 (device_age in ['<1h', '[1h,24h)', 'first-reference', 'first-use']); reference stratum
+      S1-B(i) TX/avail:amount_zscore_vs_account/AVAILABLE/ACCOUNT_TAKEOVER: ACCOUNT_TAKEOVER 75/100 (clusters 20, lo 0.5678, hi 0.8726) vs LEGIT 3044/26429 (clusters 9993, lo 0.1100, hi 0.1205); within ATO-5 (device_age in ['<1h', '[1h,24h)', 'first-reference', 'first-use']); reference stratum
+      S1-B(i) TX/avail:account_tenure_days/AVAILABLE/ACCOUNT_TAKEOVER: ACCOUNT_TAKEOVER 39/100 (clusters 20, lo 0.2342, hi 0.5720) vs LEGIT 1883/26429 (clusters 9993, lo 0.0671, hi 0.0756); within ATO-5 (device_age in ['<1h', '[1h,24h)', 'first-reference', 'first-use']); reference stratum
+      S1-B(i) TX/avail:merchant_is_habitual/AVAILABLE/ACCOUNT_TAKEOVER: ACCOUNT_TAKEOVER 35/100 (clusters 20, lo 0.2022, hi 0.5335) vs LEGIT 1689/26429 (clusters 9993, lo 0.0600, hi 0.0681); within ATO-5 (device_age in ['<1h', '[1h,24h)', 'first-reference', 'first-use']); reference stratum
+      S1-B(i) TX/avail:mcc_is_habitual_for_account/AVAILABLE/ACCOUNT_TAKEOVER: ACCOUNT_TAKEOVER 46/100 (clusters 20, lo 0.2926, hi 0.6369) vs LEGIT 2410/26429 (clusters 9993, lo 0.0866, hi 0.0960); within ATO-5 (device_age in ['<1h', '[1h,24h)', 'first-reference', 'first-use']); reference stratum
+      S1-B(i) TX/avail:device_is_known_for_account/AVAILABLE/ACCOUNT_TAKEOVER: ACCOUNT_TAKEOVER 88/100 (clusters 20, lo 0.7137, hi 0.9557) vs LEGIT 6857/26429 (clusters 9993, lo 0.2523, hi 0.2667); within ATO-5 (device_age in ['<1h', '[1h,24h)', 'first-reference', 'first-use']); reference stratum
+      S1-B(i) TX/avail:distance_from_account_home_km/AVAILABLE/ACCOUNT_TAKEOVER: ACCOUNT_TAKEOVER 94/100 (clusters 20, lo 0.7902, hi 0.9849) vs LEGIT 7627/26429 (clusters 9993, lo 0.2812, hi 0.2961); within ATO-5 (device_age in ['<1h', '[1h,24h)', 'first-reference', 'first-use']); reference stratum
+      S1-B(iii) TX/device_age/<1h/ACCOUNT_TAKEOVER: ACCOUNT_TAKEOVER 25/100 (clusters 20, lo 0.1274, hi 0.4322) vs LEGIT 824/26429 (clusters 9993, lo 0.0284, hi 0.0342); composition within ATO-5
+      S1-B(iii) TX/device_age/[1h,24h)/ACCOUNT_TAKEOVER: ACCOUNT_TAKEOVER 55/100 (clusters 20, lo 0.3722, hi 0.7159) vs LEGIT 4416/26429 (clusters 9993, lo 0.1610, hi 0.1733); composition within ATO-5
+      S1-B(i) TX/shared_merchant_link/yes/ACCOUNT_TAKEOVER: ACCOUNT_TAKEOVER 30/100 (clusters 20, lo 0.1639, hi 0.4838) vs LEGIT 4281/57397 (clusters 9954, lo 0.0704, hi 0.0790); within ATO-6 (amount_vs_account in ['[2,5)', '[5,20)', '≥20']); reference stratum
+      S1-B(i) TX/tx_count_24h/5-9/CARD_TESTING: CARD_TESTING 100/295 (clusters 20, lo 0.1936, hi 0.5227) vs LEGIT 209/15126 (clusters 7624, lo 0.0118, hi 0.0162); within CT-3 (tx_count_1h in ['10-19', '2', '20+', '3-4', '5-9']); reference stratum
+      S1-B(i) TX/tx_count_24h/10-19/CARD_TESTING: CARD_TESTING 137/295 (clusters 20, lo 0.2964, hi 0.6409) vs LEGIT 0/15126 (clusters 7624, lo 0.0000, hi 0.0004); within CT-3 (tx_count_1h in ['10-19', '2', '20+', '3-4', '5-9']); reference stratum
+      S1-B(i) TX/merchant_habitual/unhabitual/CARD_TESTING: CARD_TESTING 278/295 (clusters 20, lo 0.7935, hi 0.9858) vs LEGIT 3137/11702 (clusters 6742, lo 0.2593, hi 0.2770); within CT-6 (distinct_merchants_1h in ['10+', '2', '3-4', '5-9']); reference stratum
+      S1-B(i) TX/mcc_habitual/unhabitual/CARD_TESTING: CARD_TESTING 144/276 (clusters 20, lo 0.3467, hi 0.6916) vs LEGIT 884/6174 (clusters 4610, lo 0.1349, hi 0.1519); within CT-7 (distinct_mcc_5m in ['2', '3-4', '5+']); reference stratum
+      S1-B(i) TX/amount_decile/0/CARD_TESTING: CARD_TESTING 294/294 (clusters 20, lo 0.8808, hi 1.0000) vs LEGIT 24737/57811 (clusters 9951, lo 0.4198, hi 0.4361); within CT-8 (amount_vs_account in ['<0.1', '[0.1,0.5)']); reference stratum
+      S1-B(i) TX/amount_z/<-2/CARD_TESTING: CARD_TESTING 279/294 (clusters 20, lo 0.8026, hi 0.9884) vs LEGIT 5619/57811 (clusters 9951, lo 0.0924, hi 0.1022); within CT-8 (amount_vs_account in ['<0.1', '[0.1,0.5)']); reference stratum
+      S1-B(i) TX/leg_speed/[100,500)/CARD_TESTING: CARD_TESTING 45/294 (clusters 20, lo 0.0634, hi 0.3254) vs LEGIT 335/57811 (clusters 9951, lo 0.0047, hi 0.0072); within CT-8 (amount_vs_account in ['<0.1', '[0.1,0.5)']); reference stratum
+      S1-B(i) TX/merchant_mcc/5942/IMPOSSIBLE_TRAVEL: IMPOSSIBLE_TRAVEL 4/20 (clusters 20, lo 0.0931, hi 0.3784) vs LEGIT 0/70 (clusters 69, lo 0.0000, hi 0.0377); within IT-2 (leg_speed in ['[500,1000)', '≥1000']); reference stratum
+      S1-B(i) TX/gap_prev/[10,60)min/IMPOSSIBLE_TRAVEL: IMPOSSIBLE_TRAVEL 17/20 (clusters 20, lo 0.6782, hi 0.9384) vs LEGIT 1/70 (clusters 69, lo 0.0032, hi 0.0621); within IT-2 (leg_speed in ['[500,1000)', '≥1000']); reference stratum
+      S1-B(i) TX/tx_count_24h/5-9/VELOCITY_ATTACK: VELOCITY_ATTACK 100/537 (clusters 20, lo 0.0841, hi 0.3631) vs LEGIT 209/15126 (clusters 7624, lo 0.0118, hi 0.0162); within VA-3 (tx_count_1h in ['10-19', '2', '20+', '3-4', '5-9']); reference stratum
+      S1-B(i) TX/tx_count_24h/10-19/VELOCITY_ATTACK: VELOCITY_ATTACK 196/537 (clusters 20, lo 0.2141, hi 0.5481) vs LEGIT 0/15126 (clusters 7624, lo 0.0000, hi 0.0004); within VA-3 (tx_count_1h in ['10-19', '2', '20+', '3-4', '5-9']); reference stratum
+      S1-B(i) TX/tx_count_24h/20+/VELOCITY_ATTACK: VELOCITY_ATTACK 187/537 (clusters 20, lo 0.2009, hi 0.5318) vs LEGIT 2/15126 (clusters 7624, lo 0.0000, hi 0.0006); within VA-3 (tx_count_1h in ['10-19', '2', '20+', '3-4', '5-9']); reference stratum
+      S1-B(iii) TX/device_accounts/6+/FRAUD_RING: FRAUD_RING 348/426 (clusters 20, lo 0.6404, hi 0.9179) vs LEGIT 11407/130978 (clusters 7559, lo 0.0819, hi 0.0926); composition within FR-1
+      S1-B(i) TX/merchant_country/ES/MERCHANT_COLLUSION: MERCHANT_COLLUSION 73/472 (clusters 20, lo 0.0644, hi 0.3273) vs LEGIT 0/6486 (clusters 4526, lo 0.0000, hi 0.0006); within MC-1 (merchant_same_amount_accounts_24h in ['5+']); reference stratum
+      S1-B(i) TX/merchant_popularity/101+/MERCHANT_COLLUSION: MERCHANT_COLLUSION 569/630 (clusters 20, lo 0.7423, hi 0.9680) vs LEGIT 13008/61363 (clusters 9979, lo 0.2053, hi 0.2188); within MC-4 (merchant_habitual in ['unhabitual']); reference stratum
+      S1-B(i) TX/prior_events_24h/failed-login/ANOMALOUS_HIGH_VALUE: ANOMALOUS_HIGH_VALUE 4/24 (clusters 24, lo 0.0771, hi 0.3238) vs LEGIT 146/5423 (clusters 4166, lo 0.0231, hi 0.0314); within AHV-2 (amount_z in ['≥2']); reference stratum
+      S1-B(i) TX/ip_accounts/1/ANOMALOUS_HIGH_VALUE: ANOMALOUS_HIGH_VALUE 2/24 (clusters 24, lo 0.0280, hi 0.2231) vs LEGIT 136/24754 (clusters 7898, lo 0.0043, hi 0.0070); within AHV-3 (amount_decile in ['9']); reference stratum
+      S1-B(i) TX/prior_events_24h/failed-login/ANOMALOUS_HIGH_VALUE: ANOMALOUS_HIGH_VALUE 4/24 (clusters 24, lo 0.0771, hi 0.3238) vs LEGIT 665/24754 (clusters 7898, lo 0.0240, hi 0.0300); within AHV-3 (amount_decile in ['9']); reference stratum
+      S1-B(i) TX/merchant_mcc/4511/ANOMALOUS_HIGH_VALUE: ANOMALOUS_HIGH_VALUE 4/24 (clusters 24, lo 0.0771, hi 0.3238) vs LEGIT 846/29594 (clusters 9127, lo 0.0259, hi 0.0316); within AHV-4 (mcc_habitual in ['unhabitual']); reference stratum
+      S1-B(i) TX/ip_accounts/1/ANOMALOUS_HIGH_VALUE: ANOMALOUS_HIGH_VALUE 2/24 (clusters 24, lo 0.0280, hi 0.2231) vs LEGIT 155/29594 (clusters 9127, lo 0.0041, hi 0.0066); within AHV-4 (mcc_habitual in ['unhabitual']); reference stratum
+      S1-B(i) TX/prior_events_24h/failed-login/ANOMALOUS_HIGH_VALUE: ANOMALOUS_HIGH_VALUE 4/24 (clusters 24, lo 0.0771, hi 0.3238) vs LEGIT 751/29594 (clusters 9127, lo 0.0228, hi 0.0282); within AHV-4 (mcc_habitual in ['unhabitual']); reference stratum
+      S1-B(i) TX/device_account_tx/1/UNUSUAL_LOCATION_DEVICE: UNUSUAL_LOCATION_DEVICE 20/20 (clusters 20, lo 0.8808, hi 1.0000) vs LEGIT 908/17999 (clusters 4218, lo 0.0452, hi 0.0563); within ULD-1 (device_home in ['not']); reference stratum
+      S1-B(i) TX/profile_depth/20-127/UNUSUAL_LOCATION_DEVICE: UNUSUAL_LOCATION_DEVICE 7/20 (clusters 20, lo 0.2022, hi 0.5335) vs LEGIT 435/21189 (clusters 9992, lo 0.0183, hi 0.0230); within ULD-2 (device_age in ['first-use']); reference stratum
+      S1-B(i) TX/avail:amount_zscore_vs_account/AVAILABLE/UNUSUAL_LOCATION_DEVICE: UNUSUAL_LOCATION_DEVICE 16/20 (clusters 20, lo 0.6216, hi 0.9069) vs LEGIT 2593/21189 (clusters 9992, lo 0.1171, hi 0.1279); within ULD-2 (device_age in ['first-use']); reference stratum
+      S1-B(i) TX/avail:account_tenure_days/AVAILABLE/UNUSUAL_LOCATION_DEVICE: UNUSUAL_LOCATION_DEVICE 14/20 (clusters 20, lo 0.5162, hi 0.8361) vs LEGIT 1617/21189 (clusters 9992, lo 0.0721, hi 0.0808); within ULD-2 (device_age in ['first-use']); reference stratum
+      S1-B(i) TX/avail:merchant_is_habitual/AVAILABLE/UNUSUAL_LOCATION_DEVICE: UNUSUAL_LOCATION_DEVICE 13/20 (clusters 20, lo 0.4665, hi 0.7978) vs LEGIT 1429/21189 (clusters 9992, lo 0.0634, hi 0.0717); within ULD-2 (device_age in ['first-use']); reference stratum
+      S1-B(i) TX/avail:mcc_is_habitual_for_account/AVAILABLE/UNUSUAL_LOCATION_DEVICE: UNUSUAL_LOCATION_DEVICE 14/20 (clusters 20, lo 0.5162, hi 0.8361) vs LEGIT 2047/21189 (clusters 9992, lo 0.0919, hi 0.1016); within ULD-2 (device_age in ['first-use']); reference stratum
+      S1-B(i) TX/avail:device_is_known_for_account/AVAILABLE/UNUSUAL_LOCATION_DEVICE: UNUSUAL_LOCATION_DEVICE 14/20 (clusters 20, lo 0.5162, hi 0.8361) vs LEGIT 1617/21189 (clusters 9992, lo 0.0721, hi 0.0808); within ULD-2 (device_age in ['first-use']); reference stratum
+      S1-B(i) TX/avail:distance_from_account_home_km/AVAILABLE/UNUSUAL_LOCATION_DEVICE: UNUSUAL_LOCATION_DEVICE 20/20 (clusters 20, lo 0.8808, hi 1.0000) vs LEGIT 6132/21189 (clusters 9992, lo 0.2820, hi 0.2969); within ULD-2 (device_age in ['first-use']); reference stratum
+      S1-B(i) TX/avail:device_is_known_for_account/INSUFFICIENT_HISTORY/UNUSUAL_LOCATION_DEVICE: UNUSUAL_LOCATION_DEVICE 6/20 (clusters 20, lo 0.1639, hi 0.4838) vs LEGIT 67/1264 (clusters 1195, lo 0.0433, hi 0.0647); within ULD-3 (location_novel in ['[100,500)', '≥500']); reference stratum
+  S2                 judged       864  FAIL (3)
+      S2b TX/amount_last_digit/0/UNUSUAL_LOCATION_DEVICE: UNUSUAL_LOCATION_DEVICE 5/20 (clusters 20, lo 0.1274, hi 0.4322) vs LEGIT 24707/247529 (clusters 10000, lo 0.0950, hi 0.1049)
+      S2b TX/amount_roundness/other/UNUSUAL_LOCATION_DEVICE: UNUSUAL_LOCATION_DEVICE 15/20 (clusters 20, lo 0.5678, hi 0.8726) vs LEGIT 222822/247529 (clusters 10000, lo 0.8951, hi 0.9050)
+      S2b OUT/decision_latency/[40,100)/ANOMALOUS_HIGH_VALUE: ANOMALOUS_HIGH_VALUE 5/24 (clusters 24, lo 0.1053, hi 0.3705) vs LEGIT 11680/247529 (clusters 10000, lo 0.0438, hi 0.0508)
+  S2c                judged    775615  pass
+  S3/pooled          judged        20  pass
+  S3/thirds          judged        30  pass
+  S4                 judged      4854  pass
+  S5a                judged      2471  pass
+  S5b                judged        49  pass
+  G3                 judged       120  pass
+  S6a                judged   6500000  pass
+  S7a                judged       204  pass
+  S7b                judged        55  FAIL (1)
+      S7b/CT-3 TX/tx_count_1h/10-19,2,20+,3-4,5-9/CARD_TESTING: lo 0.7896 (295/314, clusters 20); need >= E_min 0.8 and >= 0.1303 (legitimate hi 0.0652)
+  S8/min-instances   judged        10  pass
+  S8/disclosure      judged         1  pass
+  S8/non-vacuity     judged         5  pass
+instances per scenario: {'ACCOUNT_TAKEOVER': 20, 'ANOMALOUS_HIGH_VALUE': 24, 'CARD_TESTING': 20, 'CREDENTIAL_STUFFING': 20, 'DEVICE_FARM': 20, 'FRAUD_RING': 20, 'IMPOSSIBLE_TRAVEL': 20, 'MERCHANT_COLLUSION': 20, 'UNUSUAL_LOCATION_DEVICE': 20, 'VELOCITY_ATTACK': 20}
+§14.3 checks already failing with no correction disabled: none
+wall 442 s, peak rss 1658 MiB (macOS reports bytes)
+      441.80 real       440.78 user         0.86 sys
+          1738768384  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+              118563  page reclaims
+                   3  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+                 133  voluntary context switches
+               10102  involuntary context switches
+       8094371312333  instructions retired
+       1626862746224  cycles elapsed
+          1451329048  peak memory footprint
+EXIT=0

@@ -1,0 +1,110 @@
+# DIAGNOSTIC HISTORY -- not a result. The first LPC-5 acceptance attempt on the frozen eval-v2
+# candidate (from 8e7759e, 2026-09-14T19:58:36Z) was stopped by the host for low memory before it
+# printed anything. Swap stood at ~13 GiB of 14.3 GiB afterwards; Docker Desktop's VM and browsers
+# held most of the machine's other memory.
+# Below: the attempt's run log, then two tracemalloc profiles run to find the cause (diagnostic
+# scale, seed 44, gate on). Their conclusions led to fbf2190 (lpc5-memory-bounded-equivalence.txt).
+
+## attempt 1 run log
+commit 8e7759e11dfccc1371d682fac734205c5b320681 status '' 2026-09-14T19:58:36Z
+start acceptance 2026-09-14T19:58:36Z
+
+## tracemalloc phase profile, 100,000 rows (8e7759e code)
+universe+knowledge+mix       held     14.5 MiB  peak-in-phase     16.6 MiB  maxrss     67.9 MiB  t      1 s
+frame rows: tx 100000 id 106698 dev 3829 out 100000
+build_frame                  held    298.4 MiB  peak-in-phase    386.7 MiB  maxrss    969.5 MiB  t     82 s
+--- top allocation sites: frame alive
+      44.2 MiB    310528 blocks  .claude/worktrees/agent-aae9faa608636c9c8/data/generator/lpc5/frame.py:255
+      38.5 MiB    622030 blocks  .claude/worktrees/agent-aae9faa608636c9c8/packages/trace_core/contracts/authorization.py:42
+      30.8 MiB    310528 blocks  .claude/worktrees/agent-aae9faa608636c9c8/data/generator/lpc5/frame.py:56
+      22.8 MiB    310527 blocks  /Users/singh/.pyenv/versions/3.12.9/lib/python3.12/uuid.py:282
+      22.5 MiB    210527 blocks  .claude/worktrees/agent-aae9faa608636c9c8/data/generator/engine.py:163
+      22.1 MiB    100000 blocks  .claude/worktrees/agent-aae9faa608636c9c8/data/generator/lpc5/frame.py:306
+      15.7 MiB    210527 blocks  .claude/worktrees/agent-aae9faa608636c9c8/data/generator/engine.py:165
+      15.2 MiB    110527 blocks  .claude/worktrees/agent-aae9faa608636c9c8/data/generator/lpc5/frame.py:337
+      14.7 MiB    210527 blocks  .claude/worktrees/agent-aae9faa608636c9c8/data/generator/engine.py:162
+      11.4 MiB    100002 blocks  .claude/worktrees/agent-aae9faa608636c9c8/data/generator/lpc5/frame.py:394
+      10.7 MiB    100000 blocks  .claude/worktrees/agent-aae9faa608636c9c8/packages/trace_core/contracts/authorization.py:65
+       9.5 MiB    310529 blocks  .claude/worktrees/agent-aae9faa608636c9c8/packages/trace_core/domain/time.py:84
+       9.5 MiB    310270 blocks  .claude/worktrees/agent-aae9faa608636c9c8/data/generator/lpc5/frame.py:363
+       5.3 MiB    100000 blocks  .claude/worktrees/agent-aae9faa608636c9c8/data/generator/engine.py:235
+compute_tables               held    335.9 MiB  peak-in-phase   1094.6 MiB  maxrss   2180.1 MiB  t    781 s
+--- top allocation sites: frame + tables alive
+      44.2 MiB    310527 blocks  .claude/worktrees/agent-aae9faa608636c9c8/data/generator/lpc5/frame.py:255
+      38.5 MiB    621849 blocks  .claude/worktrees/agent-aae9faa608636c9c8/packages/trace_core/contracts/authorization.py:42
+      30.8 MiB    310527 blocks  .claude/worktrees/agent-aae9faa608636c9c8/data/generator/lpc5/frame.py:56
+      29.9 MiB       334 blocks  .claude/worktrees/agent-aae9faa608636c9c8/data/generator/lpc5/attributes.py:50
+      22.8 MiB    310527 blocks  /Users/singh/.pyenv/versions/3.12.9/lib/python3.12/uuid.py:282
+      22.5 MiB    210527 blocks  .claude/worktrees/agent-aae9faa608636c9c8/data/generator/engine.py:163
+      22.1 MiB    100000 blocks  .claude/worktrees/agent-aae9faa608636c9c8/data/generator/lpc5/frame.py:306
+      15.7 MiB    210527 blocks  .claude/worktrees/agent-aae9faa608636c9c8/data/generator/engine.py:165
+      15.2 MiB    110527 blocks  .claude/worktrees/agent-aae9faa608636c9c8/data/generator/lpc5/frame.py:337
+      14.7 MiB    210527 blocks  .claude/worktrees/agent-aae9faa608636c9c8/data/generator/engine.py:162
+      11.4 MiB    100000 blocks  .claude/worktrees/agent-aae9faa608636c9c8/data/generator/lpc5/frame.py:394
+      10.7 MiB    100000 blocks  .claude/worktrees/agent-aae9faa608636c9c8/packages/trace_core/contracts/authorization.py:65
+       9.5 MiB    310529 blocks  .claude/worktrees/agent-aae9faa608636c9c8/packages/trace_core/domain/time.py:84
+       9.5 MiB    310270 blocks  .claude/worktrees/agent-aae9faa608636c9c8/data/generator/lpc5/frame.py:363
+outcomes dict                held    345.7 MiB  peak-in-phase    365.4 MiB  maxrss   2180.1 MiB  t    795 s
+S0 (_s0_rows + evaluate_all) held    345.9 MiB  peak-in-phase    569.9 MiB  maxrss   2180.1 MiB  t    805 s
+R7/R8                        held    336.1 MiB  peak-in-phase    345.9 MiB  maxrss   2180.1 MiB  t    891 s
+S1-U                         held    336.1 MiB  peak-in-phase    339.6 MiB  maxrss   2180.1 MiB  t    947 s
+S1-B                         held    336.1 MiB  peak-in-phase    343.8 MiB  maxrss   2180.1 MiB  t   1177 s
+S2                           held    336.1 MiB  peak-in-phase    338.2 MiB  maxrss   2180.1 MiB  t   1208 s
+S2c                          held    335.9 MiB  peak-in-phase    384.6 MiB  maxrss   2180.1 MiB  t   1221 s
+S3                           held    336.6 MiB  peak-in-phase    336.6 MiB  maxrss   2180.1 MiB  t   1222 s
+S4                           held    336.6 MiB  peak-in-phase    387.5 MiB  maxrss   2180.1 MiB  t   1225 s
+S5                           held    336.6 MiB  peak-in-phase    341.8 MiB  maxrss   2180.1 MiB  t   1225 s
+G3                           held    336.6 MiB  peak-in-phase    337.8 MiB  maxrss   2180.1 MiB  t   1225 s
+S6a                          held    336.6 MiB  peak-in-phase    337.4 MiB  maxrss   2180.1 MiB  t   1225 s
+S7a                          held    336.6 MiB  peak-in-phase    342.2 MiB  maxrss   2180.1 MiB  t   1225 s
+S7b                          held    336.6 MiB  peak-in-phase    339.3 MiB  maxrss   2180.1 MiB  t   1257 s
+columns: tx 100 id 24 dev 22 out 21
+EXIT=0
+
+## compute_tables sub-phase profile, 50,000 rows (8e7759e code)
+rows: tx 50000 id 53784 dev 1919 out 50000
+start (frame built, tracing on)    held-above-frame      0.0 MiB  peak-above-frame      0.0 MiB  t      0 s
+_global                            held-above-frame     55.3 MiB  peak-above-frame     82.7 MiB  t      2 s
+_first_references                  held-above-frame     56.0 MiB  peak-above-frame     56.8 MiB  t      2 s
+availability: observations         held-above-frame    356.8 MiB  peak-above-frame    363.1 MiB  t      4 s
+--- top allocation sites: after observations (canonical subjects + events)
+     258.6 MiB    350000 blocks  .claude/worktrees/agent-aae9faa608636c9c8/.venv/lib/python3.12/site-packages/pydantic/main.py:263
+      13.3 MiB    155695 blocks  .claude/worktrees/agent-aae9faa608636c9c8/data/generator/lpc5/attributes.py:175
+      10.3 MiB    155704 blocks  .claude/worktrees/agent-aae9faa608636c9c8/data/generator/lpc5/attributes.py:165
+      10.3 MiB    155704 blocks  .claude/worktrees/agent-aae9faa608636c9c8/data/generator/lpc5/attributes.py:163
+       8.6 MiB    105704 blocks  .claude/worktrees/agent-aae9faa608636c9c8/data/generator/lpc5/attributes.py:167
+       8.6 MiB    105704 blocks  .claude/worktrees/agent-aae9faa608636c9c8/data/generator/lpc5/attributes.py:169
+       7.7 MiB    105860 blocks  .claude/worktrees/agent-aae9faa608636c9c8/packages/trace_core/features/observation.py:123
+       7.6 MiB     50001 blocks  .claude/worktrees/agent-aae9faa608636c9c8/packages/trace_core/features/observation.py:240
+       7.6 MiB     50001 blocks  .claude/worktrees/agent-aae9faa608636c9c8/packages/trace_core/features/observation.py:278
+       6.5 MiB    105604 blocks  .claude/worktrees/agent-aae9faa608636c9c8/data/generator/lpc5/availability.py:152
+availability: Index                held-above-frame    378.3 MiB  peak-above-frame    398.4 MiB  t     13 s
+--- top allocation sites: after Index
+     258.6 MiB    350000 blocks  .claude/worktrees/agent-aae9faa608636c9c8/.venv/lib/python3.12/site-packages/pydantic/main.py:263
+      13.3 MiB    155695 blocks  .claude/worktrees/agent-aae9faa608636c9c8/data/generator/lpc5/attributes.py:175
+      10.3 MiB    155704 blocks  .claude/worktrees/agent-aae9faa608636c9c8/data/generator/lpc5/attributes.py:165
+      10.3 MiB    155704 blocks  .claude/worktrees/agent-aae9faa608636c9c8/data/generator/lpc5/attributes.py:163
+       9.7 MiB    316975 blocks  .claude/worktrees/agent-aae9faa608636c9c8/packages/trace_core/domain/time.py:84
+       8.6 MiB    105704 blocks  .claude/worktrees/agent-aae9faa608636c9c8/data/generator/lpc5/attributes.py:167
+       8.6 MiB    105704 blocks  .claude/worktrees/agent-aae9faa608636c9c8/data/generator/lpc5/attributes.py:169
+       7.7 MiB    105860 blocks  .claude/worktrees/agent-aae9faa608636c9c8/packages/trace_core/features/observation.py:123
+       7.6 MiB     50000 blocks  .claude/worktrees/agent-aae9faa608636c9c8/packages/trace_core/features/observation.py:278
+       7.6 MiB     50000 blocks  .claude/worktrees/agent-aae9faa608636c9c8/packages/trace_core/features/observation.py:240
+availability: per-row loop         held-above-frame    389.4 MiB  peak-above-frame    396.7 MiB  t    311 s
+availability: released             held-above-frame     67.1 MiB  peak-above-frame    389.4 MiB  t    311 s
+_tx_table                          held-above-frame     78.8 MiB  peak-above-frame     96.6 MiB  t    351 s
+--- top allocation sites: inside-held after _tx_table
+      13.3 MiB    155695 blocks  .claude/worktrees/agent-aae9faa608636c9c8/data/generator/lpc5/attributes.py:175
+      11.0 MiB        26 blocks  b342966b-066f-48a1-b65e-5319fdbc026e/scratchpad/lpc5_tables_profile.py:74
+      10.3 MiB    155704 blocks  .claude/worktrees/agent-aae9faa608636c9c8/data/generator/lpc5/attributes.py:165
+      10.3 MiB    155704 blocks  .claude/worktrees/agent-aae9faa608636c9c8/data/generator/lpc5/attributes.py:163
+      10.1 MiB       201 blocks  .claude/worktrees/agent-aae9faa608636c9c8/data/generator/lpc5/attributes.py:50
+       8.6 MiB    105704 blocks  .claude/worktrees/agent-aae9faa608636c9c8/data/generator/lpc5/attributes.py:167
+       8.6 MiB    105704 blocks  .claude/worktrees/agent-aae9faa608636c9c8/data/generator/lpc5/attributes.py:169
+       4.1 MiB    154675 blocks  .claude/worktrees/agent-aae9faa608636c9c8/data/generator/lpc5/attributes.py:160
+       0.4 MiB         2 blocks  .claude/worktrees/agent-aae9faa608636c9c8/data/generator/lpc5/attributes.py:289
+       0.4 MiB         2 blocks  .claude/worktrees/agent-aae9faa608636c9c8/data/generator/lpc5/attributes.py:288
+_side_table ID                     held-above-frame     82.7 MiB  peak-above-frame     86.0 MiB  t    357 s
+_side_table DEV                    held-above-frame     82.8 MiB  peak-above-frame     83.9 MiB  t    357 s
+_out_table                         held-above-frame     86.3 MiB  peak-above-frame     90.8 MiB  t    359 s
+EXIT=0
