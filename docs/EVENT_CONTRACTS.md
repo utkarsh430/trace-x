@@ -70,6 +70,7 @@ any code references a topic that is not RELEASED (ADR-0028).
 | `device.events.v1` | `device_id` | 3 / 12 | 30 d | delete | **RELEASED** (Phase 1) |
 | `tx.scored.v1` | `account_id` | 6 / 24 | 7 d | delete | PLANNED (Phase 3) |
 | `investigation.requested.v1` | `case_id` | 3 / 6 | 30 d | delete | **RELEASED** (Phase 2) |
+| `tx.authorization.v1` | `account_id` | 6 / 24 | 7 d | delete | **RELEASED** (Phase 3) |
 | `investigation.events.v1` | `investigation_id` | 3 / 6 | 90 d | delete | PLANNED (Phase 7) |
 | `action.proposed.v1` | `investigation_id` | 3 / 6 | 90 d | delete | PLANNED (Phase 8) |
 | `action.executed.v1` | `action_id` | 3 / 6 | ∞ | compact | PLANNED (Phase 8) |

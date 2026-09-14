@@ -20,6 +20,7 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import Final
 
+from trace_core.contracts.topics import TX_AUTHORIZATION_V1
 from trace_core.domain.enums import FraudPattern
 
 CRITERION_ID: Final = "LPC-5"
@@ -85,12 +86,10 @@ TOPICS: Final[Mapping[Population, str]] = MappingProxyType(
         Population.DEV: "device.events.v1",
     }
 )
-OUTCOME_STREAM: Final[str | None] = None
-"""The released topic of the OUT population, or None until ADR-0049's topic is released (Stage 2
-step 7). No code may name an unreleased topic (`tests/contract/test_topic_release_gate.py`). Until
-then outcome rows exist only as rows derived by ADR-0049 §7, and a stream row under any other
-topic is refused."""
-OUTCOME_STREAM_LABEL: Final = "authorization-outcome stream (unreleased)"
+OUTCOME_STREAM: Final = TX_AUTHORIZATION_V1
+"""The released topic of the OUT population (ADR-0049; released in Stage 2 step 7). A generation
+without the stream -- eval-v1, or an ablated N12 -- has its outcome rows derived by ADR-0049 §7,
+and a row under any other topic is refused."""
 
 
 class Klass(StrEnum):

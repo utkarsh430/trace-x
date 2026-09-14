@@ -139,6 +139,31 @@ topics:
     cloud:
       partitions: 6
 
+  tx.authorization.v1:
+    key_field: account_id
+    # ADR-0049 §2: at most one authorization outcome exists per transaction, and a producer retry
+    # carries a NEW envelope event_id, so the transaction id is the identity -- as for tx.raw.v1.
+    dedup_identity: payload.transaction_id
+    config:
+      cleanup.policy: delete
+      message.timestamp.type: LogAppendTime
+      retention.ms: "604800000"          # 7 days, equal to tx.raw.v1
+    local:
+      # Equal to tx.raw.v1, so an account maps to the same partition number on both topics.
+      partitions: 6
+      replication_factor: 1
+      overrides:
+        retention.bytes: "67108864"      # 64 MiB per partition (ADR-0049 §2)
+        segment.bytes: "8388608"         # 8 MiB
+      # Design inputs to the transient term, not measurements (ADR-0049 §2): the ingress rate of
+      # tx.raw.v1 and an ASSUMED mean record of 1024 bytes. A test builds the largest outcome record
+      # the schema allows with generator-shaped identifiers and requires it to fit.
+      design_ingress:
+        events_per_s: 5000
+        assumed_mean_record_bytes: 1024
+    cloud:
+      partitions: 24
+
 # ----------------------------------------------------------------------------
 # The declared local disk cap, and how the bound it must cover is derived.
 # `kafka_topics.py budget --environment local` prints the breakdown;

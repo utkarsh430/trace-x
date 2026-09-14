@@ -79,6 +79,7 @@ from data.generator.scenarios import (
     ScenarioInstance,
 )
 
+from trace_core.contracts.topics import TX_AUTHORIZATION_V1
 from trace_core.domain.enums import FraudPattern
 from trace_core.domain.geo import GeoPoint, haversine_km, implied_speed_kmh
 from trace_core.domain.time import to_millis
@@ -97,11 +98,11 @@ def _millis(row: GeneratedRow) -> int:
 
 
 def _is_baseline(row: GeneratedRow) -> bool:
-    return row.topic != TX and row.scenario_instance is None
+    return row.topic in (IDENTITY, DEVICE) and row.scenario_instance is None
 
 
 def _is_scenario_side(row: GeneratedRow) -> bool:
-    return row.topic != TX and row.scenario_instance is not None
+    return row.topic in (IDENTITY, DEVICE) and row.scenario_instance is not None
 
 
 def _is_legit_tx(row: GeneratedRow) -> bool:
@@ -110,6 +111,11 @@ def _is_legit_tx(row: GeneratedRow) -> bool:
 
 def _is_fraud_tx(row: GeneratedRow) -> bool:
     return row.topic == TX and row.label is not None and row.label.is_fraud
+
+
+def _outcome(row: GeneratedRow) -> str:
+    """A transaction's authorization outcome: the plan's under N12, where the field says UNKNOWN."""
+    return row.authorization_outcome or str(row.event["payload"]["authorization_outcome"])
 
 
 def _event_type(row: GeneratedRow) -> str:
@@ -344,14 +350,14 @@ def _retry_pairs(rows: list[GeneratedRow]) -> list[tuple[GeneratedRow, Generated
     for account_rows in by_account.values():
         account_rows.sort(key=_millis)
         for index, row in enumerate(account_rows):
-            if row.event["payload"]["authorization_outcome"] != "DECLINED":
+            if _outcome(row) != "DECLINED":
                 continue
             copied = _copied(row.event["payload"])
             for later in account_rows[index + 1 :]:
                 if _millis(later) - _millis(row) > 600_000:
                     break
                 payload = later.event["payload"]
-                if payload["authorization_outcome"] == "APPROVED" and _copied(payload) == copied:
+                if _outcome(later) == "APPROVED" and _copied(payload) == copied:
                     pairs.append((row, later))
                     break
     return pairs
@@ -403,8 +409,10 @@ def _planted_matches(
         planned.device_event_type or "UNKNOWN"
     ):
         return False
+    # Under N12 the transaction says UNKNOWN and its planned outcome is its outcome event's.
+    observed = {**payload, "authorization_outcome": _outcome(row)} if row.topic == TX else payload
     return all(
-        payload.get(key) == value for key, value in planned.overrides.items() if key not in redrawn
+        observed.get(key) == value for key, value in planned.overrides.items() if key not in redrawn
     )
 
 
@@ -590,8 +598,15 @@ def test_processing_time_is_never_before_event_time(gate_on: list[GeneratedRow])
 
 @pytest.mark.parametrize("field", ["event_id", "idempotency_key", "trace_id", "correlation_id"])
 def test_envelopes_are_unique_across_every_event(gate_on: list[GeneratedRow], field: str) -> None:
-    """N10 included: until outcome events exist, every business flow is one event."""
-    values = collections.Counter(r.event["envelope"][field] for r in gate_on)
+    """N10 included. A transaction and its outcome are one business flow (ADR-0049 §2), so an
+    outcome shares its transaction's `trace_id` and `correlation_id`; the N12 test checks that, and
+    every other value belongs to exactly one event."""
+    shared = field in ("trace_id", "correlation_id")
+    values = collections.Counter(
+        r.event["envelope"][field]
+        for r in gate_on
+        if not (shared and r.topic == TX_AUTHORIZATION_V1)
+    )
     duplicated = {value: count for value, count in values.items() if count > 1}
     assert not duplicated, f"{len(duplicated)} {field} values are shared"
 
@@ -815,16 +830,14 @@ def test_card_testing_declines_are_unchanged_and_no_other_planted_row_declines(
 ) -> None:
     def outcomes(rows: list[GeneratedRow]) -> collections.Counter[tuple[object, ...]]:
         return collections.Counter(
-            (r.label.scenario_instance_id, r.event["payload"]["authorization_outcome"])
-            for r in rows
-            if _is_fraud_tx(r) and r.label
+            (r.label.scenario_instance_id, _outcome(r)) for r in rows if _is_fraud_tx(r) and r.label
         )
 
     assert outcomes(gate_on) == outcomes(gate_off)
     declined = {
         r.label.fraud_pattern
         for r in gate_on
-        if _is_fraud_tx(r) and r.label and r.event["payload"]["authorization_outcome"] == "DECLINED"
+        if _is_fraud_tx(r) and r.label and _outcome(r) == "DECLINED"
     }
     assert declined == {FraudPattern.CARD_TESTING}
 
@@ -832,10 +845,7 @@ def test_card_testing_declines_are_unchanged_and_no_other_planted_row_declines(
 def test_legitimate_declines_exist_and_retries_copy_their_attempt(
     gate_on: list[GeneratedRow], pairs: list[tuple[GeneratedRow, GeneratedRow]]
 ) -> None:
-    assert any(
-        _is_legit_tx(r) and r.event["payload"]["authorization_outcome"] == "DECLINED"
-        for r in gate_on
-    )
+    assert any(_is_legit_tx(r) and _outcome(r) == "DECLINED" for r in gate_on)
     assert pairs
     for attempt, retry in pairs:
         gap = _millis(retry) - _millis(attempt)
@@ -868,7 +878,7 @@ def test_decision_latency_does_not_depend_on_outcome_or_label(gate_on: list[Gene
         if _is_fraud_tx(row):
             groups["fraud"].append(latency)
         else:
-            groups[f"legit-{row.event['payload']['authorization_outcome']}"].append(latency)
+            groups[f"legit-{_outcome(row)}"].append(latency)
     reference = groups["legit-APPROVED"]
     sd = statistics.pstdev(reference)
     for name, values in groups.items():
@@ -978,19 +988,13 @@ def test_decline_rates_are_honoured_with_per_account_structure(
     _assert_within(len(pairs), mean, sd, "retry pairs")
 
     attempts = {id(attempt) for attempt, _ in pairs}
-    standalone = sum(
-        1
-        for r in legitimate
-        if r.event["payload"]["authorization_outcome"] == "DECLINED" and id(r) not in attempts
-    )
+    standalone = sum(1 for r in legitimate if _outcome(r) == "DECLINED" and id(r) not in attempts)
     singles = [rows_per_account[a] - 2 * pairs_per_account[a] for a in rows_per_account]
     mean, sd = expectation(settings.decline_share_per_transaction, singles)
     _assert_within(standalone, mean, sd, "standalone declines")
 
     declines = collections.Counter(
-        r.event["payload"]["account_id"]
-        for r in legitimate
-        if r.event["payload"]["authorization_outcome"] == "DECLINED"
+        r.event["payload"]["account_id"] for r in legitimate if _outcome(r) == "DECLINED"
     )
     counts = [declines.get(account, 0) for account in rows_per_account]
     average = statistics.fmean(counts)
@@ -1374,7 +1378,7 @@ def test_ablating_t2_leaves_every_planted_event_on_a_whole_second() -> None:
 def test_ablating_t3_leaves_no_legitimate_decline() -> None:
     legitimate = [r for r in _ablated("T3") if _is_legit_tx(r)]
     assert legitimate
-    assert all(r.event["payload"]["authorization_outcome"] == "APPROVED" for r in legitimate)
+    assert all(_outcome(r) == "APPROVED" for r in legitimate)
 
 
 @pytest.mark.parametrize(
@@ -2075,3 +2079,63 @@ def test_n5_household_members_share_a_device_and_a_network(
 def test_ablating_n5_plans_no_household() -> None:
     config = _ablation_config("N5")
     assert plan_households(config, build_universe(config), DeviceReferences()) == {}
+
+
+# ======================================== step 7: outcomes as dated events (N12) =====
+
+
+def test_n12_every_transaction_has_one_dated_outcome_event_after_it(
+    gate_on: list[GeneratedRow],
+) -> None:
+    transactions = {
+        r.event["payload"]["transaction_id"]: (index, r)
+        for index, r in enumerate(gate_on)
+        if r.topic == TX
+    }
+    seen: set[str] = set()
+    for index, row in enumerate(gate_on):
+        if row.topic != TX_AUTHORIZATION_V1:
+            continue
+        payload, envelope = row.event["payload"], row.event["envelope"]
+        transaction_id = payload["transaction_id"]
+        assert transaction_id not in seen, f"two outcomes for {transaction_id}"
+        seen.add(transaction_id)
+        tx_index, tx = transactions[transaction_id]
+        assert tx_index < index, f"{transaction_id}: the outcome precedes its transaction"
+        assert payload["account_id"] == tx.event["payload"]["account_id"]
+        assert payload["transaction_occurred_at"] == tx.event["envelope"]["occurred_at"]
+        assert payload["authorization_outcome"] == tx.authorization_outcome
+        assert _millis(row) == tx.authorization_decided_ms
+        assert envelope["trace_id"] == tx.event["envelope"]["trace_id"]
+        assert envelope["correlation_id"] == tx.event["envelope"]["correlation_id"]
+        assert row.label is None and row.scenario_instance is None
+    assert seen == set(transactions)
+    fields = {tx.event["payload"]["authorization_outcome"] for _, tx in transactions.values()}
+    assert fields == {"UNKNOWN"}
+    planned = {tx.authorization_outcome for _, tx in transactions.values()}
+    assert planned == {"APPROVED", "DECLINED"}
+
+
+def test_n12_dm1_depends_on_the_seed_and_the_transaction_id_only(
+    gate_on: list[GeneratedRow],
+) -> None:
+    from data.generator import outcomes
+
+    seed = _coherence_config().seed
+    checked = 0
+    for row in gate_on:
+        if row.topic == TX:
+            transaction_id = row.event["payload"]["transaction_id"]
+            assert row.authorization_decided_ms == outcomes.decided_ms(
+                seed, transaction_id, _millis(row)
+            )
+            checked += 1
+    assert checked == _coherence_config().row_count
+
+
+def test_ablating_n12_keeps_the_outcome_in_the_transaction_and_emits_no_stream() -> None:
+    rows = _ablated("N12")
+    assert not any(r.topic == TX_AUTHORIZATION_V1 for r in rows)
+    fields = {str(r.event["payload"]["authorization_outcome"]) for r in rows if r.topic == TX}
+    assert "UNKNOWN" not in fields
+    assert "DECLINED" in fields

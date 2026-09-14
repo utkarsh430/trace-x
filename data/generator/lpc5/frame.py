@@ -25,6 +25,7 @@ from data.generator import outcomes
 from data.generator.lpc5 import declaration as d
 from trace_core.contracts.events.device_events_v1 import DeviceEventV1
 from trace_core.contracts.events.identity_events_v1 import IdentityEventV1
+from trace_core.contracts.events.tx_authorization_v1 import TxAuthorizationV1
 from trace_core.contracts.events.tx_raw_v1 import TxRawV1
 from trace_core.domain.time import to_millis
 
@@ -218,6 +219,7 @@ _MODELS: Final[dict[str, type[BaseModel]]] = {
     d.TOPICS[d.Population.TX]: TxRawV1,
     d.TOPICS[d.Population.ID]: IdentityEventV1,
     d.TOPICS[d.Population.DEV]: DeviceEventV1,
+    d.OUTCOME_STREAM: TxAuthorizationV1,
 }
 _TOKENS: Final = re.compile("|".join(re.escape(t) for t in d.GROUND_TRUTH_TOKENS), re.IGNORECASE)
 
@@ -354,7 +356,7 @@ def build_frame(
                 frame.ident.append(side)
             else:
                 frame.dev.append(side)
-        elif d.OUTCOME_STREAM is not None and row.topic == d.OUTCOME_STREAM:
+        elif row.topic == d.OUTCOME_STREAM:
             raw_out.append((order, event))
         else:
             raise ValueError(f"LPC-5 does not judge topic {row.topic!r}")
@@ -379,7 +381,7 @@ def build_frame(
                 correlation_id=tx.envelope.correlation_id or "",
             )
             if validate:
-                _validate(frame, d.OUTCOME_STREAM_LABEL, event, order)
+                _validate(frame, d.OUTCOME_STREAM, event, order)
             raw_out.append((order, event))
             order += 1
     for out_order, event in raw_out:

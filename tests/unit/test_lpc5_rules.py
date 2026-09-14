@@ -52,11 +52,9 @@ def test_s2c_passes_rules_2_and_4_to_8_on_well_formed_rows_with_derived_outcomes
     rows.identity(T0 + 5_000, account(0), "LOGIN_SUCCEEDED")
     know = knowledge()
     result = rules.s2c_rows(build_frame(rows.rows, seed=know.seed, validate=True), know)
-    # Until ADR-0049 releases the outcome stream (step 7), outcomes can only be derived from the
-    # transaction field (a rule 3 violation), and derived rows have no released schema (rule 1).
-    assert {f.check for f in result.findings} == {"S2c/1", "S2c/3"}
-    rule_one = next(f for f in result.findings if f.check == "S2c/1")
-    assert "has no released schema" in rule_one.detail
+    # Without an outcome stream, outcomes are derived from the transaction field (ADR-0049 §7): a
+    # rule 3 violation. The derived rows themselves satisfy the released schema (rule 1).
+    assert {f.check for f in result.findings} == {"S2c/3"}
 
 
 def test_s2c_names_every_violated_rule() -> None:

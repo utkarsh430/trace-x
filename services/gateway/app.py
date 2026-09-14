@@ -52,9 +52,11 @@ from services.gateway.pipeline import (
     TriageUnavailableError,
     absent_feature_reasons,
 )
+from trace_core.contracts import authorization
 from trace_core.contracts.api.decision import RiskDecision
 from trace_core.contracts.api.events_ingress import (
     AcceptedResponse,
+    AuthorizationOutcomeRequest,
     DeviceEventRequest,
     IdentityEventRequest,
 )
@@ -62,7 +64,7 @@ from trace_core.contracts.api.problem import ErrorType
 from trace_core.contracts.api.transaction import TransactionRequest
 from trace_core.contracts.envelope import ZERO_TRACE_ID
 from trace_core.domain.errors import FeatureWriteFailedError
-from trace_core.domain.time import event_time
+from trace_core.domain.time import event_time, from_millis, to_millis, utc_now
 from trace_core.features.completeness import CompletenessGuard, HoleReason
 from trace_core.features.definitions import ONLINE_FEATURES
 from trace_core.features.observation import Event
@@ -71,6 +73,12 @@ from trace_core.observability.logging import configure_logging
 from trace_core.observability.metrics import HotPathMetrics, register_online_store_gauges
 from trace_core.observability.telemetry import configure_telemetry, current_trace_id
 from trace_core.repositories.circuit_breaker import CircuitBreaker
+from trace_core.repositories.postgres_authorization import (
+    AuthorizationOutcomeRecord,
+    Delivery,
+    PostgresAuthorizationStore,
+    validate_event,
+)
 from trace_core.repositories.postgres_completeness import PostgresHoleLedger
 from trace_core.repositories.postgres_triage import PostgresTriageStore, new_case_id
 from trace_core.repositories.redis_idempotency import RedisIdempotencyCache, ReplayVerdict
@@ -106,6 +114,8 @@ class GatewayState:
     limiter: RedisRateLimiter | None = None
     idempotency: RedisIdempotencyCache | None = None
     triage: PostgresTriageStore | None = None
+    authorizations: PostgresAuthorizationStore | None = None
+    """The system of record for authorization outcomes (ADR-0049 §4), on triage's pool."""
     redis: Any = None
     """The feature-store client (ADR-0044: `noeviction`)."""
     cache_redis: Any = None
@@ -257,6 +267,7 @@ def build_state(settings: GatewaySettings | None = None) -> GatewayState:
 
     pool: Any = None
     triage: PostgresTriageStore | None = None
+    authorizations: PostgresAuthorizationStore | None = None
     try:
         from psycopg_pool import ConnectionPool
 
@@ -267,6 +278,7 @@ def build_state(settings: GatewaySettings | None = None) -> GatewayState:
             open=False,
         )
         triage = PostgresTriageStore(pool)
+        authorizations = PostgresAuthorizationStore(pool)
     except ModuleNotFoundError:  # pragma: no cover - the db extra is required
         log.error("postgres_pool_unavailable", detail="triage cannot be recorded")
 
@@ -297,6 +309,7 @@ def build_state(settings: GatewaySettings | None = None) -> GatewayState:
         limiter=limiter,
         idempotency=idempotency,
         triage=triage,
+        authorizations=authorizations,
         redis=redis_client,
         cache_redis=cache_client,
         pool=pool,
@@ -544,7 +557,10 @@ PROBLEM_REF: Final = "#/components/schemas/Problem"
 _PROBLEM_STATUSES: Final[dict[int, str]] = {
     400: "Malformed request: the body does not match the schema (§6.1).",
     401: "Unauthenticated: no valid service token was presented.",
-    409: "Idempotency conflict: the key was reused with a different payload (§5).",
+    409: (
+        "Conflict: an idempotency key reused with a different payload (§5), or a different "
+        "authorization outcome already recorded for the transaction (ADR-0049)."
+    ),
     422: "Semantically invalid: the shape is right and a value cannot be (§6.6).",
     429: "Rate limited. Carries Retry-After.",
     503: "The decision could not be durably recorded, so it was not returned (ADR-0035).",
@@ -802,6 +818,26 @@ def _register_routes(app: FastAPI) -> None:
             ip_id=body.ip_id,
         )
 
+    @app.post(
+        "/v1/events/authorization",
+        status_code=202,
+        summary="Ingest an authorization outcome",
+        response_model=AcceptedResponse,
+        responses={status: _PROBLEM_RESPONSES[status] for status in (400, 401, 409, 422, 503)},
+    )
+    async def ingest_authorization(
+        request: Request,
+        body: AuthorizationOutcomeRequest,
+        token: Annotated[ServiceToken, Depends(_authenticate)],
+    ) -> Any:
+        # Sync: `_record_authorization` writes PostgreSQL, bounded by POSTGRES_TIMEOUT_S. See
+        # `score_transaction`. The token authenticates; identity is the transaction id (ADR-0049
+        # §4).
+        del token
+        if (problem := _future_skew_problem(request, body.decided_at)) is not None:
+            return problem
+        return _record_authorization(request, body)
+
 
 def _future_skew_problem(request: Request, occurred_at: dt.datetime) -> Any:
     """A 422 for an event dated beyond the accepted future clock skew, as for transactions.
@@ -902,6 +938,96 @@ def _ingest(
         with contextlib.suppress(Exception):
             state.idempotency.remember(cache_key, payload, accepted.model_dump_json())
     return accepted
+
+
+def _record_authorization(request: Request, body: AuthorizationOutcomeRequest) -> Any:
+    """Record an authorization outcome in the system of record, and only then acknowledge it.
+
+    ADR-0049 §4, in order:
+    - an outcome decided before its transaction occurred cannot observe it: 422;
+    - no system of record, an invalid event or a failed write: 503, and nothing is acknowledged;
+    - the first delivery for the transaction is recorded with its outbox row: 202;
+    - an identical redelivery changes nothing: 202, answered with the recorded event's id;
+    - different content under the same transaction id is a conflict: 409, and the first delivery
+      stays the observation.
+
+    Both times are compared and published at millisecond precision, the precision of the event.
+    Applying outcomes online -- verification against the held transaction, pending outcomes and the
+    account-mismatch refusal -- arrives with feature set 3.0.0, the first reader of outcomes. Until
+    then no feature reads an outcome, so there is nothing online to apply.
+    """
+    state = _gateway(request)
+    decided_ms = to_millis(event_time(body.decided_at))
+    occurred_ms = to_millis(event_time(body.transaction_occurred_at))
+    if decided_ms < occurred_ms:
+        return _problem_response(
+            request,
+            ErrorType.INVALID_REQUEST,
+            detail=(
+                "decided_at precedes transaction_occurred_at: an outcome cannot be decided before "
+                "its transaction (ADR-0049 §2)."
+            ),
+        )
+    if state.authorizations is None:
+        return _authorization_unavailable(request)
+    outcome = body.authorization_outcome.value
+    try:
+        event = authorization.build_event(
+            transaction_id=body.transaction_id,
+            account_id=body.account_id,
+            authorization_outcome=outcome,
+            decided_ms=decided_ms,
+            transaction_occurred_ms=occurred_ms,
+            transaction_occurred_at=authorization.iso_millis(occurred_ms),
+            producer=producer_string(SERVICE_VERSION),
+            trace_id=_trace_id(),
+            correlation_id=body.transaction_id,
+            ingested_ms=to_millis(utc_now()),
+        )
+        validate_event(event)
+    except Exception as exc:
+        # A contract failure is not an outage, but it must not be acknowledged either.
+        log.error("authorization_event_invalid", error=type(exc).__name__)
+        return _authorization_unavailable(request)
+    record = AuthorizationOutcomeRecord(
+        transaction_id=body.transaction_id,
+        account_id=body.account_id,
+        authorization_outcome=outcome,
+        decided_at=from_millis(decided_ms),
+        transaction_occurred_at=from_millis(occurred_ms),
+        event_id=str(event["envelope"]["event_id"]),
+    )
+    try:
+        receipt = state.authorizations.record(record, event)
+    except Exception as exc:
+        log.warning("authorization_record_failed", error=type(exc).__name__)
+        return _authorization_unavailable(request)
+    log.info("authorization_outcome_delivered", delivery=receipt.delivery.value)
+    if receipt.delivery is Delivery.CONFLICT:
+        return _problem_response(
+            request,
+            ErrorType.AUTHORIZATION_CONFLICT,
+            detail=(
+                "A different authorization outcome is already recorded for this transaction. The "
+                "first delivery stays the observation (ADR-0049 §2)."
+            ),
+        )
+    return AcceptedResponse(
+        accepted=True, event_id=receipt.recorded.event_id, request_id=_request_id(request)
+    )
+
+
+def _authorization_unavailable(request: Request) -> JSONResponse:
+    """503: the outcome was not durably recorded, so it is not acknowledged (ADR-0049 §4)."""
+    return _problem_response(
+        request,
+        ErrorType.SERVICE_UNAVAILABLE,
+        detail=(
+            "The authorization outcome could not be durably recorded, so it was not accepted. "
+            "Retry the delivery."
+        ),
+        headers={"Retry-After": "5"},
+    )
 
 
 def _triage(state: GatewayState, outcome: Any, body: TransactionRequest) -> RiskDecision:

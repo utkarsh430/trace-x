@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import bisect
 import datetime as dt
+import heapq
 import itertools
 import math
 import random
@@ -31,6 +32,7 @@ from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any, Final
 
+from data.generator import outcomes
 from data.generator.baseline import (
     BaselineEvent,
     DeviceReferences,
@@ -59,6 +61,7 @@ from data.generator.scenarios import (
     default_mix,
     distant_city,
 )
+from trace_core.contracts.topics import TX_AUTHORIZATION_V1
 from trace_core.domain.enums import FraudPattern
 from trace_core.domain.geo import GeoPoint, haversine_km
 from trace_core.domain.identifiers import uuid7
@@ -102,13 +105,16 @@ class GeneratedRow:
     """Present on injected rows. Never serialised into the event -- it exists so
     the ground-truth writer can record which episode a row belonged to."""
     authorization_decided_ms: int | None = None
-    """eval-v2 only: when this transaction's authorization outcome was decided.
+    """eval-v2 only: when this transaction's authorization outcome was decided -- DM-1, a pure
+    function of the seed and the transaction id (ADR-0049 §7).
 
-    Kept in the plan and never serialised into the event, so a later decision to
-    emit authorization outcomes as their own dated events can take it from here.
-    One latency distribution applies to every transaction -- approved or declined,
-    legitimate or planted -- because a latency that differed by outcome or label
-    would become a proxy the moment it was emitted. None when the gate is off."""
+    Never serialised into the transaction. One distribution applies to every transaction --
+    approved or declined, legitimate or planted -- because a latency that differed by outcome or
+    label would be a proxy the moment it was emitted. None when the gate is off."""
+    authorization_outcome: str | None = None
+    """eval-v2 only: the outcome the plan gives this transaction, which its `tx.authorization.v1`
+    event carries while the transaction itself says `UNKNOWN` (N12). Never serialised; it exists so
+    a test can check the stream against the plan. None when the gate is off."""
     planned_ordinal: int | None = None
     """Planted rows only: the index of this row's planned event within its scenario instance.
 
@@ -329,9 +335,6 @@ _RETRY_GAP_MS: Final = (20_000, 600_000)
 _MAX_DECLINE_PROBABILITY: Final = 0.5
 """Cap on one legitimate transaction's decline probability after the account's
 multiplier, so a lognormal tail cannot produce accounts that almost always decline."""
-_DECISION_LATENCY_FLOOR_MS: Final = 40
-_DECISION_LATENCY_MEAN_MS: Final = 300.0
-_DECISION_LATENCY_SD_MS: Final = 150.0
 
 _SINGLE: Final = 0
 _ATTEMPT: Final = 1
@@ -1616,21 +1619,50 @@ def generate_dataset(
     merged.sort(key=lambda item: (item[0], item[1]))
 
     eval_v2 = config.baseline_identity is not None
-    decisions: random.Random | None = None
     fixed_prices = plan_fixed_prices(config, universe, legit_count) if eval_v2 else {}
     if eval_v2:
         merged = _plan_eval_v2(config, universe, merged, legit_count, instances)
-        decisions = derive(config.seed, "authorization-decision")
+    # N12 (ADR-0049 §7): every transaction says `UNKNOWN`, and its outcome is its own event at its
+    # DM-1 time. Outcomes wait in a heap and leave it before the first planned event of a LATER
+    # millisecond, so each follows its own transaction and every transaction at its millisecond.
+    stream_outcomes = config.baseline_identity is not None and config.baseline_identity.applies(
+        "N12"
+    )
+    pending_outcomes: list[tuple[int, int, GeneratedRow]] = []
+    outcome_order = itertools.count()
     pending_retries: dict[int, dict[str, Any]] = {}
 
-    def decided_at(occurred_ms: int) -> int | None:
-        if decisions is None:
-            return None
-        latency = int(abs(decisions.gauss(_DECISION_LATENCY_MEAN_MS, _DECISION_LATENCY_SD_MS)))
-        return occurred_ms + _DECISION_LATENCY_FLOOR_MS + latency
+    def settle(event: dict[str, Any], occurred_ms: int) -> tuple[int | None, str | None]:
+        """(DM-1 time, planned outcome) for a transaction; under N12 its outcome is queued."""
+        if not eval_v2:
+            return None, None
+        body = event["payload"]
+        transaction_id = str(body["transaction_id"])
+        outcome = str(body["authorization_outcome"])
+        decided_ms = outcomes.decided_ms(config.seed, transaction_id, occurred_ms)
+        if stream_outcomes:
+            row = GeneratedRow(
+                topic=TX_AUTHORIZATION_V1,
+                event=outcomes.outcome_event(
+                    config.seed,
+                    transaction_id=transaction_id,
+                    account_id=str(body["account_id"]),
+                    authorization_outcome=outcome,
+                    transaction_occurred_at=event["envelope"]["occurred_at"],
+                    transaction_occurred_ms=occurred_ms,
+                    producer=PRODUCER,
+                    trace_id=event["envelope"]["trace_id"],
+                    correlation_id=event["envelope"]["correlation_id"],
+                ),
+            )
+            heapq.heappush(pending_outcomes, (decided_ms, next(outcome_order), row))
+            body["authorization_outcome"] = "UNKNOWN"
+        return decided_ms, outcome
 
     position = 0
     for occurred_ms, _tiebreak, kind, payload in merged:
+        while pending_outcomes and pending_outcomes[0][0] < occurred_ms:
+            yield heapq.heappop(pending_outcomes)[2]
         if kind == 0:
             event = _build_transaction(config, universe, payload, occurred_ms, position, lag, {})
             yield GeneratedRow(
@@ -1685,13 +1717,15 @@ def generate_dataset(
                     for key, value in event["payload"].items()
                     if key not in _RETRY_FRESH_FIELDS
                 }
+            decided_ms, outcome = settle(event, occurred_ms)
             yield GeneratedRow(
                 topic="tx.raw.v1",
                 event=event,
                 label=TransactionLabel(
                     transaction_id=event["payload"]["transaction_id"], is_fraud=False
                 ),
-                authorization_decided_ms=decided_at(occurred_ms),
+                authorization_decided_ms=decided_ms,
+                authorization_outcome=outcome,
             )
             position += 1
             continue
@@ -1707,6 +1741,7 @@ def generate_dataset(
                 lag,
                 planned.overrides,
             )
+            decided_ms, outcome = settle(event, occurred_ms)
             yield GeneratedRow(
                 topic="tx.raw.v1",
                 event=event,
@@ -1718,7 +1753,8 @@ def generate_dataset(
                     causal_evidence_keys=instance.causal_evidence_keys,
                 ),
                 scenario_instance=instance,
-                authorization_decided_ms=decided_at(occurred_ms),
+                authorization_decided_ms=decided_ms,
+                authorization_outcome=outcome,
                 planned_ordinal=ordinal,
             )
             position += 1
@@ -1737,6 +1773,8 @@ def generate_dataset(
                 scenario_instance=instance,
                 planned_ordinal=ordinal,
             )
+    while pending_outcomes:
+        yield heapq.heappop(pending_outcomes)[2]
 
 
 def validate_events(events: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:

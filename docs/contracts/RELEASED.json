@@ -52,6 +52,17 @@
       "cleanup": "delete",
       "retention": "30d",
       "cleanup_reason": "MUST NOT be compacted. Compaction retains only the newest record per KEY, and the key is case_id -- so a reopened case (Phase 5 /v1/investigations/{id}/reopen) would silently erase the original request and every historical request but the last. The key is for routing and ordering, not identity: identity is event_id, which is unique per event."
+    },
+    {
+      "topic": "tx.authorization.v1",
+      "schema": "tx.authorization.v1.json",
+      "sha256": "dffd3e19242dbfbcacc4528b6b015da5ac409bcc0868036c7a2d94ecc81b1429",
+      "key": "account_id",
+      "key_reason": "the only reader is a per-account window, so per-account order is the order that matters; equal partitions to tx.raw.v1 put an account on the same partition number on both topics (ADR-0049)",
+      "released_in_phase": 3,
+      "producer": "data.generator (eval-v2 outcome stream) and trace-gateway POST /v1/events/authorization (transactional outbox)",
+      "cleanup": "delete",
+      "retention": "7d"
     }
   ],
   "planned": [

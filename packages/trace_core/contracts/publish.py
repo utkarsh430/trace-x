@@ -66,6 +66,7 @@ from trace_core.contracts.topics import (
     DEVICE_EVENTS_V1,
     IDENTITY_EVENTS_V1,
     INVESTIGATION_REQUESTED_V1,
+    TX_AUTHORIZATION_V1,
     TX_RAW_V1,
     partition_key,
 )
@@ -438,6 +439,7 @@ def _models() -> Mapping[str, Any]:
         device_events_v1,
         identity_events_v1,
         investigation_requested_v1,
+        tx_authorization_v1,
         tx_raw_v1,
     )
 
@@ -447,6 +449,7 @@ def _models() -> Mapping[str, Any]:
             IDENTITY_EVENTS_V1: identity_events_v1.IdentityEventV1,
             DEVICE_EVENTS_V1: device_events_v1.DeviceEventV1,
             INVESTIGATION_REQUESTED_V1: investigation_requested_v1.InvestigationRequestedV1,
+            TX_AUTHORIZATION_V1: tx_authorization_v1.TxAuthorizationV1,
         }
     )
 

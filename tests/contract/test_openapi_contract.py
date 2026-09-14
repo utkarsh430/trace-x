@@ -92,6 +92,7 @@ def test_every_documented_surface_is_present(spec: dict[str, Any]) -> None:
         "/v1/transactions",
         "/v1/events/identity",
         "/v1/events/device",
+        "/v1/events/authorization",
     }
 
 

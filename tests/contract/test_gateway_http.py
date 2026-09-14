@@ -465,3 +465,52 @@ def test_an_identity_event_retried_under_one_key_is_one_observation() -> None:
     assert other != first
     assert len(unkeyed) == 2
     assert len(store.inner.events) == 1 + 1 + 2, "the retry was recorded as a second failed login"
+
+
+# --- authorization outcomes (ADR-0049 §4) --------------------------------------
+
+
+def _outcome_body(**over: Any) -> dict[str, Any]:
+    occurred = dt.datetime.now(dt.UTC) - dt.timedelta(seconds=5)
+    body: dict[str, Any] = {
+        "transaction_id": f"tx_{uuid.uuid4().hex[:16]}",
+        "account_id": "acct_000001",
+        "authorization_outcome": "DECLINED",
+        "decided_at": (occurred + dt.timedelta(milliseconds=340))
+        .isoformat()
+        .replace("+00:00", "Z"),
+        "transaction_occurred_at": occurred.isoformat().replace("+00:00", "Z"),
+    }
+    body.update(over)
+    return body
+
+
+def test_an_outcome_without_a_system_of_record_is_refused_not_acknowledged(
+    client: TestClient,
+) -> None:
+    """F15: an outcome the system of record did not keep is never acknowledged."""
+    response = client.post("/v1/events/authorization", json=_outcome_body(), headers=AUTH)
+    assert response.status_code == 503, response.text
+    assert response.headers["content-type"].startswith("application/problem+json")
+    assert response.headers["Retry-After"] == "5"
+
+
+def test_an_outcome_decided_before_its_transaction_is_a_422(client: TestClient) -> None:
+    body = _outcome_body()
+    body["decided_at"], body["transaction_occurred_at"] = (
+        body["transaction_occurred_at"],
+        body["decided_at"],
+    )
+    response = client.post("/v1/events/authorization", json=body, headers=AUTH)
+    assert response.status_code == 422, response.text
+
+
+def test_an_outcome_that_observes_nothing_is_a_422(client: TestClient) -> None:
+    body = _outcome_body(authorization_outcome="UNKNOWN")
+    response = client.post("/v1/events/authorization", json=body, headers=AUTH)
+    assert response.status_code == 422, response.text
+
+
+def test_an_unauthenticated_outcome_is_refused(client: TestClient) -> None:
+    response = client.post("/v1/events/authorization", json=_outcome_body())
+    assert response.status_code == 401, response.text

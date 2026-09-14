@@ -31,10 +31,11 @@ import datetime as dt
 import math
 from collections import defaultdict
 from collections.abc import Collection, Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
+from trace_core.contracts.topics import TX_AUTHORIZATION_V1
 from trace_core.domain.time import to_millis
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -51,6 +52,8 @@ DAY_MS: Final = 86_400_000
 TX_TOPIC: Final = "tx.raw.v1"
 IDENTITY_TOPIC: Final = "identity.events.v1"
 DEVICE_TOPIC: Final = "device.events.v1"
+OUTCOME_TOPIC: Final = TX_AUTHORIZATION_V1
+"""ADR-0049's outcome stream. Where a generation carries it, the decline signals read it."""
 
 # ---- LPC-1 declared thresholds (see the ADR §5 for why each value) ----------
 Z_ONE_SIDED_95: Final = 1.645
@@ -352,6 +355,7 @@ def _tally(
     first_payment: dict[tuple[str, str], int] = {}
     first_coordinates: dict[tuple[str, float, float], int] = {}
     declined_times: dict[str, list[int]] = defaultdict(list)
+    stream_outcomes: dict[str, tuple[str, int, str]] = {}
 
     def reference(account: str, device: str | None, at_ms: int) -> None:
         if not device:
@@ -436,6 +440,24 @@ def _tally(
             if payload["device_event_type"] == "FIRST_SEEN":
                 times[account]["first_seen"].append(at_ms)
             reference(account, payload["device_id"], at_ms)
+        elif row.topic == OUTCOME_TOPIC:
+            stream_outcomes[str(payload["transaction_id"])] = (
+                str(payload["authorization_outcome"]),
+                at_ms,
+                str(payload["account_id"]),
+            )
+
+    # A generation that carries the outcome stream is judged on it (LPC-5 §5.2): its transactions
+    # say UNKNOWN (N12), so each takes its outcome from its own outcome row.
+    if outcomes is None and stream_outcomes:
+        outcomes = stream_outcomes
+        transactions = [
+            replace(tx, outcome=stream_outcomes[tx.transaction_id][0])
+            if tx.transaction_id in stream_outcomes
+            else replace(tx, outcome=None)
+            for tx in transactions
+        ]
+        declined_times.clear()
 
     for per_account in times.values():
         for series in per_account.values():

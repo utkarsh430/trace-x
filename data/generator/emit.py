@@ -27,6 +27,7 @@ from trace_core.contracts.publish import (
     DeliveryReport,
     EventPublisher,
 )
+from trace_core.contracts.topics import TX_AUTHORIZATION_V1
 from trace_core.domain.errors import EventPublishError, SchemaValidationError
 
 TOPIC_SUFFIX: Final = ".jsonl"
@@ -59,6 +60,7 @@ def _validator_for(topic: str) -> Any:
         from trace_core.contracts.events import (
             device_events_v1,
             identity_events_v1,
+            tx_authorization_v1,
             tx_raw_v1,
         )
 
@@ -67,6 +69,7 @@ def _validator_for(topic: str) -> Any:
                 "tx.raw.v1": tx_raw_v1.TxRawV1,
                 "identity.events.v1": identity_events_v1.IdentityEventV1,
                 "device.events.v1": device_events_v1.DeviceEventV1,
+                TX_AUTHORIZATION_V1: tx_authorization_v1.TxAuthorizationV1,
             }
         )
     try:

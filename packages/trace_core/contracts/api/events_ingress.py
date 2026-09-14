@@ -14,6 +14,7 @@ the transaction surface, patterns mirror the released `identity.events.v1` and
 
 from __future__ import annotations
 
+from enum import StrEnum
 from typing import Annotated
 
 from pydantic import Field
@@ -61,6 +62,34 @@ class DeviceEventRequest(ApiModel):
         data = self.model_dump(mode="json", exclude_none=True)
         data.pop("occurred_at", None)
         return data
+
+
+class ObservedAuthorizationOutcome(StrEnum):
+    """An authorization outcome that is an observation (ADR-0049 §2).
+
+    `UNKNOWN` observes nothing, and `REVERSED` is a later event with other semantics, so neither is
+    accepted here; the released `tx.authorization.v1` enum has the same two values."""
+
+    APPROVED = "APPROVED"
+    DECLINED = "DECLINED"
+
+
+JsonObservedOutcome = Annotated[ObservedAuthorizationOutcome, JSON_SPELLED]
+
+
+class AuthorizationOutcomeRequest(ApiModel):
+    """An authorization outcome for one transaction, dated when it was decided (ADR-0049 §4).
+
+    Identity is the transaction id, store-wide: an outcome is not token-scoped, because token
+    scoping would let two callers record two outcomes for one transaction."""
+
+    transaction_id: Annotated[str, Field(min_length=1, max_length=64)]
+    account_id: Annotated[str, Field(pattern=ACCOUNT_ID_PATTERN)]
+    authorization_outcome: JsonObservedOutcome
+    decided_at: JsonDatetime
+    """EVENT time: when the authorization system decided."""
+    transaction_occurred_at: JsonDatetime
+    """The transaction's event time, as the outcome's producer reports it."""
 
 
 class AcceptedResponse(ApiModel):

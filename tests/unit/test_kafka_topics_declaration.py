@@ -95,6 +95,8 @@ APPROVED_DEDUP_IDENTITY = {
     "identity.events.v1": "envelope.event_id",
     "device.events.v1": "envelope.event_id",
     "investigation.requested.v1": "envelope.idempotency_key",
+    # ADR-0049 §2, as approved: one outcome per transaction.
+    "tx.authorization.v1": "payload.transaction_id",
 }
 
 CONTRACTS_ROW = re.compile(
@@ -405,6 +407,32 @@ def test_the_assumed_record_size_covers_a_generator_shaped_record_at_its_ascii_m
     }
     size = len(canonical_bytes({"envelope": envelope, "payload": payload}))
     assert size <= declaration.topics["tx.raw.v1"].assumed_record_bytes, size
+
+
+def test_the_assumed_outcome_record_size_covers_its_largest_generator_shaped_record(
+    declaration: Any,
+) -> None:
+    """ADR-0049 §2's 1024-byte assumption, against the largest outcome the schema allows with
+    generator-shaped identifiers: a 64-character transaction id and correlation id."""
+    envelope = {
+        "event_id": "01900000-0000-7000-8000-000000000000",
+        "event_type": "tx.authorization",
+        "schema_version": 1,
+        "occurred_at": "2026-09-13T12:00:00.123Z",
+        "ingested_at": "2026-09-13T12:00:00.223Z",
+        "producer": "trace-generator@1.0.0",
+        "trace_id": "0" * 32,
+        "correlation_id": "corr_" + "0" * 59,
+        "idempotency_key": "sha256:" + "0" * 64,
+    }
+    payload = {
+        "transaction_id": "t" * 64,
+        "account_id": "acct_" + "0" * 9,
+        "authorization_outcome": "DECLINED",
+        "transaction_occurred_at": "2026-09-13T12:00:00.123456Z",
+    }
+    size = len(canonical_bytes({"envelope": envelope, "payload": payload}))
+    assert size <= declaration.topics["tx.authorization.v1"].assumed_record_bytes, size
 
 
 def test_tx_topics_respect_the_planned_per_partition_cap(declaration: Any) -> None:

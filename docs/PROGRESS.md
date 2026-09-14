@@ -768,7 +768,35 @@ Phase 3, in the wave order of `docs/PHASE3_PLAN.md` §5:
           imply a fast leg, because no outbound journey is modelled.
       - **Step 6 status.** Every correction except N12 is implemented and switchable. N12 comes
         with step 7. Whether the corrections pass `LPC-5` is step 9's diagnostic probe.
-   7. U7/N12 (ADR-0049).
+   7. In progress: U7/N12 (ADR-0049), in committed units.
+      - **Unit 1 done: the outcome stream is released with its two producers.**
+        - Contract: `tx.authorization.v1`, with its schema, generated model, ledger entry, topic
+          declaration (within the local disk budget) and EVENT_CONTRACTS and API_CONTRACTS rows.
+          `trace_core.contracts.authorization` defines the event and its content-hash idempotency
+          key once, for every producer.
+        - Generator (N12, ablatable): every transaction says `UNKNOWN`. Each yields one outcome
+          event at its DM-1 time, emitted after it and sharing its trace and correlation ids.
+          `LPC-5` and LPC-1..3 read the stream when it is present.
+        - Gateway: `POST /v1/events/authorization` writes `app.authorization_outcomes` and its outbox
+          row in one transaction (migration 0005). It answers:
+          - 202 when recorded, or for an identical redelivery;
+          - 409 on a conflict;
+          - 422 for an outcome decided before its transaction;
+          - 503 without a system of record.
+          These paths are tested against a real PostgreSQL.
+        - **Defect found by a test and fixed before commit.** Migration 0001's default privileges
+          give `trace_app` UPDATE on every new `app` table, so a recorded outcome could have been
+          overwritten. Migration 0005 revokes UPDATE, DELETE and TRUNCATE explicitly.
+        - **Implementation reading, for review.** The gateway uses the transaction id as the
+          outcome's correlation id, and the request's trace, as triage does: it holds no record of
+          the transaction's own ids.
+      - **Unit 2 next: feature set 3.0.0.**
+        - `Stream.AUTHORIZATION_OUTCOME` and `PRIOR_KNOWN`.
+        - `declined_ratio_1h` over verified outcomes, in the reference and Redis stores.
+        - Online apply, with verification, pending outcomes and reconciliation.
+        - Fixtures F1–F17 and their mutations.
+      - **Then:** replay (the fourth stream, and derivation for eval-v1) and the `LPC-5`
+        availability provider.
    8. Ablation controls.
    9. Diagnostic eval-v2 probe.
    10. Final candidate.
