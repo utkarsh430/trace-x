@@ -534,7 +534,15 @@ both reports.
   * label-proxy criteria LPC-1 to LPC-3 declared before any gated run. The `eval-v1` negative
     control fails them for the proxy reason, and gate-off output is byte-identical.
 
-  Stage 1d, the systematic label-proxy audit, has started and is unreviewed. Stage 2 waits for U7.
+  **Stage 1d, the systematic label-proxy audit, is complete as analysis**
+  (`eval/track_a/audits/label-proxy-audit-stage-1d.md`); no generator behaviour changed. It measured
+  eval-v1 and probed the current gated generator structurally, never by model performance. The earlier
+  fixes hold, but proxies survive: legitimate transactions never use a non-home IP or travel far from
+  home, the declared time-of-day, merchant-popularity and channel corrections are not implemented, no
+  episode starts in the last three days of the window, and two scenario timing constants are fixed.
+  It proposes `LPC-5` -- no observable may be exclusive to planted rows, even a documented one, plus
+  representation, calendar-coverage and fixed-offset rules -- and a Stage 2 order. **Awaiting review;
+  Stage 2 not begun, and its freeze waits for U7.**
 
 ## CURRENTLY FAILING TESTS
 
@@ -598,7 +606,8 @@ Phase 3, in the wave order of `docs/PHASE3_PLAN.md` §5:
 
 1. **User decisions still open:** U7, and acceptance of ADR-0046, ADR-0047 and ADR-0048 together with
    ADR-0048's proposed plan corrections.
-2. **Step E stage 1d**, the label-proxy audit; stage 2 after U7.
+2. **Review the Step E stage 1d audit**, its proposed `LPC-5` criterion and corrections. Stage 2
+   follows the review; its freeze waits for U7.
 3. **R010 threshold study (U10)**, once `eval-v2` is frozen and its label-proxy checks pass. Compare
    candidate thresholds on fraud recall, false-positive rate, legitimate and fraud high-risk counts,
    the business and risk trade-off, and confidence intervals or sample counts, with attribution
