@@ -83,12 +83,12 @@ def test_every_feature_equals_the_whole_history_context(
     generation: tuple[list[GeneratedRow], Frame, int],
 ) -> None:
     _, frame, start_ms = generation
-    subjects, events, position = observations(frame)
+    events, position = observations(frame)
     index = Index(events)
     complete_since = event_time(from_millis(start_ms))
     available: Counter[str] = Counter()
     bounded = 0
-    sampled = subjects[::6]
+    sampled = [canonical(tx) for tx in frame.tx[::6]]
     for subject in sampled:
         current_index = position[transaction_observation(subject).identity]
         current = events[current_index]

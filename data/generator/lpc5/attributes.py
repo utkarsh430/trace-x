@@ -141,7 +141,8 @@ class _Global:
     idempotency: Counter[int]
     correlation: Counter[int]
     trace: Counter[int]
-    tie_rank: dict[tuple[str, int], str]
+    tie_rank: dict[str, list[str]]
+    """Per population, each row's rank among rows sharing its millisecond, by row index."""
 
 
 def _global(frame: Frame) -> _Global:
@@ -168,15 +169,17 @@ def _global(frame: Frame) -> _Global:
             if envelope.trace_id is not None:
                 trace[hash(envelope.trace_id)] += 1
             by_time[row.t].append((row.order, name, index))
-    tie_rank: dict[tuple[str, int], str] = {}
+    # One list per population, not a dict keyed by (population, row): at acceptance scale the
+    # tuple keys cost more than a gigabyte (Stage 2 step 11).
+    tie_rank: dict[str, list[str]] = {name: [""] * len(rows) for name, rows in populations}
     for group in by_time.values():
         if len(group) == 1:
             _, name, index = group[0]
-            tie_rank[(name, index)] = "alone"
+            tie_rank[name][index] = "alone"
             continue
         group.sort()
         for position, (_, name, index) in enumerate(group):
-            tie_rank[(name, index)] = "first" if position == 0 else "later"
+            tie_rank[name][index] = "first" if position == 0 else "later"
     return _Global(event_ids, idempotency, correlation, trace, tie_rank)
 
 
@@ -205,7 +208,7 @@ def _put_common(
         columns["ingest_lag"].put(
             i, "<0" if lag < 0 else band(lag, (40, 80, 120, 160), d.INGEST_LAG[1:])
         )
-    columns["tie_rank"].put(i, shared.tie_rank[(population, i)])
+    columns["tie_rank"].put(i, shared.tie_rank[population][i])
     columns["payload_keys"].put(i, keys)
     columns["identifier_formats"].put(i, "ok" if identifiers_ok else "not")
     columns["envelope_constants"].put(

@@ -1,0 +1,22 @@
+# DIAGNOSTIC -- not acceptance evidence. Stage 2 step 11: the first acceptance run on the frozen
+# candidate (1M rows) was stopped by the host for low memory before it finished; no result exists.
+# A tracemalloc profile at 100k rows (seed 44, gate on) put the peaks in compute_tables (1,095 MiB
+# traced) and S0 (570 MiB); at 50k rows, availability held one validated CanonicalTransaction per
+# transaction (259 MiB of a ~390 MiB transient) through its per-row loop.
+#
+# Changes, each a pure restructuring of the same computation:
+# - S0 merges the frame's rows lazily by emission order (heapq.merge) and refuses out-of-order input,
+#   instead of materialising and sorting a second copy of every row;
+# - availability maps each transaction through `canonical` and drops the model, rebuilding it in
+#   the per-row loop (a pure function of the row);
+# - tie ranks are per-population lists, not a dict keyed by (population, row index);
+# - each row's payload-key string is interned.
+#
+# Equivalence oracle: every field of Lpc5Report (checks, judged counts, findings, unjudged rows, S0
+# reports, instance counts, mix, invalid reasons) as canonical JSON, sha256, computed by
+# scratchpad lpc5_report_digest.py through eval.track_a.lpc5_control.evaluate_config.
+#
+# generation                     frozen code (8e7759e)                                              changed code
+20000 rows, seed 44, gate on     a0edd8d2d94da75adf7840c2c0d49fbb1e65d412f8d19aec5433fe5534962e38   a0edd8d2d94da75adf7840c2c0d49fbb1e65d412f8d19aec5433fe5534962e38
+30000 rows, seed 45, gate on     312911500e6f4e16ed6deb506df7a3725dd5aa8758c3d1680b4acd024ac27336   312911500e6f4e16ed6deb506df7a3725dd5aa8758c3d1680b4acd024ac27336
+# Both reports FAIL with findings (92 and 87), so the comparison covers non-empty finding lists.

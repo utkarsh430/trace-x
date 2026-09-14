@@ -15,6 +15,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import re
+import sys
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final
@@ -252,7 +253,9 @@ def _validate(frame: Frame, topic: str, event: Mapping[str, Any], order: int) ->
 
 
 def _keys(payload: Mapping[str, Any]) -> str:
-    return "|".join(sorted(payload))
+    """Interned: rows share a handful of key sets, and a separate string per row cost hundreds of
+    megabytes at acceptance scale (Stage 2 step 11)."""
+    return sys.intern("|".join(sorted(payload)))
 
 
 def build_frame(

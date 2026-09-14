@@ -12,8 +12,9 @@ Invalid runs are reported as such.
 
 from __future__ import annotations
 
+import heapq
 from collections import Counter
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -23,7 +24,7 @@ from data.generator.labels import TransactionLabel
 from data.generator.lpc5 import declaration as d
 from data.generator.lpc5 import judge, rules
 from data.generator.lpc5.attributes import AvailabilityProvider, compute_tables
-from data.generator.lpc5.frame import Frame, Knowledge, build_frame
+from data.generator.lpc5.frame import Frame, Knowledge, SideRow, TxRow, build_frame
 from data.generator.lpc5.judge import CheckResult, Finding
 from trace_core.domain.enums import EvidenceKind, FraudPattern
 
@@ -108,9 +109,38 @@ def _s0_rows(frame: Frame) -> Iterator[GeneratedRow]:
     """The rows LPC-1 to LPC-3 read, rebuilt from the frame in emission order.
 
     Rebuilt rather than re-generated: at acceptance scale a second generation costs as much as the
-    first. Only the fields the criteria read are carried."""
-    merged: list[tuple[int, GeneratedRow]] = []
-    for tx in frame.tx:
+    first. Only the fields the criteria read are carried.
+
+    Merged lazily, never materialised: each population's rows are already in emission order, so a
+    k-way merge by order yields the one sequence without holding a second copy of every row. That
+    copy, and its sort, were S0's memory peak (Stage 2 step 11)."""
+    streams = (
+        _s0_transactions(frame),
+        _s0_side(frame.ident, d.Population.ID),
+        _s0_side(frame.dev, d.Population.DEV),
+    )
+    for _, row in heapq.merge(*streams, key=lambda item: item[0]):
+        yield row
+
+
+def _in_order[Row: (TxRow, SideRow)](
+    rows: Iterable[Row], population: d.Population
+) -> Iterator[Row]:
+    """The rows, refusing any that break emission order: a merge over unsorted input would reorder
+    the stream silently."""
+    previous = -1
+    for row in rows:
+        if row.order <= previous:
+            raise ValueError(
+                f"{population} rows are not in emission order at order {row.order}; S0 reads the "
+                f"dataset in emission order"
+            )
+        previous = row.order
+        yield row
+
+
+def _s0_transactions(frame: Frame) -> Iterator[tuple[int, GeneratedRow]]:
+    for tx in _in_order(frame.tx, d.Population.TX):
         if tx.group == d.LEGIT:
             label = TransactionLabel(transaction_id=tx.transaction_id, is_fraud=False)
         else:
@@ -138,45 +168,39 @@ def _s0_rows(frame: Frame) -> Iterator[GeneratedRow]:
             "channel": tx.channel,
             "entry_mode": tx.entry_mode,
         }
-        merged.append(
-            (
-                tx.order,
-                GeneratedRow(
-                    topic=d.TOPICS[d.Population.TX],
-                    event={
-                        "envelope": {"occurred_at": tx.envelope.occurred_at},
-                        "payload": payload,
-                    },
-                    label=label,
-                ),
-            )
+        yield (
+            tx.order,
+            GeneratedRow(
+                topic=d.TOPICS[d.Population.TX],
+                event={"envelope": {"occurred_at": tx.envelope.occurred_at}, "payload": payload},
+                label=label,
+            ),
         )
-    for population, rows in ((d.Population.ID, frame.ident), (d.Population.DEV, frame.dev)):
-        for side in rows:
-            side_payload: dict[str, object] = {"account_id": side.account}
-            if population is d.Population.ID:
-                side_payload["identity_event_type"] = side.event_type
-            else:
-                side_payload["device_event_type"] = side.event_type
-            if side.device is not None:
-                side_payload["device_id"] = side.device
-            if side.ip is not None:
-                side_payload["ip_id"] = side.ip
-            merged.append(
-                (
-                    side.order,
-                    GeneratedRow(
-                        topic=d.TOPICS[population],
-                        event={
-                            "envelope": {"occurred_at": side.envelope.occurred_at},
-                            "payload": side_payload,
-                        },
-                    ),
-                )
-            )
-    merged.sort(key=lambda item: item[0])
-    for _, row in merged:
-        yield row
+
+
+def _s0_side(
+    rows: Sequence[SideRow], population: d.Population
+) -> Iterator[tuple[int, GeneratedRow]]:
+    for side in _in_order(rows, population):
+        side_payload: dict[str, object] = {"account_id": side.account}
+        if population is d.Population.ID:
+            side_payload["identity_event_type"] = side.event_type
+        else:
+            side_payload["device_event_type"] = side.event_type
+        if side.device is not None:
+            side_payload["device_id"] = side.device
+        if side.ip is not None:
+            side_payload["ip_id"] = side.ip
+        yield (
+            side.order,
+            GeneratedRow(
+                topic=d.TOPICS[population],
+                event={
+                    "envelope": {"occurred_at": side.envelope.occurred_at},
+                    "payload": side_payload,
+                },
+            ),
+        )
 
 
 def _s0_check(report: LabelProxyReport) -> CheckResult:

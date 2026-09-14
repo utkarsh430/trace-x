@@ -128,15 +128,16 @@ def outcome_observation(out: OutRow) -> Event:
     )
 
 
-def observations(
-    frame: Frame,
-) -> tuple[list[CanonicalTransaction], list[Event], dict[str, int]]:
-    """The TX rows as canonical transactions; every observation once, first delivery, in frame
-    order; and each identity's position in that list."""
-    subjects = [canonical(tx) for tx in frame.tx]
+def observations(frame: Frame) -> tuple[list[Event], dict[str, int]]:
+    """Every observation once, first delivery, in frame order; and each identity's position in that
+    list.
+
+    A TX row's canonical transaction is built, mapped and dropped, never kept: holding a validated
+    model for every transaction through the per-row loop was the largest allocation of an
+    acceptance-scale run (Stage 2 step 11). `canonical` is a pure function of the row, so the loop
+    rebuilds the same model."""
     ordered: list[tuple[int, Event]] = [
-        (tx.order, transaction_observation(subject))
-        for tx, subject in zip(frame.tx, subjects, strict=True)
+        (tx.order, transaction_observation(canonical(tx))) for tx in frame.tx
     ]
     ordered += [
         (row.order, event)
@@ -151,7 +152,7 @@ def observations(
         if event.identity not in position:
             position[event.identity] = len(events)
             events.append(event)
-    return subjects, events, position
+    return events, position
 
 
 class Index:
@@ -200,10 +201,11 @@ def reference_availability(start_ms: int) -> AvailabilityProvider:
     complete_since = event_time(from_millis(start_ms))
 
     def provide(frame: Frame) -> Mapping[str, Sequence[str]]:
-        subjects, events, position = observations(frame)
+        events, position = observations(frame)
         index = Index(events)
         values: dict[str, list[str]] = {feature: [] for feature in d.RELEASED_FEATURES}
-        for subject in subjects:
+        for tx in frame.tx:
+            subject = canonical(tx)
             current_index = position[transaction_observation(subject).identity]
             current = events[current_index]
             context = build_context(
