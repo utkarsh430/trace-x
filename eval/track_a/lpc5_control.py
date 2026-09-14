@@ -24,7 +24,7 @@ from pathlib import Path
 
 from data.generator.config import BaselineIdentityConfig, GeneratorConfig
 from data.generator.digest import DatasetDigest, canonical_bytes
-from data.generator.engine import GeneratedRow, generate_dataset
+from data.generator.engine import GeneratedRow, coverage_mix, generate_dataset, plan_fraud
 from data.generator.lpc5 import controls, run
 from data.generator.lpc5 import declaration as d
 from data.generator.lpc5.frame import knowledge
@@ -101,7 +101,9 @@ def main(argv: list[str] | None = None) -> int:
     universe = build_universe(config)
     digest = DatasetDigest()
     report = run.evaluate(
-        _tee_transactions(generate_dataset(config, universe), digest), knowledge(universe)
+        _tee_transactions(generate_dataset(config, universe), digest),
+        knowledge(universe),
+        mix=coverage_mix(plan_fraud(config, universe)[0]),
     )
     elapsed = time.monotonic() - started
     peak_mib = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024 * 1024)

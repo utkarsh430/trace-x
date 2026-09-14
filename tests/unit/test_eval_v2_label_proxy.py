@@ -626,7 +626,10 @@ def _zero_rates() -> BaselineIdentityConfig:
     }
     assert suffixed <= ZERO_RATE_FIELDS
     return BaselineIdentityConfig.model_validate(
-        {**BaselineIdentityConfig().model_dump(), **dict.fromkeys(ZERO_RATE_FIELDS, 0.0)}
+        {
+            **_EVAL_V1_INSTANCES.model_dump(),
+            **dict.fromkeys(ZERO_RATE_FIELDS, 0.0),
+        }
     )
 
 
@@ -638,9 +641,14 @@ def _reports(config: GeneratorConfig) -> _Reports:
     )
 
 
+_EVAL_V1_INSTANCES = BaselineIdentityConfig(coverage_floor_instances=1)
+"""Stage 1c's record keeps eval-v1's instance plan, so its three generations stay count-matched.
+G2's floor of 20 changes the plan; `LPC-5` S8 judges it."""
+
+
 @pytest.fixture(scope="module")
 def eval_v2_configured() -> _Reports:
-    return _reports(_stage1(baseline_identity=BaselineIdentityConfig()))
+    return _reports(_stage1(baseline_identity=_EVAL_V1_INSTANCES))
 
 
 @pytest.fixture(scope="module")

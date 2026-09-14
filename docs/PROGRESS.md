@@ -711,7 +711,24 @@ Phase 3, in the wave order of `docs/PHASE3_PLAN.md` §5:
    5. Done: record the Q1 extension as ADR-0050 (Proposed). It also records G1–G7 and the eval-v2
       causal-key sets. The card-testing `DEVICE_SHARING` removal is flagged for the user's
       confirmation.
-   6. M4–M6 and N1–N11 behind the gate.
+   6. In progress: the eval-v2 corrections behind the gate, committed in sub-units.
+      - **6a done.**
+        - G2 coverage floor, with its disclosure (`engine.coverage_mix`).
+        - N10: `correlation_id` per business flow.
+        - N11: millisecond rendering, and a tie order that does not depend on the label.
+        - A switch per correction for the ablation controls
+          (`BaselineIdentityConfig.disabled_corrections`), wired for T1–T3, M1–M3, N10 and N11.
+        - Test fixtures that compare gate-on with gate-off set the floor to one, so both plan
+          eval-v1's episodes. G2 has its own tests.
+      - **6b next:**
+        - G1 amounts (N9);
+        - G4 devices;
+        - G6 merchant collusion;
+        - G7 keys, with `AUTHENTICATION_ANOMALY`;
+        - M5 merchants, including `ANOMALOUS_HIGH_VALUE`'s documented new category;
+        - M6 channels.
+      - **6c:** placement and timing: N6, M4, G5 (N7, N8), G3.
+      - **6d:** legitimate look-alikes N1–N5.
    7. U7/N12 (ADR-0049).
    8. Ablation controls.
    9. Diagnostic eval-v2 probe.

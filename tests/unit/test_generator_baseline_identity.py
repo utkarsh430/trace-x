@@ -30,6 +30,7 @@ import datetime as dt
 import hashlib
 import json
 import math
+import re
 import statistics
 from collections.abc import Iterable
 from pathlib import Path
@@ -50,14 +51,18 @@ from data.generator.baseline import (
     poisson,
     standalone_change_rates,
 )
-from data.generator.config import BaselineIdentityConfig, GeneratorConfig
+from data.generator.config import CORRECTIONS, BaselineIdentityConfig, GeneratorConfig
 from data.generator.digest import canonical_bytes
 from data.generator.emit import ValidationPolicy, encode_and_validate
 from data.generator.engine import (
+    COVERAGE_FLOOR_PREFIX,
     GeneratedRow,
+    coverage_mix,
     generate_dataset,
     plan_fraud,
+    plan_order_key,
     scenario_device_references,
+    tie_order_key,
 )
 from data.generator.population import Universe, build_universe
 from data.generator.rng import derive
@@ -219,9 +224,15 @@ def test_every_baseline_setting_changes_the_config_digest(field: str) -> None:
     """A knob that does not reach the digest is a knob that lies."""
     default = BaselineIdentityConfig()
     value = getattr(default, field)
-    changed: Any = (
-        tuple(reversed(value)) if isinstance(value, tuple) else round(float(value) * 0.5, 6)
-    )
+    changed: Any
+    if field == "disabled_corrections":
+        changed = ("T1",)
+    elif isinstance(value, tuple):
+        changed = tuple(reversed(value))
+    elif isinstance(value, int):
+        changed = value // 2
+    else:
+        changed = round(float(value) * 0.5, 6)
     altered = default.model_copy(update={field: changed})
     assert (
         GeneratorConfig(baseline_identity=altered).digest()
@@ -237,6 +248,10 @@ def test_every_baseline_setting_changes_the_config_digest(field: str) -> None:
         {"decline_share_per_transaction": 1.2},
         {"typo_burst_size_weights": (0.0, 0.0, 0.0, 0.0, 0.0)},
         {"mfa_reset_on_new_device_share": 0.6, "mfa_enrolled_on_new_device_share": 0.6},
+        {"coverage_floor_instances": 0},
+        {"disabled_corrections": ("X9",)},
+        {"disabled_corrections": ("T2", "T1")},
+        {"disabled_corrections": ("T1", "T1")},
     ],
     ids=[
         "share-above-one",
@@ -244,6 +259,10 @@ def test_every_baseline_setting_changes_the_config_digest(field: str) -> None:
         "decline-share-above-one",
         "zero-weights",
         "exclusive-shares-exceed-one",
+        "floor-below-one",
+        "unknown-correction",
+        "corrections-out-of-order",
+        "duplicate-correction",
     ],
 )
 def test_invalid_baseline_settings_are_refused(update: dict[str, Any]) -> None:
@@ -273,15 +292,20 @@ def gate_off() -> list[GeneratedRow]:
     return list(generate_dataset(_coherence_config()))
 
 
+_EVAL_V1_INSTANCES = BaselineIdentityConfig(coverage_floor_instances=1)
+"""The gate with eval-v1's instance plan: G2's floor of one adds nothing, so gate-on and gate-off
+plan the same episodes and the tests below compare like with like. G2 has its own tests."""
+
+
 @pytest.fixture(scope="module")
 def gate_on() -> list[GeneratedRow]:
-    return list(generate_dataset(_coherence_config(baseline_identity=BaselineIdentityConfig())))
+    return list(generate_dataset(_coherence_config(baseline_identity=_EVAL_V1_INSTANCES)))
 
 
 @pytest.fixture(scope="module")
 def plan() -> tuple[Universe, BaselinePlan]:
     """The same plan the engine builds, recomputed through the public API."""
-    config = _coherence_config(baseline_identity=BaselineIdentityConfig())
+    config = _coherence_config(baseline_identity=_EVAL_V1_INSTANCES)
     universe = build_universe(config)
     instances, _ = plan_fraud(config, universe)
     references = scenario_device_references(config, universe, instances)
@@ -547,11 +571,39 @@ def test_processing_time_is_never_before_event_time(gate_on: list[GeneratedRow])
         assert ingested >= occurred
 
 
-@pytest.mark.parametrize("field", ["event_id", "idempotency_key", "trace_id"])
+@pytest.mark.parametrize("field", ["event_id", "idempotency_key", "trace_id", "correlation_id"])
 def test_envelopes_are_unique_across_every_event(gate_on: list[GeneratedRow], field: str) -> None:
+    """N10 included: until outcome events exist, every business flow is one event."""
     values = collections.Counter(r.event["envelope"][field] for r in gate_on)
     duplicated = {value: count for value, count in values.items() if count > 1}
     assert not duplicated, f"{len(duplicated)} {field} values are shared"
+
+
+_MS_Z = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$")
+
+
+def test_n11_every_timestamp_carries_exactly_three_fractional_digits(
+    gate_off: list[GeneratedRow], gate_on: list[GeneratedRow]
+) -> None:
+    for row in gate_on:
+        envelope = row.event["envelope"]
+        assert _MS_Z.fullmatch(envelope["occurred_at"]), envelope["occurred_at"]
+        assert _MS_Z.fullmatch(envelope["ingested_at"]), envelope["ingested_at"]
+    assert not all(_MS_Z.fullmatch(r.event["envelope"]["occurred_at"]) for r in gate_off)
+
+
+def test_n11_ties_are_ordered_by_identity_not_by_whether_an_event_is_planted(
+    universe: Universe,
+) -> None:
+    """At one millisecond, a planted event comes first for some seeds and later for others."""
+    config = _coherence_config(baseline_identity=_EVAL_V1_INSTANCES)
+    instance = plan_fraud(config, universe)[0][0]
+    planted = (1_000, 10**9, 1, (instance, instance.events[0], 0))
+    legitimate = (1_000, 0, 3, None)
+    first = [plan_order_key(seed, planted) < plan_order_key(seed, legitimate) for seed in range(64)]
+    assert any(first) and not all(first)
+    assert plan_order_key(7, planted)[1] == tie_order_key(7, f"{instance.instance_id}:0")
+    assert plan_order_key(7, legitimate)[1] == tie_order_key(7, "0")
 
 
 def test_gate_off_still_carries_eval_v1_shared_side_event_envelopes(
@@ -1197,3 +1249,145 @@ def test_the_poisson_sampler_has_poisson_moments(mean: float) -> None:
     assert abs(average - mean) <= 4 * math.sqrt(max(mean, 1e-9) / len(draws)) + 1e-9
     if mean > 0:
         assert 0.9 * mean <= variance <= 1.1 * mean
+
+
+# ============================================== G2 and the ablations =====
+
+
+def _floor_config(**overrides: Any) -> GeneratorConfig:
+    base: dict[str, Any] = {
+        "row_count": 20_000,
+        "account_count": 800,
+        "merchant_count": 60,
+        "device_count": 960,
+        "ip_count": 400,
+        "fraud_rate": 0.005,
+        "seed": 11,
+    }
+    base.update(overrides)
+    return GeneratorConfig(**base)
+
+
+def test_g2_tops_every_pattern_up_to_twenty_and_discloses_what_it_added() -> None:
+    """`LPC-5` §16.3: G2 adding instances to patterns below 20, in a configuration built for it."""
+    gate = _floor_config(baseline_identity=BaselineIdentityConfig())
+    universe = build_universe(gate)
+    instances, total = plan_fraud(gate, universe)
+    mix = coverage_mix(instances)
+    assert set(mix) == {pattern.value for pattern in FraudPattern}
+    assert all(planned + added >= 20 for planned, added in mix.values()), mix
+    assert all(added == 0 for planned, added in mix.values() if planned >= 20), mix
+    assert sum(added for _, added in mix.values()) > 0, "the configuration must need the floor"
+    assert all(planned + added == 20 for planned, added in mix.values() if added), mix
+    assert total == sum(instance.transaction_count for instance in instances)
+
+    off_instances, off_total = plan_fraud(_floor_config(), universe)
+    mixed = [i for i in instances if not i.instance_id.startswith(COVERAGE_FLOOR_PREFIX)]
+    assert [i.instance_id for i in mixed] == [i.instance_id for i in off_instances]
+    assert total > off_total
+    assert plan_fraud(
+        _floor_config(fraud_rate=0.0, baseline_identity=BaselineIdentityConfig()), universe
+    ) == ([], 0)
+
+
+def test_every_declared_ablation_names_a_generator_correction() -> None:
+    from data.generator.lpc5 import declaration
+
+    assert set(CORRECTIONS) == set(declaration.ABLATIONS)
+
+
+def _ablated(*disabled: str) -> list[GeneratedRow]:
+    config = GeneratorConfig(
+        row_count=4_000,
+        account_count=300,
+        merchant_count=60,
+        device_count=360,
+        ip_count=150,
+        fraud_rate=0.01,
+        seed=5,
+        baseline_identity=BaselineIdentityConfig(
+            coverage_floor_instances=1, disabled_corrections=disabled
+        ),
+    )
+    return list(generate_dataset(config))
+
+
+def _planned_event(row: GeneratedRow) -> PlannedEvent:
+    assert row.scenario_instance is not None and row.planned_ordinal is not None
+    return row.scenario_instance.events[row.planned_ordinal]
+
+
+def test_ablating_t1_leaves_every_legitimate_payment_on_a_home_device() -> None:
+    rows = _ablated("T1")
+    universe = build_universe(
+        GeneratorConfig(
+            row_count=4_000,
+            account_count=300,
+            merchant_count=60,
+            device_count=360,
+            ip_count=150,
+            fraud_rate=0.01,
+            seed=5,
+        )
+    )
+    home = {p.account_id: set(p.home_devices) for p in universe.profiles}
+    legitimate = [r for r in rows if _is_legit_tx(r)]
+    assert legitimate
+    assert all(
+        r.event["payload"]["device_id"] in home[r.event["payload"]["account_id"]]
+        for r in legitimate
+    )
+
+
+def test_ablating_t2_keeps_every_planted_event_on_its_planned_millisecond() -> None:
+    planted = [r for r in _ablated("T2") if r.scenario_instance is not None]
+    assert planted
+    assert all(_millis(r) == _planned_event(r).occurred_ms for r in planted)
+
+
+def test_ablating_t3_leaves_no_legitimate_decline() -> None:
+    legitimate = [r for r in _ablated("T3") if _is_legit_tx(r)]
+    assert legitimate
+    assert all(r.event["payload"]["authorization_outcome"] == "APPROVED" for r in legitimate)
+
+
+@pytest.mark.parametrize(
+    ("correction", "pattern", "fields"),
+    [
+        ("M1", FraudPattern.ACCOUNT_TAKEOVER, ("latitude", "longitude")),
+        ("M2", FraudPattern.IMPOSSIBLE_TRAVEL, ("latitude", "longitude")),
+        ("M3", FraudPattern.ACCOUNT_TAKEOVER, ("entry_mode",)),
+    ],
+)
+def test_ablating_m1_to_m3_leaves_their_fields_as_planned(
+    correction: str, pattern: FraudPattern, fields: tuple[str, ...]
+) -> None:
+    rows = [
+        r
+        for r in _ablated(correction)
+        if _is_fraud_tx(r) and r.label is not None and r.label.fraud_pattern is pattern
+    ]
+    assert rows
+    kept = redrawn = 0
+    for row in rows:
+        planned = _planned_event(row).overrides
+        same = all(row.event["payload"][f] == planned[f] for f in fields if f in planned)
+        kept += same
+        redrawn += not same
+    if correction == "M2":
+        # Only the leg planted on the home point is M2's; the away leg is still redrawn (M1).
+        assert kept and redrawn
+    else:
+        assert kept == len(rows)
+
+
+def test_ablating_n10_restores_the_borrowed_correlation_ids() -> None:
+    rows = _ablated("N10")
+    ids = collections.Counter(r.event["envelope"]["correlation_id"] for r in rows)
+    assert all(re.fullmatch(r"corr_\d{12}", value) for value in ids)
+    assert any(count > 1 for count in ids.values())
+
+
+def test_ablating_n11_restores_value_dependent_timestamp_strings() -> None:
+    rows = _ablated("N11")
+    assert not all(_MS_Z.fullmatch(r.event["envelope"]["occurred_at"]) for r in rows)

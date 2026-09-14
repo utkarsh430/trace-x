@@ -29,6 +29,31 @@ rather than alarming.
 
 PRODUCER: Final = f"trace-generator@{GENERATOR_VERSION}"
 
+CORRECTIONS: Final[tuple[str, ...]] = (
+    "T1",
+    "T2",
+    "T3",
+    "M1",
+    "M2",
+    "M3",
+    "M4",
+    "M5",
+    "M6",
+    "N1",
+    "N2",
+    "N3",
+    "N4",
+    "N5",
+    "N6",
+    "N7",
+    "N8",
+    "N9",
+    "N10",
+    "N11",
+    "N12",
+)
+"""Every eval-v2 correction a `LPC-5` §14.3 ablation can switch off, in declaration order."""
+
 _Share = Annotated[float, Field(ge=0.0, le=1.0)]
 _DailyRate = Annotated[float, Field(ge=0.0, le=50.0)]
 _YearlyRate = Annotated[float, Field(ge=0.0, le=1000.0)]
@@ -152,10 +177,38 @@ class BaselineIdentityConfig(StrictModel):
     """Lognormal sigma of a mean-one per-account multiplier on both decline
     shares: declines concentrate on a minority of accounts."""
 
+    # ---- G2 and the ablation controls (Stage 2) -----------------------------
+    coverage_floor_instances: Annotated[int, Field(ge=1, le=1000)] = 20
+    """G2 (`LPC-5` §14.4): after the weighted mix, a pattern with fewer instances is topped up to
+    this many. A topped-up mix is a coverage floor, not natural prevalence, and every report on the
+    dataset says so. Acceptance needs 20; smaller values exist for small in-memory tests, and
+    `LPC-5` S8 fails them."""
+
+    disabled_corrections: tuple[str, ...] = ()
+    """`LPC-5` §14.3 ablations: corrections switched off, each falling back to eval-v1's behaviour
+    for its own aspect only. Sorted and unique, so one ablation has one digest. Empty for a
+    candidate."""
+
+    def applies(self, correction: str) -> bool:
+        """Whether a correction is on. Refuses names outside `CORRECTIONS`."""
+        if correction not in CORRECTIONS:
+            raise ValueError(f"unknown correction {correction!r}")
+        return correction not in self.disabled_corrections
+
     @model_validator(mode="after")
     def _check_shares(self) -> Self:
         if sum(self.typo_burst_size_weights) <= 0.0:
             raise ValueError("typo_burst_size_weights must have a positive total")
+        unknown = sorted(set(self.disabled_corrections) - set(CORRECTIONS))
+        if unknown:
+            raise ValueError(f"disabled_corrections names unknown corrections {unknown}")
+        if list(self.disabled_corrections) != sorted(
+            set(self.disabled_corrections), key=CORRECTIONS.index
+        ):
+            raise ValueError(
+                "disabled_corrections must be unique and in CORRECTIONS order, so that one "
+                "ablation has exactly one config digest"
+            )
         coupled = self.mfa_reset_on_new_device_share + self.mfa_enrolled_on_new_device_share
         if coupled > 1.0:
             raise ValueError(

@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import datetime as dt
 import random
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from typing import Any, Final
@@ -42,9 +42,11 @@ from data.generator.behavior import (
 )
 from data.generator.config import PRODUCER, BaselineIdentityConfig, GeneratorConfig
 from data.generator.labels import TransactionLabel
+from data.generator.outcomes import iso_millis
 from data.generator.population import Universe, build_universe
-from data.generator.rng import derive
+from data.generator.rng import derive, substream_seed
 from data.generator.scenarios import ALL_SCENARIOS, PlannedEvent, ScenarioInstance, default_mix
+from trace_core.domain.enums import FraudPattern
 from trace_core.domain.identifiers import uuid7
 from trace_core.domain.time import to_millis
 
@@ -113,19 +115,47 @@ def _pick_channel(value: float) -> str:
     return _CHANNELS[-1][0]
 
 
+def _corrected(config: GeneratorConfig, correction: str) -> bool:
+    """Whether an eval-v2 correction applies: the gate is on and the correction is not ablated."""
+    settings = config.baseline_identity
+    return settings is not None and settings.applies(correction)
+
+
 def _envelope(
-    event_type: str, occurred_ms: int, ingested_ms: int, position: int, rng: Any
+    event_type: str,
+    occurred_ms: int,
+    ingested_ms: int,
+    position: int,
+    rng: Any,
+    config: GeneratorConfig | None = None,
 ) -> dict[str, Any]:
+    """The envelope. eval-v1's draws, in eval-v1's order, whatever the gate.
+
+    Under the gate:
+    - **N10.** `correlation_id` names the event's own business flow, drawn after every eval-v1
+      draw. eval-v1 used the next transaction's position, which side events borrowed, so unrelated
+      events shared one (LP-21). A transaction's outcome event takes its transaction's.
+    - **N11.** Both timestamps always carry exactly three fractional digits. eval-v1 dropped the
+      fraction on a whole second, so a string's length depended on its value (LP-07).
+    """
+    event_id = str(uuid7(millis=occurred_ms, rng=rng))
+    trace_id = f"{rng.getrandbits(128):032x}"
+    idempotency_key = "sha256:" + f"{rng.getrandbits(256):064x}"
+    if config is not None and _corrected(config, "N10"):
+        correlation_id = f"corr_{rng.getrandbits(128):032x}"
+    else:
+        correlation_id = f"corr_{position:012d}"
+    render = iso_millis if config is not None and _corrected(config, "N11") else _iso
     return {
-        "event_id": str(uuid7(millis=occurred_ms, rng=rng)),
+        "event_id": event_id,
         "event_type": event_type,
         "schema_version": SCHEMA_VERSION,
-        "occurred_at": _iso(occurred_ms),
-        "ingested_at": _iso(ingested_ms),
+        "occurred_at": render(occurred_ms),
+        "ingested_at": render(ingested_ms),
         "producer": PRODUCER,
-        "trace_id": f"{rng.getrandbits(128):032x}",
-        "correlation_id": f"corr_{position:012d}",
-        "idempotency_key": "sha256:" + f"{rng.getrandbits(256):064x}",
+        "trace_id": trace_id,
+        "correlation_id": correlation_id,
+        "idempotency_key": idempotency_key,
     }
 
 
@@ -195,7 +225,7 @@ def _build_transaction(
         payload["entry_mode"] = _CHANNEL_ENTRY[payload["channel"]][0]
 
     return {
-        "envelope": _envelope("tx.raw", occurred_ms, ingested_ms, position, rng),
+        "envelope": _envelope("tx.raw", occurred_ms, ingested_ms, position, rng, config),
         "payload": payload,
     }
 
@@ -244,7 +274,7 @@ def _build_side_event(
         event_type = "device.events"
 
     return {
-        "envelope": _envelope(event_type, occurred_ms, ingested_ms, position, rng),
+        "envelope": _envelope(event_type, occurred_ms, ingested_ms, position, rng, config),
         "payload": payload,
     }
 
@@ -365,7 +395,7 @@ def _build_scenario_side_event_v2(
         event_type = "device.events"
 
     return {
-        "envelope": _envelope(event_type, occurred_ms, ingested_ms, position, rng),
+        "envelope": _envelope(event_type, occurred_ms, ingested_ms, position, rng, config),
         "payload": payload,
     }
 
@@ -403,7 +433,7 @@ def _build_baseline_event(
         event_type = "device.events"
 
     return {
-        "envelope": _envelope(event_type, planned.occurred_ms, ingested_ms, position, rng),
+        "envelope": _envelope(event_type, planned.occurred_ms, ingested_ms, position, rng, config),
         "payload": payload,
     }
 
@@ -496,6 +526,9 @@ def _plan_eval_v2(
     # T1 and T3. One substream per account: its first draw is the account's
     # decline-propensity multiplier, then its decisions in draw order.
     sigma = settings.decline_propensity_sigma
+    # An ablated T1 or T3 still makes its draws, so the other decisions stay where they were.
+    t1 = settings.applies("T1")
+    t3 = settings.applies("T3")
     streams: dict[int, tuple[random.Random, float]] = {}
     consumed = False
     for index in range(legit_count):
@@ -511,13 +544,15 @@ def _plan_eval_v2(
         rng, multiplier = streams[account]
         devices = payment.get(account)
 
-        retry_p = min(
-            _MAX_DECLINE_PROBABILITY, settings.decline_retry_share_per_transaction * multiplier
+        retry_p = (
+            min(_MAX_DECLINE_PROBABILITY, settings.decline_retry_share_per_transaction * multiplier)
+            if t3
+            else 0.0
         )
         if index + 1 < legit_count and rng.random() < retry_p:
             attempt_ms = at_ms - rng.randrange(*_RETRY_GAP_MS)
             if attempt_ms >= start_ms:
-                device = _legitimate_device(settings, devices, attempt_ms, rng)
+                device = _legitimate_device(settings, devices, attempt_ms, rng) if t1 else None
                 # The attempt takes the consumed draw's tiebreak; the retry keeps
                 # this draw's time and tiebreak. The count is exactly unchanged.
                 plan.append(
@@ -534,11 +569,15 @@ def _plan_eval_v2(
                 consumed = True
                 continue
 
-        decline_p = min(
-            _MAX_DECLINE_PROBABILITY, settings.decline_share_per_transaction * multiplier
+        decline_p = (
+            min(_MAX_DECLINE_PROBABILITY, settings.decline_share_per_transaction * multiplier)
+            if t3
+            else 0.0
         )
         declined = rng.random() < decline_p
         device = _legitimate_device(settings, devices, at_ms, rng)
+        if not t1:
+            device = None
         plan.append(
             (at_ms, index, 3, _LegitimateTransaction(account, device, declined, _SINGLE, index))
         )
@@ -547,6 +586,9 @@ def _plan_eval_v2(
     # millisecond, as legitimate transactions do.
     retimed: list[tuple[int, int, int, Any]] = []
     for occurred_ms, tiebreak, kind, payload in planted:
+        if not settings.applies("T2"):
+            retimed.append((occurred_ms, tiebreak, kind, payload))
+            continue
         instance, _planned, ordinal = payload
         subsecond = derive(seed, "scenario-subsecond", f"{instance.instance_id}:{ordinal}")
         retimed.append(
@@ -554,15 +596,43 @@ def _plan_eval_v2(
         )
     # M1-M3. Planted locations and entry modes are drawn the way legitimate ones
     # are, on the final times; every other planted field is kept.
-    plan.extend(_redraw_planted_transactions(config, retimed))
+    plan.extend(_redraw_planted_transactions(config, universe, retimed))
 
     # Legitimate identity and device events. Tiebreaks start above every other.
     base = legit_count + len(instances) * 1000
     for offset, planned_event in enumerate(baseline.events):
         plan.append((planned_event.occurred_ms, base + offset, 2, planned_event))
 
-    plan.sort(key=lambda item: (item[0], item[1]))
+    if settings.applies("N11"):
+        plan.sort(key=lambda item: plan_order_key(seed, item))
+    else:
+        plan.sort(key=lambda item: (item[0], item[1]))
     return plan
+
+
+def tie_order_key(seed: int, identity: str) -> int:
+    """N11: the key that orders events sharing a millisecond.
+
+    eval-v1 ordered ties by planning structure, which put every planted event after every
+    legitimate one at a tie (LP-24). A stable hash of the event's own identity decides instead, so
+    which of two tied events comes first does not depend on which is planted."""
+    return substream_seed(seed, "tie-order", identity)
+
+
+def plan_order_key(seed: int, item: tuple[int, int, int, Any]) -> tuple[int, int]:
+    """The gate-on emission order: event time, then `tie_order_key` of the event's identity.
+
+    Identities: a legitimate transaction's draw index, a planted event's `instance:ordinal`, a
+    legitimate identity or device event's plan key. The three shapes cannot collide."""
+    occurred_ms, tiebreak, kind, payload = item
+    if kind == 1:
+        instance, _planned, ordinal = payload
+        identity = f"{instance.instance_id}:{ordinal}"
+    elif kind == 2:
+        identity = payload.key
+    else:
+        identity = str(tiebreak)
+    return occurred_ms, tie_order_key(seed, identity)
 
 
 _LOCATION_ATTEMPTS: Final = 32
@@ -571,7 +641,7 @@ emit a label its rows no longer support."""
 
 
 def _redraw_planted_transactions(
-    config: GeneratorConfig, planted: list[tuple[int, int, int, Any]]
+    config: GeneratorConfig, universe: Universe, planted: list[tuple[int, int, int, Any]]
 ) -> list[tuple[int, int, int, Any]]:
     """M1-M3: planted transactions with their location and entry mode redrawn.
 
@@ -592,7 +662,9 @@ def _redraw_planted_transactions(
     for instance_id, entries in by_instance.items():
         candidate: list[tuple[int, int, int, Any]] = []
         for attempt in range(_LOCATION_ATTEMPTS):
-            candidate = [_with_redrawn_fields(config, entry, attempt) for entry in entries]
+            candidate = [
+                _with_redrawn_fields(config, universe, entry, attempt) for entry in entries
+            ]
             if _travel_stays_impossible(candidate):
                 break
         else:
@@ -605,9 +677,12 @@ def _redraw_planted_transactions(
 
 
 def _with_redrawn_fields(
-    config: GeneratorConfig, entry: tuple[int, int, int, Any], attempt: int
+    config: GeneratorConfig, universe: Universe, entry: tuple[int, int, int, Any], attempt: int
 ) -> tuple[int, int, int, Any]:
-    """One planted transaction with M1-M3 applied; any other entry unchanged."""
+    """One planted transaction with M1-M3 applied; any other entry unchanged.
+
+    A point planted on the account's exact home point is M2's; any other planted point is M1's.
+    An ablated correction leaves its field as planned."""
     from dataclasses import replace
 
     from trace_core.domain.geo import GeoPoint
@@ -621,11 +696,13 @@ def _with_redrawn_fields(
         anchor = GeoPoint(
             latitude=float(overrides["latitude"]), longitude=float(overrides["longitude"])
         )
-        location = derive(config.seed, "scenario-location", f"{key}:{attempt}")
-        point = sample_location(location, anchor, config.geo_jitter_km)
-        overrides["latitude"] = point.latitude
-        overrides["longitude"] = point.longitude
-    if "entry_mode" in overrides:
+        home = universe.profiles[planned.account_index].account.home
+        if _corrected(config, "M2" if anchor == home else "M1"):
+            location = derive(config.seed, "scenario-location", f"{key}:{attempt}")
+            point = sample_location(location, anchor, config.geo_jitter_km)
+            overrides["latitude"] = point.latitude
+            overrides["longitude"] = point.longitude
+    if "entry_mode" in overrides and _corrected(config, "M3"):
         modes = _CHANNEL_ENTRY.get(str(overrides.get("channel")))
         if modes is None:
             raise ValueError(f"{key}: a planted entry mode can only be redrawn with its channel")
@@ -639,7 +716,6 @@ def _travel_stays_impossible(entries: list[tuple[int, int, int, Any]]) -> bool:
     import itertools
 
     from data.generator.scenarios import SCENARIOS_BY_PATTERN, ImpossibleTravel
-    from trace_core.domain.enums import FraudPattern
     from trace_core.domain.geo import GeoPoint, implied_speed_kmh
 
     if not entries or entries[0][3][0].pattern is not FraudPattern.IMPOSSIBLE_TRAVEL:
@@ -703,6 +779,55 @@ def _pick_scenario(value: float, mix: Sequence[tuple[Any, float]]) -> Any:
     return mix[-1][0]
 
 
+COVERAGE_FLOOR_PREFIX: Final = "fc_"
+"""Instance ids G2 adds start with this; the mix's own start `fs_` or `fi_`."""
+
+
+def coverage_mix(instances: Sequence[ScenarioInstance]) -> dict[str, tuple[int, int]]:
+    """G2's disclosure (`LPC-5` §14.4): per pattern, (planned by the mix, added by G2).
+
+    The mix count includes eval-v1's one instance per pattern (ADR-0030), planted before the
+    weighted draw. Every pattern is listed, absent ones with zeros."""
+    planned: Counter[str] = Counter()
+    added: Counter[str] = Counter()
+    for instance in instances:
+        counts = added if instance.instance_id.startswith(COVERAGE_FLOOR_PREFIX) else planned
+        counts[instance.pattern.value] += 1
+    return {
+        pattern.value: (planned[pattern.value], added[pattern.value]) for pattern in FraudPattern
+    }
+
+
+def _cover_floor(
+    config: GeneratorConfig, universe: Universe, instances: list[ScenarioInstance], floor: int
+) -> int:
+    """G2: top every pattern up to `floor` instances. Returns the transactions added.
+
+    Each extra instance is planned exactly as a mix instance is, from its own substream
+    `derive(seed, "coverage-floor", f"{pattern}:{n}")`, so the top-up never moves the mix."""
+    counts = Counter(instance.pattern for instance in instances)
+    added_tx = 0
+    for scenario in ALL_SCENARIOS:
+        pattern = scenario.pattern
+        attempt = 0
+        while counts[pattern] < floor:
+            if attempt >= 4 * floor + 64:
+                raise ValueError(
+                    f"G2: {pattern.value} planned no transaction in {attempt} attempts"
+                )
+            instance_id = f"{COVERAGE_FLOOR_PREFIX}{pattern.value.lower()}_{attempt:04d}"
+            rng = derive(config.seed, "coverage-floor", f"{pattern.value}:{attempt}")
+            span = max(1, config.window_seconds - 3 * 86_400)
+            start_ms = to_millis(config.start_at) + rng.randrange(span) * 1000
+            instance = scenario.inject(rng, universe, instance_id, start_ms)
+            attempt += 1
+            if instance.transaction_count:
+                instances.append(instance)
+                counts[pattern] += 1
+                added_tx += instance.transaction_count
+    return added_tx
+
+
 def plan_fraud(config: GeneratorConfig, universe: Universe) -> tuple[list[ScenarioInstance], int]:
     """Choose and plan fraud instances until the target base rate is reached.
 
@@ -757,6 +882,10 @@ def plan_fraud(config: GeneratorConfig, universe: Universe) -> tuple[list[Scenar
             instances.append(instance)
             total_tx += instance.transaction_count
         attempt += 1
+    if config.baseline_identity is not None:
+        total_tx += _cover_floor(
+            config, universe, instances, config.baseline_identity.coverage_floor_instances
+        )
     return instances, total_tx
 
 
