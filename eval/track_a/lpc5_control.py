@@ -212,6 +212,11 @@ def main(argv: list[str] | None = None) -> int:
             out.write(f"  {item}\n")
     out.write(report.format(limit=args.limit) + "\n")
     out.write(f"instances per scenario: {dict(sorted(report.instance_counts.items()))}\n")
+    block = config.baseline_identity
+    if block is not None and not block.disabled_corrections:
+        # An ablation whose check already fails without it cannot show its correction mattered.
+        firing = [c for c in CORRECTIONS if controls.ABLATION_CHECKS[c](report)]
+        out.write(f"§14.3 checks already failing with no correction disabled: {firing or 'none'}\n")
     if control == "eval-v1":
         unmet = controls.negative_control_unmet(report)
         out.write(f"§14.1 negative control: {'MET' if not unmet else 'NOT MET'}\n")

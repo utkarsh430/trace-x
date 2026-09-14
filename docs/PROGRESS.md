@@ -714,7 +714,7 @@ Phase 3, in the wave order of `docs/PHASE3_PLAN.md` §5:
    5. Done: record the Q1 extension as ADR-0050 (Proposed). It also records G1–G7 and the eval-v2
       causal-key sets. The card-testing `DEVICE_SHARING` removal is flagged for the user's
       confirmation.
-   6. In progress: the eval-v2 corrections behind the gate, committed in sub-units.
+   6. Done: the eval-v2 corrections behind the gate, committed in sub-units.
       - **6a done.**
         - G2 coverage floor, with its disclosure (`engine.coverage_mix`).
         - N10: `correlation_id` per business flow.
@@ -771,7 +771,7 @@ Phase 3, in the wave order of `docs/PHASE3_PLAN.md` §5:
           imply a fast leg, because no outbound journey is modelled.
       - **Step 6 status.** Every correction except N12 is implemented and switchable. N12 comes
         with step 7. Whether the corrections pass `LPC-5` is step 9's diagnostic probe.
-   7. In progress: U7/N12 (ADR-0049), in committed units.
+   7. Done, except the outbox relay (Phase 3 Step 4): U7/N12 (ADR-0049), in committed units.
       - **Unit 1 done: the outcome stream is released with its two producers.**
         - Contract: `tx.authorization.v1`, with its schema, generated model, ledger entry, topic
           declaration (within the local disk budget) and EVENT_CONTRACTS and API_CONTRACTS rows.
@@ -910,7 +910,57 @@ Phase 3, in the wave order of `docs/PHASE3_PLAN.md` §5:
         and the candidate does not. That is diagnostic only (§16.4).
       - **Not yet run at acceptance scale, or for the other corrections.** Controls on the final
         candidate belong to step 11. Step 9's probe shows which ablations are at risk.
-   9. Diagnostic eval-v2 probe.
+   9. Done (diagnostic, not acceptance evidence): the eval-v2 probe at a quarter of acceptance scale.
+      - Seed 43, not the acceptance seed, with entity counts scaled from the eval-v1 manifest. Output:
+        `eval/track_a/audits/stage-2-evidence/lpc5-eval-v2-probe-quarter-scale.txt`. Findings are
+        capped per check, so not every S1-B finding is printed.
+      - **Verdict: FAIL** on R7, R8, S1-U, S1-B, S2b and S7b. G3, R9, S0, S2c, S3, S4, S5, S6a, S7a and
+        S8 pass.
+      - **Predictions confirmed.**
+        - MC-5 and DF-5 fall well below E_min.
+        - §18.14: takeovers still cluster within hours. S1-B fails in ATO-1's stratum on hourly and
+          daily transaction counts, `gap_prev`, distinct merchants and prior decisions.
+        - §18.2 shows as S1-U support failures on `EMAIL_CHANGE` and `PHONE_CHANGE`, not as an ATO-3
+          composition failure: legitimate ID rows are mostly logins, so those changes fall below
+          S1-U's support share.
+        - Cost: the quarter-scale run fits comfortably; a full-scale run extrapolates to most of this
+          machine's memory.
+      - **Predictions not observed:** burst offsets (CT-5, VA-5, S4 K1), AHV-4, N9 amounts, N10
+        correlation, `FRAUD_RING` chance sharing, fixed-price look-alikes.
+      - **Found, not predicted.**
+        - Card-testing and velocity counts fail S1-U support on values their rows do not exempt.
+        - Velocity attacks use several devices within a day: G4 gives legitimate payment devices
+          only to card testing and credential stuffing. Card testing and velocity attacks also reach
+          several merchant countries within a day, which no row names or lists as a consequence.
+        - Takeover ID rows carry no IP, as legitimate credential changes do not; the enrichment of
+          "no IP" follows from the event type.
+        - R8: pooled signals lose the pooled exemption, because G2's floor makes velocity attacks
+          the largest share of planted rows.
+        - Night-time `daypart` for takeovers and impossible travel, and M4's ablation check already
+          fails with no correction disabled. Multi-event episodes are accepted by the mean of their
+          events' legitimate time weights, which still admits events at night hours after an
+          evening start.
+        - S7b near misses on CT-3 and MC-2, limited by 20 clusters.
+        - S2b on outcome ingest lag for unusual-location episodes, over 20 rows. The lag is drawn
+          per transaction without regard to labels, so chance is likely; it still counts (§19).
+      - **Reading to review:** the generator applies M4 per transaction to merchant collusion as
+        well as to rings and farms; G5 names only rings and farms.
+      - **Routing.** Most failures need a numbered criterion revision or a change to a frozen
+        generator rule, which are the user's decisions: exemptions, consequences, R8's pooled
+        exemption, G4, G5, MC-5 and DF-5.
+      - **M4 across multi-event episodes, investigated.** A diagnostic experiment,
+        `eval/track_a/audits/stage-2-evidence/m4-episode-acceptance-experiment.txt`, compares
+        per-episode acceptance rules on the generator's own time weights.
+        - The current mean-weight acceptance reproduces the night enrichment.
+        - A product of weights depletes night hours below legitimate instead. R7 does not check
+          depletion, so it would pass by distorting the distribution the other way.
+        - Anchoring the first transaction's time of day to the legitimate shape does not help.
+        - Matching the legitimate shape exactly would fit a start-time density to the check's own
+          reference.
+        - The enrichment follows from documented multi-hour timing ("then within hours", the
+          distance-derived travel gap). It is routed with the others: treating `hour` and `daypart`
+          as consequences of those episodes is a criterion revision.
+      - **Step 10 is blocked** on those decisions.
    10. Final candidate.
    11. Frozen `LPC-5` acceptance.
    12. Freeze the manifest and digests.
