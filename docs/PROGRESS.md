@@ -732,8 +732,26 @@ Phase 3, in the wave order of `docs/PHASE3_PLAN.md` §5:
         - Takeover change types drawn from the legitimate mix (§18 item 2).
         - Ablation switches wired for N9, M5 and M6.
         - `LPC-5` S7a holds on a small gated generation.
-      - **6c next:** placement and timing: N6, M4, G5 (N7, N8), G3.
-      - **6d:** legitimate look-alikes N1–N5.
+      - **6c done:** placement and timing.
+        - N6: episodes may start anywhere in the window.
+        - M4: episodes are accepted by the legitimate hour and weekday shape. Ring, farm and
+          collusion transactions get a legitimate time of day.
+        - G5 spacing for takeovers, rings and farms (N7, N8). The documented bursts accumulate
+          their gaps (§18 item 3).
+        - G3 is checked exactly. Every transaction's point is planned before emission, and
+          takeovers and unusual-location transactions are placed last.
+        - Device farms get a distinct account per session.
+        - Ablation switches wired for N6, M4, N7 and N8.
+        - **Two implementation readings, recorded for review:**
+          - A proposal that G3 rejects continues each event's keyed `scenario-time` stream, so it
+            redraws the spacing as well as the placement. Otherwise a takeover with two
+            transactions a second apart could exhaust its proposals.
+          - With N8 ablated, M4 moves a device-farm session as a whole (the draft's original
+            class), so eval-v1's one-minute repeat survives for the N8 control to detect. Applied
+            per transaction, M4 would erase it.
+      - **6d next:** legitimate look-alikes N1–N5. Points are drawn near the same actor's previous
+        transaction when it was minutes earlier; otherwise bursts and micro-sessions imply
+        impossible speeds.
    7. U7/N12 (ADR-0049).
    8. Ablation controls.
    9. Diagnostic eval-v2 probe.

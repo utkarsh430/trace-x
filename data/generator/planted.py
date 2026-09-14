@@ -36,7 +36,7 @@ from data.generator.behavior import sample_amount_minor
 from data.generator.config import BaselineIdentityConfig, GeneratorConfig
 from data.generator.population import AccountProfile, Universe
 from data.generator.rng import derive
-from data.generator.scenarios import ScenarioInstance
+from data.generator.scenarios import PlannedEvent, ScenarioInstance
 from trace_core.domain.enums import EvidenceKind, FraudPattern
 
 FP = FraudPattern
@@ -47,6 +47,7 @@ AMOUNT_NAMESPACE: Final = "scenario-amount"
 MERCHANT_NAMESPACE: Final = "scenario-merchant"
 PAYER_NAMESPACE: Final = "scenario-payer"
 CHANGE_TYPE_NAMESPACE: Final = "scenario-change-type"
+ACCOUNT_NAMESPACE: Final = "scenario-account"
 MAX_DRAWS: Final = 10_000
 
 _Region = tuple[float | None, bool, float | None]
@@ -246,6 +247,45 @@ def _merchant_payload(universe: Universe, index: int) -> dict[str, Any]:
     }
 
 
+# ------------------------------------------------------------------------ device farm ----
+def _distinct_farm_accounts(
+    seed: int,
+    universe: Universe,
+    iid: str,
+    events: list[PlannedEvent],
+    tx_ordinals: list[int],
+) -> None:
+    """Every device-farm session gets its own account, in place.
+
+    eval-v1 drew a farm's accounts with replacement, so two sessions could share one and an
+    instance could fall below the six accounts its signature needs. A session is a run of at most
+    two consecutive transactions by one account, as eval-v1 plans them. A repeated account is
+    replaced from `derive(seed, "scenario-account", f"{instance_id}:{ordinal}")`."""
+    used: set[int] = set()
+    session_account = -1
+    session_length = 0
+    previous: int | None = None
+    for ordinal in tx_ordinals:
+        event = events[ordinal]
+        if event.account_index == previous and session_length < 2:
+            session_length += 1
+        else:
+            session_length = 1
+            account = event.account_index
+            if account in used:
+                rng = derive(seed, ACCOUNT_NAMESPACE, f"{iid}:{ordinal}")
+                for _ in range(MAX_DRAWS):
+                    account = rng.randrange(len(universe.profiles))
+                    if account not in used:
+                        break
+                else:
+                    raise ValueError(f"{iid}: no unused account for a device-farm session")
+            used.add(account)
+            session_account = account
+        previous = event.account_index
+        events[ordinal] = replace(event, account_index=session_account)
+
+
 # ------------------------------------------------------------------------------ revision ---
 def revise(
     config: GeneratorConfig, universe: Universe, instance: ScenarioInstance
@@ -274,6 +314,12 @@ def revise(
                 f"{iid}:{ordinal}",
             )
             events[ordinal] = replace(events[ordinal], account_index=payer)
+        participants["accounts"] = sorted(
+            {universe.profiles[events[o].account_index].account_id for o in tx_ordinals}
+        )
+
+    if pattern is FP.DEVICE_FARM:
+        _distinct_farm_accounts(seed, universe, iid, events, tx_ordinals)
         participants["accounts"] = sorted(
             {universe.profiles[events[o].account_index].account_id for o in tx_ordinals}
         )

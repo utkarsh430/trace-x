@@ -28,6 +28,7 @@ from __future__ import annotations
 import collections
 import datetime as dt
 import hashlib
+import itertools
 import json
 import math
 import re
@@ -383,13 +384,15 @@ def _planted_matches(
     row: GeneratedRow,
     universe: Universe,
     redrawn: frozenset[str] = frozenset(),
+    *,
+    same_second: bool = True,
 ) -> bool:
     payload = row.event["payload"]
     if planned.topic != row.topic:
         return False
     if universe.profiles[planned.account_index].account_id != payload["account_id"]:
         return False
-    if planned.occurred_ms // 1000 != _millis(row) // 1000:
+    if same_second and planned.occurred_ms // 1000 != _millis(row) // 1000:
         return False
     if row.topic == IDENTITY and payload["identity_event_type"] != (
         planned.identity_event_type or "UNKNOWN"
@@ -407,6 +410,11 @@ def _planted_matches(
 def _planted_instances_following_their_plan(
     rows: list[GeneratedRow], universe: Universe, redrawn: frozenset[str] = frozenset()
 ) -> int:
+    """Every planted row is its own planned event (by ordinal); every planned event is emitted.
+
+    Gate off, a row also keeps its planned second. Gate on, placement and timing are redrawn
+    (N6, M4, G5) and checked by their own tests."""
+    gated = bool(redrawn)
     emitted: dict[str, list[GeneratedRow]] = collections.defaultdict(list)
     instances = {}
     for row in rows:
@@ -414,23 +422,21 @@ def _planted_instances_following_their_plan(
             emitted[row.scenario_instance.instance_id].append(row)
             instances[row.scenario_instance.instance_id] = row.scenario_instance
     for instance_id, instance in instances.items():
-        unmatched = list(instance.events)
+        ordinals = sorted(_ordinal(r) for r in emitted[instance_id])
+        assert ordinals == list(range(len(instance.events))), instance_id
         for row in emitted[instance_id]:
-            match = next(
-                (p for p in unmatched if _planted_matches(p, row, universe, redrawn)), None
+            planned = instance.events[_ordinal(row)]
+            assert _planted_matches(planned, row, universe, redrawn, same_second=not gated), (
+                f"{instance_id}:{_ordinal(row)}: the emitted {row.topic} differs from its plan"
             )
-            assert match is not None, f"{instance_id}: an emitted {row.topic} matches no plan"
-            unmatched.remove(match)
-        assert not unmatched, f"{instance_id}: {len(unmatched)} planned events were not emitted"
     return len(instances)
 
 
 def test_planted_events_keep_account_overrides_and_second_with_the_gate_on_or_off(
     gate_off: list[GeneratedRow], gate_on: list[GeneratedRow], universe: Universe
 ) -> None:
-    """Scenario definitions are unchanged. Under the gate the millisecond (T2) and the
-    planted location and entry mode (M1-M3) are redrawn; every other planted field --
-    channel included -- is kept exactly."""
+    """Every planted row is emitted from its own plan. Under the gate, time (N6, M4, G5, T2),
+    location and entry mode (M1-M3) are redrawn and tested separately."""
     off = _planted_instances_following_their_plan(gate_off, universe)
     assert off > 0
     assert (
@@ -439,15 +445,10 @@ def test_planted_events_keep_account_overrides_and_second_with_the_gate_on_or_of
 
 
 def _plan_of(row: GeneratedRow, universe: Universe) -> PlannedEvent:
-    """The planned event an emitted planted row came from, ignoring redrawn fields."""
-    assert row.scenario_instance is not None
-    candidates = [
-        planned
-        for planned in row.scenario_instance.events
-        if _planted_matches(planned, row, universe, _REDRAWN_UNDER_THE_GATE)
-    ]
-    assert candidates, f"no planned event for {row.event['payload'].get('transaction_id')}"
-    return candidates[0]
+    """The planned event an emitted planted row came from, ignoring redrawn fields and time."""
+    planned = _instance(row).events[_ordinal(row)]
+    assert _planted_matches(planned, row, universe, _REDRAWN_UNDER_THE_GATE, same_second=False)
+    return planned
 
 
 def test_planted_locations_are_drawn_around_their_anchor_never_copied(
@@ -1357,10 +1358,10 @@ def test_ablating_t1_leaves_every_legitimate_payment_on_a_home_device() -> None:
     )
 
 
-def test_ablating_t2_keeps_every_planted_event_on_its_planned_millisecond() -> None:
-    planted = [r for r in _ablated("T2") if r.scenario_instance is not None]
-    assert planted
-    assert all(_millis(r) == _planned_event(r).occurred_ms for r in planted)
+def test_ablating_t2_leaves_every_planted_event_on_a_whole_second() -> None:
+    planted_rows = [r for r in _ablated("T2") if r.scenario_instance is not None]
+    assert planted_rows
+    assert all(_whole_second(r) for r in planted_rows)
 
 
 def test_ablating_t3_leaves_no_legitimate_decline() -> None:
@@ -1640,3 +1641,175 @@ def test_takeover_changes_follow_the_legitimate_change_type_mix() -> None:
     for change, weight in weights.items():
         expected = total * weight / sum(weights.values())
         _assert_within(changes[change], expected, math.sqrt(expected), change)
+
+
+# ================================================= 6c: placement and timing =====
+
+WHOLE_EPISODE = frozenset(FraudPattern) - {
+    FraudPattern.DEVICE_FARM,
+    FraudPattern.FRAUD_RING,
+    FraudPattern.MERCHANT_COLLUSION,
+}
+
+
+def _timing_config(*disabled: str) -> GeneratorConfig:
+    """Twenty instances of every pattern in a two-week window: enough to see placement."""
+    return GeneratorConfig(
+        row_count=8_000,
+        account_count=500,
+        merchant_count=80,
+        device_count=600,
+        ip_count=250,
+        fraud_rate=0.01,
+        seed=13,
+        start_at=dt.datetime(2026, 1, 1, tzinfo=dt.UTC),
+        end_at=dt.datetime(2026, 1, 15, tzinfo=dt.UTC),
+        baseline_identity=BaselineIdentityConfig(disabled_corrections=disabled),
+    )
+
+
+@pytest.fixture(scope="module")
+def timing_rows() -> list[GeneratedRow]:
+    return list(generate_dataset(_timing_config()))
+
+
+def _episodes(rows: list[GeneratedRow]) -> dict[str, list[GeneratedRow]]:
+    grouped: dict[str, list[GeneratedRow]] = collections.defaultdict(list)
+    for row in rows:
+        if row.scenario_instance is not None:
+            grouped[row.scenario_instance.instance_id].append(row)
+    return grouped
+
+
+def _hour(millis: int) -> int:
+    return dt.datetime.fromtimestamp(millis // 1000, tz=dt.UTC).hour
+
+
+def _night_share(rows: list[GeneratedRow]) -> float:
+    """Share of whole-episode instances whose first event falls in 00:00-05:59 UTC."""
+    firsts = [
+        min(map(_millis, episode))
+        for episode in _episodes(rows).values()
+        if _instance(episode[0]).pattern in WHOLE_EPISODE
+    ]
+    assert len(firsts) >= 100
+    return sum(1 for first in firsts if _hour(first) < 6) / len(firsts)
+
+
+def test_n6_episodes_start_anywhere_in_the_window(timing_rows: list[GeneratedRow]) -> None:
+    config = _timing_config()
+    start, end = to_millis(config.start_at), to_millis(config.end_at)
+    episodes = _episodes(timing_rows)
+    assert all(start <= _millis(r) < end for rows in episodes.values() for r in rows)
+    starts = [min(map(_millis, rows)) for rows in episodes.values()]
+    assert any(first >= end - 3 * 86_400_000 for first in starts)
+
+
+def test_m4_episodes_follow_the_legitimate_time_of_day(timing_rows: list[GeneratedRow]) -> None:
+    """Legitimate volume puts about one transaction in twenty at night; eval-v1's uniform starts
+    put one in four."""
+    assert _night_share(timing_rows) < 0.15
+    per_transaction = _planted_tx(
+        timing_rows,
+        FraudPattern.DEVICE_FARM,
+        FraudPattern.FRAUD_RING,
+        FraudPattern.MERCHANT_COLLUSION,
+    )
+    assert len(per_transaction) >= 100
+    assert sum(1 for r in per_transaction if _hour(_millis(r)) < 6) / len(per_transaction) < 0.15
+
+
+def test_g5_takeover_spacing_and_the_first_seen_between(timing_rows: list[GeneratedRow]) -> None:
+    checked = 0
+    for rows in _episodes(timing_rows).values():
+        if _instance(rows[0]).pattern is not FraudPattern.ACCOUNT_TAKEOVER:
+            continue
+        change = next(_millis(r) for r in rows if r.topic == IDENTITY)
+        first_seen = next(_millis(r) for r in rows if r.topic == DEVICE)
+        payments = sorted(_millis(r) for r in rows if r.topic == TX)
+        assert change < first_seen < payments[0]
+        assert all(20 * 60_000 - 1_000 <= t - change < 6 * 3_600_000 + 1_000 for t in payments)
+        checked += 1
+    assert checked >= 20
+
+
+def test_documented_bursts_accumulate_their_gaps(timing_rows: list[GeneratedRow]) -> None:
+    for rows in _episodes(timing_rows).values():
+        pattern = _instance(rows[0]).pattern
+        if pattern not in (FraudPattern.CARD_TESTING, FraudPattern.VELOCITY_ATTACK):
+            continue
+        ordered = sorted((r for r in rows if r.topic == TX), key=_ordinal)
+        times = [_millis(r) for r in ordered]
+        gaps = [b - a for a, b in itertools.pairwise(times)]
+        if pattern is FraudPattern.CARD_TESTING:
+            *probe_gaps, payoff_gap = gaps
+            assert all(7_000 < g < 46_000 for g in probe_gaps), probe_gaps
+            assert 59_000 < payoff_gap < 1_801_000
+        else:
+            assert all(9_000 < g < 56_000 for g in gaps), gaps
+
+
+def test_g5_ring_and_farm_spacing_is_drawn(timing_rows: list[GeneratedRow]) -> None:
+    near_a_minute = pairs = 0
+    for rows in _episodes(timing_rows).values():
+        pattern = _instance(rows[0]).pattern
+        times = sorted(map(_millis, rows))
+        if pattern is FraudPattern.FRAUD_RING:
+            assert times[-1] - times[0] <= 8 * 86_400_000
+        if pattern is FraudPattern.DEVICE_FARM:
+            by_account: dict[str, list[int]] = collections.defaultdict(list)
+            for row in rows:
+                by_account[row.event["payload"]["account_id"]].append(_millis(row))
+            assert len(by_account) >= 6
+            for account_times in by_account.values():
+                for a, b in itertools.pairwise(sorted(account_times)):
+                    pairs += 1
+                    near_a_minute += 59_000 <= b - a <= 61_000
+    assert pairs and near_a_minute / pairs < 0.05
+
+
+def test_g3_and_s7a_hold_on_placed_episodes(timing_rows: list[GeneratedRow]) -> None:
+    universe = build_universe(_timing_config())
+    frame = build_frame(timing_rows, seed=universe.config.seed)
+    g3 = lpc5_rules.g3_speed(frame)
+    assert g3.judged > 0
+    assert not g3.findings, [f.detail for f in g3.findings]
+    s7a = lpc5_rules.s7_instances(frame, lpc5_knowledge(universe))
+    assert not s7a.findings, [f"{f.check}: {f.detail}" for f in s7a.findings]
+
+
+def test_ablating_n6_keeps_eval_v1s_empty_last_three_days() -> None:
+    config = _timing_config("N6")
+    end = to_millis(config.end_at)
+    for rows in _episodes(list(generate_dataset(config))).values():
+        assert min(map(_millis, rows)) < end - 3 * 86_400_000
+
+
+def test_ablating_m4_leaves_episode_starts_uniform_over_the_day() -> None:
+    assert _night_share(list(generate_dataset(_timing_config("M4")))) > 0.15
+
+
+def test_ablating_n7_restores_the_two_minute_first_seen() -> None:
+    checked = 0
+    for rows in _episodes(list(generate_dataset(_timing_config("N7")))).values():
+        if _instance(rows[0]).pattern is not FraudPattern.ACCOUNT_TAKEOVER:
+            continue
+        change = next(_millis(r) for r in rows if r.topic == IDENTITY)
+        first_seen = next(_millis(r) for r in rows if r.topic == DEVICE)
+        assert abs(first_seen - change - 120_000) < 1_000
+        checked += 1
+    assert checked
+
+
+def test_ablating_n8_restores_the_one_minute_device_farm_repeat() -> None:
+    near_a_minute = 0
+    for rows in _episodes(list(generate_dataset(_timing_config("N8")))).values():
+        if _instance(rows[0]).pattern is not FraudPattern.DEVICE_FARM:
+            continue
+        by_account: dict[str, list[int]] = collections.defaultdict(list)
+        for row in rows:
+            by_account[row.event["payload"]["account_id"]].append(_millis(row))
+        for account_times in by_account.values():
+            for a, b in itertools.pairwise(sorted(account_times)):
+                near_a_minute += 59_000 <= b - a <= 61_000
+    assert near_a_minute > 0

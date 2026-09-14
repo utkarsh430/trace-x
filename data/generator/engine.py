@@ -21,10 +21,12 @@ a run used rather than leaving it implicit.
 
 from __future__ import annotations
 
+import bisect
 import datetime as dt
+import itertools
 import random
 from collections import Counter, defaultdict
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any, Final
 
@@ -35,6 +37,8 @@ from data.generator.baseline import (
     plan_baseline,
 )
 from data.generator.behavior import (
+    HOUR_WEIGHTS,
+    WEEKDAY_WEIGHTS,
     pick_merchant_index,
     sample_amount_minor,
     sample_location,
@@ -48,6 +52,7 @@ from data.generator.population import Universe, build_universe
 from data.generator.rng import derive, substream_seed
 from data.generator.scenarios import ALL_SCENARIOS, PlannedEvent, ScenarioInstance, default_mix
 from trace_core.domain.enums import FraudPattern
+from trace_core.domain.geo import GeoPoint, haversine_km
 from trace_core.domain.identifiers import uuid7
 from trace_core.domain.time import to_millis
 
@@ -314,6 +319,9 @@ class _LegitimateTransaction:
     role: int
     pair: int
     """Identifies a retry pair (the retry's draw index); the draw's own index otherwise."""
+    location: tuple[float, float]
+    """(latitude, longitude), planned before emission so G3 can be judged exactly. A retry pair
+    shares its retry's point."""
 
 
 def _device_platform(universe: Universe, device: str) -> str:
@@ -572,10 +580,9 @@ def _plan_eval_v2(
     """The gate-on plan: eval-v1's merged plan transformed before emission.
 
     Scenario references -> identity and device plan -> legitimate transaction
-    decisions (T1, T3) -> scenario sub-second timing (T2) -> planted location and
-    entry-mode draws (M1-M3) -> one sort. The number of transactions, every label,
-    every planted channel and every other planted override are unchanged; which
-    transaction sits at which position may change.
+    decisions and locations (T1, T3) -> planted placement, timing, T2, M1-M3 and G3
+    (`_place_planted`) -> G4 devices -> one sort. The number of transactions and every
+    label are unchanged; which transaction sits at which position may change.
     """
     settings = config.baseline_identity
     if settings is None:  # pragma: no cover - guarded by generate_dataset
@@ -620,6 +627,7 @@ def _plan_eval_v2(
             streams[account] = (stream, multiplier)
         rng, multiplier = streams[account]
         devices = payment.get(account)
+        location = _legitimate_location(config, universe, account, index)
 
         retry_p = (
             min(_MAX_DECLINE_PROBABILITY, settings.decline_retry_share_per_transaction * multiplier)
@@ -637,11 +645,16 @@ def _plan_eval_v2(
                         attempt_ms,
                         index + 1,
                         3,
-                        _LegitimateTransaction(account, device, True, _ATTEMPT, index),
+                        _LegitimateTransaction(account, device, True, _ATTEMPT, index, location),
                     )
                 )
                 plan.append(
-                    (at_ms, index, 3, _LegitimateTransaction(account, device, False, _RETRY, index))
+                    (
+                        at_ms,
+                        index,
+                        3,
+                        _LegitimateTransaction(account, device, False, _RETRY, index, location),
+                    )
                 )
                 consumed = True
                 continue
@@ -656,25 +669,18 @@ def _plan_eval_v2(
         if not t1:
             device = None
         plan.append(
-            (at_ms, index, 3, _LegitimateTransaction(account, device, declined, _SINGLE, index))
+            (
+                at_ms,
+                index,
+                3,
+                _LegitimateTransaction(account, device, declined, _SINGLE, index, location),
+            )
         )
 
-    # T2. Every planted event keeps its planned second and gets a uniform
-    # millisecond, as legitimate transactions do.
-    retimed: list[tuple[int, int, int, Any]] = []
-    for occurred_ms, tiebreak, kind, payload in planted:
-        if not settings.applies("T2"):
-            retimed.append((occurred_ms, tiebreak, kind, payload))
-            continue
-        instance, _planned, ordinal = payload
-        subsecond = derive(seed, "scenario-subsecond", f"{instance.instance_id}:{ordinal}")
-        retimed.append(
-            (occurred_ms - occurred_ms % 1000 + subsecond.randrange(1000), tiebreak, kind, payload)
-        )
-    # M1-M3. Planted locations and entry modes are drawn the way legitimate ones
-    # are, on the final times; every other planted field is kept.
-    resolved = _resolve_planted_devices(config, universe, retimed, payment)
-    plan.extend(_redraw_planted_transactions(config, universe, resolved))
+    # Planted episodes: placement and timing (N6, M4, G5, bursts), T2, M1-M3 and G3 in one
+    # proposal loop per instance; then G4's devices on the final times.
+    placed = _place_planted(config, universe, planted, plan)
+    plan.extend(_resolve_planted_devices(config, universe, placed, payment))
 
     # Legitimate identity and device events. Tiebreaks start above every other.
     base = legit_count + len(instances) * 1000
@@ -711,47 +717,6 @@ def plan_order_key(seed: int, item: tuple[int, int, int, Any]) -> tuple[int, int
     else:
         identity = str(tiebreak)
     return occurred_ms, tie_order_key(seed, identity)
-
-
-_LOCATION_ATTEMPTS: Final = 32
-"""Location redraws allowed before a planted episode fails loudly rather than
-emit a label its rows no longer support."""
-
-
-def _redraw_planted_transactions(
-    config: GeneratorConfig, universe: Universe, planted: list[tuple[int, int, int, Any]]
-) -> list[tuple[int, int, int, Any]]:
-    """M1-M3: planted transactions with their location and entry mode redrawn.
-
-    eval-v1 copied a scenario's planted point onto the transactions it placed --
-    one exact coordinate repeated through a takeover, the account's home point
-    itself on an impossible-travel leg -- and forced `ECOMMERCE` or `CHIP` as the
-    entry mode. No legitimate transaction looks like that, so each marked fraud.
-    Here the planted point is the anchor of the legitimate noise model, and the
-    entry mode is drawn from the planted channel's legitimate modes. Channels,
-    amounts, merchants, devices, IPs and every other planted field are untouched,
-    and side events pass through unchanged.
-    """
-    by_instance: dict[str, list[tuple[int, int, int, Any]]] = defaultdict(list)
-    for entry in planted:
-        by_instance[entry[3][0].instance_id].append(entry)
-
-    redrawn: list[tuple[int, int, int, Any]] = []
-    for instance_id, entries in by_instance.items():
-        candidate: list[tuple[int, int, int, Any]] = []
-        for attempt in range(_LOCATION_ATTEMPTS):
-            candidate = [
-                _with_redrawn_fields(config, universe, entry, attempt) for entry in entries
-            ]
-            if _travel_stays_impossible(candidate):
-                break
-        else:
-            raise ValueError(
-                f"{instance_id}: no location draw in {_LOCATION_ATTEMPTS} attempts kept the "
-                f"planted travel impossible; emitting it would be a wrong label"
-            )
-        redrawn.extend(candidate)
-    return redrawn
 
 
 def _with_redrawn_fields(
@@ -819,6 +784,391 @@ def _travel_stays_impossible(entries: list[tuple[int, int, int, Any]]) -> bool:
         if speed <= threshold:
             return False
     return True
+
+
+# ------------------------------------------------------- eval-v2 placement -----
+
+_PROPOSALS: Final = 10_000
+"""M4's proposal limit per instance, shared by N6's window, the impossible-travel label and G3."""
+_DAY_MS: Final = 86_400_000
+_G3_WINDOW_MS: Final = 86_400_000
+_G3_MAX_KMH: Final = 900.0
+_HOUR_CUMULATIVE: Final = tuple(itertools.accumulate(HOUR_WEIGHTS))
+_MAX_HOUR_WEIGHT: Final = max(HOUR_WEIGHTS)
+_MAX_WEEKDAY_WEIGHT: Final = max(WEEKDAY_WEIGHTS)
+_PER_TRANSACTION: Final = frozenset(
+    {FraudPattern.DEVICE_FARM, FraudPattern.FRAUD_RING, FraudPattern.MERCHANT_COLLUSION}
+)
+"""M4 per transaction: no time of day is documented, and the span is days or a day."""
+_G3_PATTERNS: Final = frozenset(
+    {FraudPattern.ACCOUNT_TAKEOVER, FraudPattern.UNUSUAL_LOCATION_DEVICE}
+)
+
+_Located = tuple[int, float, float, bool]
+"""(event time, latitude, longitude, whether G3 binds the row)."""
+
+
+def _legitimate_location(
+    config: GeneratorConfig, universe: Universe, account_index: int, draw: int
+) -> tuple[float, float]:
+    """A legitimate transaction's point, drawn as `_build_transaction` draws one, from a substream
+    keyed by the draw index. Planned before emission so G3 can be judged on exact coordinates."""
+    home = universe.profiles[account_index].account.home
+    point = sample_location(
+        derive(config.seed, "baseline-location", str(draw)), home, config.geo_jitter_km
+    )
+    return point.latitude, point.longitude
+
+
+@dataclass(slots=True)
+class _TimeStreams:
+    """Spacing draws: one `derive(seed, "scenario-time", f"{instance_id}:{key}")` stream per
+    planned event (and per episode span), continued from proposal to proposal."""
+
+    seed: int
+    instance_id: str
+    streams: dict[str, random.Random]
+
+    def __call__(self, key: str) -> random.Random:
+        stream = self.streams.get(key)
+        if stream is None:
+            stream = derive(self.seed, "scenario-time", f"{self.instance_id}:{key}")
+            self.streams[key] = stream
+        return stream
+
+
+def _episode_offsets(
+    config: GeneratorConfig,
+    instance: ScenarioInstance,
+    events: Sequence[tuple[int, PlannedEvent, int]],
+    draw: _TimeStreams,
+) -> dict[int, int]:
+    """Each planned event's offset from its episode's start: whole seconds, in milliseconds.
+
+    - **`ACCOUNT_TAKEOVER` (G5).** Transactions uniform in [20 min, 6 h) after the change, sorted.
+      `FIRST_SEEN` uniform strictly between the change and the first transaction (N7; eval-v1's
+      two minutes when ablated).
+    - **`FRAUD_RING`, `DEVICE_FARM` (G5, N8).** Transactions uniform over a span of U(2 d, 7 d) or
+      U(1 h, 24 h). An ablated N8 keeps eval-v1's device-farm offsets.
+    - **`CARD_TESTING`, `VELOCITY_ATTACK`, `CREDENTIAL_STUFFING`.** The documented bursts, with
+      eval-v1's gap ranges accumulated event to event. eval-v1 multiplied one gap by the event's
+      index, which reordered events and left no mass at a burst's own gaps (`LPC-5` §18 item 3).
+    - **Everything else** keeps eval-v1's offsets floored to whole seconds. Impossible travel's
+      distance-derived gap only shortens, so it stays infeasible.
+
+    The streams continue across proposals, so a proposal G3 rejects redraws the spacing as well as
+    the placement (`_place_instance`)."""
+    settings = config.baseline_identity
+    if settings is None:  # pragma: no cover - guarded by the caller
+        raise ValueError("offsets are planned under the eval-v2 gate only")
+    pattern = instance.pattern
+    tx = [ordinal for ordinal, planned, _ in events if planned.topic == "tx.raw.v1"]
+    if pattern is FraudPattern.ACCOUNT_TAKEOVER:
+        seconds = sorted(draw(str(o)).randrange(20 * 60, 6 * 3600) for o in tx)
+        offsets = {o: second * 1000 for o, second in zip(tx, seconds, strict=True)}
+        for ordinal, planned, _ in events:
+            if planned.topic == "identity.events.v1":
+                offsets[ordinal] = 0
+            elif planned.topic == "device.events.v1":
+                gap = draw(str(ordinal)).randrange(1, seconds[0]) if settings.applies("N7") else 120
+                offsets[ordinal] = gap * 1000
+        return offsets
+    if pattern is FraudPattern.FRAUD_RING or (
+        pattern is FraudPattern.DEVICE_FARM and settings.applies("N8")
+    ):
+        low, high = (
+            (2 * 86_400, 7 * 86_400) if pattern is FraudPattern.FRAUD_RING else (3_600, 86_400)
+        )
+        span = int(draw("span").uniform(low, high))
+        return {o: draw(str(o)).randrange(span) * 1000 for o in tx}
+    if pattern in (FraudPattern.CARD_TESTING, FraudPattern.VELOCITY_ATTACK):
+        testing = pattern is FraudPattern.CARD_TESTING
+        low, high = (8, 45) if testing else (10, 55)
+        offsets = {}
+        elapsed = 0
+        for index, ordinal in enumerate(tx[:-1] if testing else tx):
+            if index:
+                elapsed += draw(str(ordinal)).randrange(low, high)
+            offsets[ordinal] = elapsed * 1000
+        if testing:
+            offsets[tx[-1]] = (elapsed + draw(str(tx[-1])).randrange(60, 30 * 60)) * 1000
+        return offsets
+    if pattern is FraudPattern.CREDENTIAL_STUFFING:
+        offsets = {}
+        elapsed = 0
+        previous: PlannedEvent | None = None
+        for ordinal, planned, _ in events:
+            if planned.topic != "tx.raw.v1":
+                if previous is not None:
+                    elapsed += draw(str(ordinal)).randrange(2, 25)
+                offsets[ordinal] = elapsed * 1000
+            elif (
+                previous is not None
+                and previous.identity_event_type == "LOGIN_SUCCEEDED"
+                and previous.account_index == planned.account_index
+            ):
+                offsets[ordinal] = (elapsed + draw(str(ordinal)).randrange(60, 12 * 60)) * 1000
+            else:
+                offsets[ordinal] = 30 * 60 * 1000  # eval-v1's fallback when no login succeeded
+            previous = planned
+        return offsets
+    first_ms = min(occurred_ms for _, _, occurred_ms in events)
+    return {o: (occurred_ms - first_ms) // 1000 * 1000 for o, _, occurred_ms in events}
+
+
+def _time_of_day(seed: int, key: str, at_ms: int, start_ms: int, end_ms: int) -> int:
+    """M4 per transaction: the UTC day kept, the time of day drawn as legitimate times are.
+
+    From `derive(seed, "scenario-session-time", key)`; a time outside the window moves a day in."""
+    rng = derive(seed, "scenario-session-time", key)
+    target = rng.random() * _HOUR_CUMULATIVE[-1]
+    hour = next(h for h, cumulative in enumerate(_HOUR_CUMULATIVE) if target <= cumulative)
+    seconds = (hour * 60 + rng.randrange(60)) * 60 + rng.randrange(60)
+    moment = at_ms - at_ms % _DAY_MS + seconds * 1000
+    if moment < start_ms:
+        moment += _DAY_MS
+    elif moment >= end_ms:
+        moment -= _DAY_MS
+    return moment
+
+
+def _session_time_of_day(
+    seed: int,
+    instance_id: str,
+    events: Sequence[tuple[int, PlannedEvent, int]],
+    times: Mapping[int, int],
+    start_ms: int,
+    end_ms: int,
+) -> dict[int, int]:
+    """M4 per account session: a device farm whose N8 is ablated.
+
+    A session is a run of at most two consecutive transactions by one account, as eval-v1 plans a
+    farm. Its first event's time of day is redrawn (`_time_of_day`, keyed
+    `instance:session:ordinal`)
+    and the session's other event keeps its offset from it, so eval-v1's gap survives for N8's
+    ablation to show. With N8 in force, each farm transaction is independent and M4 applies per
+    transaction instead."""
+    moved = dict(times)
+    session: list[int] = []
+
+    def shift() -> None:
+        first = session[0]
+        at_ms = _time_of_day(seed, f"{instance_id}:session:{first}", times[first], start_ms, end_ms)
+        for ordinal in session:
+            moved[ordinal] = times[ordinal] + at_ms - times[first]
+
+    previous: int | None = None
+    for ordinal, planned, _ in events:
+        if planned.topic != "tx.raw.v1":
+            continue
+        if session and planned.account_index == previous and len(session) < 2:
+            session.append(ordinal)
+        else:
+            if session:
+                shift()
+            session = [ordinal]
+        previous = planned.account_index
+    if session:
+        shift()
+    return moved
+
+
+def _acceptance(times: Iterable[int], *, hours: bool) -> float:
+    """M4 per episode: the mean over its events of the legitimate time weight, scaled to [0, 1]."""
+    total = 0.0
+    count = 0
+    for at_ms in times:
+        moment = dt.datetime.fromtimestamp(at_ms // 1000, tz=dt.UTC)
+        weight = WEEKDAY_WEIGHTS[moment.weekday()] / _MAX_WEEKDAY_WEIGHT
+        if hours:
+            weight *= HOUR_WEIGHTS[moment.hour] / _MAX_HOUR_WEIGHT
+        total += weight
+        count += 1
+    return total / count
+
+
+def _too_fast(distance_km: float, elapsed_ms: int) -> bool:
+    """G3's bound: more than 900 km/h. Zero elapsed time is too fast only between two places."""
+    if elapsed_ms <= 0:
+        return distance_km > 0
+    return distance_km / (elapsed_ms / 3_600_000) > _G3_MAX_KMH
+
+
+def _g3_holds(timeline: list[_Located]) -> bool:
+    """G3 on one account's transactions: no bound row implies more than 900 km/h to its previous or
+    next transaction within 24 h. Rows sharing a millisecond are each other's neighbours, and
+    neighbours of every row at the nearest distinct time on either side."""
+    timeline.sort(key=lambda row: row[0])
+    times = [row[0] for row in timeline]
+    for at_ms, latitude, longitude, bound in timeline:
+        if not bound:
+            continue
+        first = bisect.bisect_left(times, at_ms)
+        last = bisect.bisect_right(times, at_ms)
+        neighbours = list(range(first, last))
+        if first > 0:
+            neighbours.extend(range(bisect.bisect_left(times, times[first - 1]), first))
+        if last < len(times):
+            neighbours.extend(range(last, bisect.bisect_right(times, times[last])))
+        here = GeoPoint(latitude=latitude, longitude=longitude)
+        for index in neighbours:
+            other_ms, other_latitude, other_longitude, _ = timeline[index]
+            elapsed = abs(at_ms - other_ms)
+            if elapsed > _G3_WINDOW_MS:
+                continue
+            there = GeoPoint(latitude=other_latitude, longitude=other_longitude)
+            if _too_fast(haversine_km(here, there), elapsed):
+                return False
+    return True
+
+
+def _with_home_location(
+    config: GeneratorConfig, universe: Universe, entry: tuple[int, int, int, Any]
+) -> tuple[int, int, int, Any]:
+    """A planted transaction with no planted point, located around home as a legitimate one is,
+    from `derive(seed, "scenario-home-location", f"{instance_id}:{ordinal}")`."""
+    at_ms, tiebreak, kind, (instance, planned, ordinal) = entry
+    if planned.topic != "tx.raw.v1" or "latitude" in planned.overrides:
+        return entry
+    home = universe.profiles[planned.account_index].account.home
+    rng = derive(config.seed, "scenario-home-location", f"{instance.instance_id}:{ordinal}")
+    point = sample_location(rng, home, config.geo_jitter_km)
+    overrides = {**planned.overrides, "latitude": point.latitude, "longitude": point.longitude}
+    return at_ms, tiebreak, kind, (instance, replace(planned, overrides=overrides), ordinal)
+
+
+def _place_instance(
+    config: GeneratorConfig,
+    universe: Universe,
+    entries: list[tuple[int, int, int, Any]],
+    located: Mapping[int, list[_Located]],
+) -> list[tuple[int, int, int, Any]]:
+    """One instance's events at their final times and places (`_place_planted`)."""
+    settings = config.baseline_identity
+    if settings is None:  # pragma: no cover - guarded by the caller
+        raise ValueError("placement runs under the eval-v2 gate only")
+    seed = config.seed
+    instance: ScenarioInstance = entries[0][3][0]
+    iid = instance.instance_id
+    events = sorted(
+        ((ordinal, planned, occurred_ms) for occurred_ms, _, _, (_, planned, ordinal) in entries),
+        key=lambda event: event[0],
+    )
+    start_ms = to_millis(config.start_at)
+    end_ms = to_millis(config.end_at)
+    window = config.window_seconds
+    span = window if settings.applies("N6") else max(1, window - 3 * 86_400)
+    m4 = settings.applies("M4")
+    per_session = instance.pattern is FraudPattern.DEVICE_FARM and not settings.applies("N8")
+    per_transaction = instance.pattern in _PER_TRANSACTION and not per_session
+    proposals = derive(seed, "scenario-start", iid)
+    draw = _TimeStreams(seed, iid, {})
+    for attempt in range(_PROPOSALS):
+        base = start_ms + proposals.randrange(span) * 1000
+        offsets = _episode_offsets(config, instance, events, draw)
+        times = {ordinal: base + offset for ordinal, offset in offsets.items()}
+        if m4 and per_transaction:
+            times = {
+                o: _time_of_day(seed, f"{iid}:{o}", at_ms, start_ms, end_ms)
+                for o, at_ms in times.items()
+            }
+        elif m4 and per_session:
+            times = _session_time_of_day(seed, iid, events, times, start_ms, end_ms)
+        if not all(start_ms <= at_ms < end_ms for at_ms in times.values()):
+            continue
+        hours = not (per_transaction or per_session)
+        if m4 and proposals.random() >= _acceptance(times.values(), hours=hours):
+            continue
+        candidate: list[tuple[int, int, int, Any]] = []
+        for _planned_ms, tiebreak, kind, payload in entries:
+            ordinal = payload[2]
+            at_ms = times[ordinal]
+            if settings.applies("T2"):
+                subsecond = derive(seed, "scenario-subsecond", f"{iid}:{ordinal}")
+                at_ms = at_ms - at_ms % 1000 + subsecond.randrange(1000)
+            entry = _with_redrawn_fields(
+                config, universe, (at_ms, tiebreak, kind, payload), attempt
+            )
+            candidate.append(_with_home_location(config, universe, entry))
+        if not _travel_stays_impossible(candidate):
+            continue
+        if instance.pattern in _G3_PATTERNS:
+            rows: dict[int, list[_Located]] = defaultdict(list)
+            for at_ms, _, _, (_, planned, _) in candidate:
+                if planned.topic == "tx.raw.v1":
+                    point = (
+                        float(planned.overrides["latitude"]),
+                        float(planned.overrides["longitude"]),
+                    )
+                    rows[planned.account_index].append((at_ms, *point, True))
+            if not all(
+                _g3_holds([*located.get(account, ()), *bound]) for account, bound in rows.items()
+            ):
+                continue
+        return candidate
+    raise ValueError(
+        f"{iid}: no placement in {_PROPOSALS} proposals satisfied the window, M4, the "
+        "impossible-travel label and G3; emitting one would break a declared rule"
+    )
+
+
+def _place_planted(
+    config: GeneratorConfig,
+    universe: Universe,
+    planted: list[tuple[int, int, int, Any]],
+    legitimate: Sequence[tuple[int, int, int, Any]],
+) -> list[tuple[int, int, int, Any]]:
+    """Planted episodes placed and timed under the gate: one proposal loop per instance.
+
+    A proposal comes from `derive(seed, "scenario-start", instance_id)`, at most 10,000 of them:
+    1. **N6.** A start second anywhere in the window, plus the episode's offsets
+       (`_episode_offsets`). An ablated N6 proposes from eval-v1's `[start_at, end_at - 3 days)`.
+    2. **M4 per transaction** (ring, farm, collusion): the UTC day kept, the time of day redrawn.
+       A farm whose N8 is ablated is redrawn per account session instead (`_session_time_of_day`).
+    3. Rejected if any event falls outside the window.
+    4. **M4 per episode.** Accepted with probability equal to the mean legitimate time weight of the
+       events: hour and weekday, or weekday only where step 2 drew the hours. Ablated M4 accepts
+       every proposal and skips step 2.
+    5. **T2** milliseconds, **M1-M3** locations and entry modes (keyed by the proposal), and a
+       home-anchored point for every other planted transaction.
+    6. Rejected unless impossible travel stays infeasible and, for takeovers and unusual-location
+       transactions, **G3** holds against every other transaction of the account.
+
+    Instances G3 binds are placed last, so they are judged against final rows. Every transaction's
+    point is fixed before emission, so the judgement is exact."""
+    by_instance: dict[str, list[tuple[int, int, int, Any]]] = {}
+    for entry in planted:
+        by_instance.setdefault(entry[3][0].instance_id, []).append(entry)
+    groups = sorted(
+        by_instance.values(), key=lambda entries: entries[0][3][0].pattern in _G3_PATTERNS
+    )
+    bound_accounts = {
+        entry[3][1].account_index
+        for entries in groups
+        if entries[0][3][0].pattern in _G3_PATTERNS
+        for entry in entries
+        if entry[3][1].topic == "tx.raw.v1"
+    }
+    located: dict[int, list[_Located]] = defaultdict(list)
+    for occurred_ms, _, _, legitimate_row in legitimate:
+        if legitimate_row.account_index in bound_accounts:
+            latitude, longitude = legitimate_row.location
+            located[legitimate_row.account_index].append((occurred_ms, latitude, longitude, False))
+    placed: list[tuple[int, int, int, Any]] = []
+    for entries in groups:
+        candidate = _place_instance(config, universe, entries, located)
+        for at_ms, _, _, (instance, planned, _) in candidate:
+            if planned.topic == "tx.raw.v1" and planned.account_index in bound_accounts:
+                located[planned.account_index].append(
+                    (
+                        at_ms,
+                        float(planned.overrides["latitude"]),
+                        float(planned.overrides["longitude"]),
+                        instance.pattern in _G3_PATTERNS,
+                    )
+                )
+        placed.extend(candidate)
+    return placed
 
 
 def generate_events(
@@ -1055,6 +1405,7 @@ def generate_dataset(
                     overrides["device_id"] = legitimate.device_id
                 if legitimate.declined:
                     overrides["authorization_outcome"] = "DECLINED"
+                overrides["latitude"], overrides["longitude"] = legitimate.location
             event = _build_transaction(
                 config, universe, legitimate.account_index, occurred_ms, position, lag, overrides
             )
