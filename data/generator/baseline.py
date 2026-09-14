@@ -120,6 +120,8 @@ class PaymentDevices:
     """A household or work device known from before the window, if any."""
     enrolled: tuple[tuple[int, str], ...]
     """(legitimate FIRST_SEEN millisecond, device), in time order."""
+    household_ip: str | None = None
+    """N5: the network a household member pays over from the shared device (`secondary`)."""
 
     def latest_enrolled_before(self, at_ms: int) -> str | None:
         """The most recently enrolled device with FIRST_SEEN strictly before `at_ms`."""
@@ -262,6 +264,7 @@ def plan_account(
     universe: Universe,
     account_index: int,
     references: DeviceReferences,
+    household: tuple[str, str] | None = None,
 ) -> tuple[list[BaselineEvent], PaymentDevices]:
     """One account's legitimate identity and device events, and its payment devices."""
     settings = config.baseline_identity
@@ -282,6 +285,10 @@ def plan_account(
 
     plan = _Plan(account_index, start_ms, end_ms)
     secondary = _plan_secondary(config, universe, key, home_devices, scenario_devices)
+    household_ip: str | None = None
+    if household is not None:
+        # N5. The account's own secondary draw is still made, so an ablation moves nothing else.
+        secondary, household_ip = household
     pre_window = home_devices + ([secondary] if secondary is not None else [])
     timeline = _plan_devices(config, universe, plan, key, years, pre_window, scenario_devices)
     _plan_device_attributes(config, plan, key, years, start_ms, timeline)
@@ -294,7 +301,9 @@ def plan_account(
     _plan_logins(config, universe, plan, key, days * multiplier, home_ips, timeline)
     _plan_abandoned_bursts(config, universe, plan, key, days * multiplier, home_ips, timeline)
     _plan_changes(config, plan, key, years, timeline)
-    return plan.events, PaymentDevices(secondary=secondary, enrolled=tuple(timeline.enrolled))
+    return plan.events, PaymentDevices(
+        secondary=secondary, enrolled=tuple(timeline.enrolled), household_ip=household_ip
+    )
 
 
 def plan_baseline(
@@ -305,12 +314,60 @@ def plan_baseline(
         return BaselinePlan(events=[], payment_devices={})
     events: list[BaselineEvent] = []
     payment_devices: dict[int, PaymentDevices] = {}
+    households = plan_households(config, universe, references)
     for account_index in range(len(universe.profiles)):
-        account_events, devices = plan_account(config, universe, account_index, references)
+        account_events, devices = plan_account(
+            config, universe, account_index, references, households.get(account_index)
+        )
         events.extend(account_events)
         if devices.secondary is not None or devices.enrolled:
             payment_devices[account_index] = devices
     return BaselinePlan(events=events, payment_devices=payment_devices)
+
+
+HOUSEHOLD_SIZES: Final = (2, 3)
+"""N5: members per household or small workplace (chosen)."""
+
+
+def plan_households(
+    config: GeneratorConfig, universe: Universe, references: DeviceReferences
+) -> dict[int, tuple[str, str]]:
+    """N5: account -> (shared device, shared network) for households and small workplaces.
+
+    From `derive(seed, "baseline-households")`: households of two or three accounts drawn uniformly
+    until `household_account_share` of accounts belong to one. The shared device is new to every
+    member and named by no scenario for any of them; the network is a non-datacenter IP. Empty when
+    N5 is ablated or the gate is off."""
+    settings = config.baseline_identity
+    if settings is None or not settings.applies("N5"):
+        return {}
+    rng = derive(config.seed, "baseline-households")
+    accounts = len(universe.profiles)
+    target = int(accounts * settings.household_account_share)
+    households: dict[int, tuple[str, str]] = {}
+    for _ in range(4 * target + 64):
+        if len(households) + 2 > target:
+            break
+        size = min(_pick(rng, HOUSEHOLD_SIZES), target - len(households))
+        members: list[int] = []
+        for _ in range(64):
+            candidate = rng.randrange(accounts)
+            if candidate not in households and candidate not in members:
+                members.append(candidate)
+                if len(members) == size:
+                    break
+        excluded: set[str] = set()
+        for member in members:
+            excluded |= set(universe.profiles[member].home_devices)
+            excluded |= set(references.scenario_devices.get(member, ()))
+        device = _novel_device(rng, universe, excluded)
+        networks = [ip for ip in universe.ips if not ip.is_datacenter] or list(universe.ips)
+        network = networks[rng.randrange(len(networks))].ip_id
+        if device is None or len(members) < 2:
+            continue
+        for member in members:
+            households[member] = (device, network)
+    return households
 
 
 # ------------------------------------------------------------- activities ----

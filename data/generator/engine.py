@@ -24,6 +24,7 @@ from __future__ import annotations
 import bisect
 import datetime as dt
 import itertools
+import math
 import random
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Iterator, Mapping, Sequence
@@ -35,6 +36,7 @@ from data.generator.baseline import (
     DeviceReferences,
     PaymentDevices,
     plan_baseline,
+    poisson,
 )
 from data.generator.behavior import (
     HOUR_WEIGHTS,
@@ -50,7 +52,13 @@ from data.generator.outcomes import iso_millis
 from data.generator.planted import LEGITIMATE_DEVICE_PATTERNS, revise
 from data.generator.population import Universe, build_universe
 from data.generator.rng import derive, substream_seed
-from data.generator.scenarios import ALL_SCENARIOS, PlannedEvent, ScenarioInstance, default_mix
+from data.generator.scenarios import (
+    ALL_SCENARIOS,
+    PlannedEvent,
+    ScenarioInstance,
+    default_mix,
+    distant_city,
+)
 from trace_core.domain.enums import FraudPattern
 from trace_core.domain.geo import GeoPoint, haversine_km
 from trace_core.domain.identifiers import uuid7
@@ -173,6 +181,9 @@ def _build_transaction(
     position: int,
     lag: Any,
     overrides: dict[str, Any],
+    *,
+    legitimate: bool = False,
+    fixed_prices: Mapping[str, int] | None = None,
 ) -> dict[str, Any]:
     """One `tx.raw.v1` event.
 
@@ -205,6 +216,9 @@ def _build_transaction(
         away_ip = universe.ips[rng.randrange(len(universe.ips))].ip_id
         if away and settings.applies("N1"):
             ip = away_ip
+        # N4. Both draws are made whenever the gate is on, so an ablation moves nothing else.
+        at_fixed_price = rng.random() < settings.fixed_price_purchase_share
+        price_multiplier = rng.uniform(*_FIXED_PRICE_MULTIPLIER)
 
     # Processing time is at or after event time; the gap is the lag the warm path
     # measures. Without it Bronze would carry an ingested_at identical to
@@ -231,6 +245,17 @@ def _build_transaction(
         "memo": "",
         "authorization_outcome": "APPROVED",
     }
+    if (
+        settings is not None
+        and legitimate
+        and fixed_prices
+        and at_fixed_price
+        and settings.applies("N4")
+        and "amount_minor" not in overrides
+    ):
+        price = fixed_prices.get(merchant.merchant_id)
+        if price is not None and abs(math.log(price) - profile.amount_mu) <= profile.amount_sigma:
+            payload["amount_minor"] = int(price * price_multiplier)
     payload.update(overrides)
     # An override may change the channel, so entry mode is re-checked against it
     # rather than left contradictory.
@@ -329,6 +354,8 @@ class _LegitimateTransaction:
     location: tuple[float, float] | None = None
     """(latitude, longitude), planned before emission (`_locate_legitimate`) so G3 can be judged
     exactly. A retry shares its declined attempt's point."""
+    ip_id: str | None = None
+    """N5: the household network, for a payment from the household device; None otherwise."""
 
 
 def _device_platform(universe: Universe, device: str) -> str:
@@ -477,6 +504,59 @@ def scenario_device_references(
             if side_device is not None:
                 devices[planned.account_index].add(side_device)
     return DeviceReferences(scenario_devices=dict(devices))
+
+
+def _household_ip(devices: PaymentDevices | None, device: str | None) -> str | None:
+    """N5: a payment from the household device goes over the household network."""
+    if devices is None or device is None or devices.household_ip is None:
+        return None
+    return devices.household_ip if device == devices.secondary else None
+
+
+_FIXED_PRICE_DAILY_VOLUME: Final = (10.0, 40.0)
+"""N4: expected payments a day that make a merchant eligible to sell at one price (chosen)."""
+_FIXED_PRICE_LOG_RANGE: Final = (math.log(500), math.log(8_000))
+"""N4: a fixed price, log-uniform between 5 and 80 in major units (chosen)."""
+_FIXED_PRICE_MULTIPLIER: Final = (0.99, 1.01)
+"""N4: a payment's spread around its price, as G6's collusion payments spread."""
+
+
+def plan_fixed_prices(
+    config: GeneratorConfig, universe: Universe, legit_count: int
+) -> dict[str, int]:
+    """N4: merchant id -> price, for the merchants that sell at one price.
+
+    A merchant is eligible when its expected legitimate volume -- the habitual share of its
+    regular customers' payments plus its popularity share of the rest -- is ten to forty payments
+    a day. Each eligible merchant sells at one price with probability
+    `fixed_price_merchant_share`, from `derive(seed, "fixed-price-merchant", str(index))`. Empty
+    when N4 is ablated or the gate is off."""
+    settings = config.baseline_identity
+    if settings is None or not settings.applies("N4") or not universe.profiles:
+        return {}
+    days = config.window_seconds / 86_400
+    per_account = legit_count / len(universe.profiles)
+    ratio = config.habitual_merchant_ratio
+    volume = [0.0] * len(universe.merchants)
+    for profile in universe.profiles:
+        if profile.habitual_merchants:
+            share = per_account * ratio / len(profile.habitual_merchants)
+            for merchant_id in profile.habitual_merchants:
+                volume[int(merchant_id.split("_")[1])] += share
+    weights = universe.merchant_cum_weights
+    previous = 0.0
+    for index, cumulative in enumerate(weights):
+        volume[index] += legit_count * (1 - ratio) * (cumulative - previous) / weights[-1]
+        previous = cumulative
+    low, high = _FIXED_PRICE_DAILY_VOLUME
+    prices: dict[str, int] = {}
+    for index, merchant in enumerate(universe.merchants):
+        if not low <= volume[index] / days <= high:
+            continue
+        rng = derive(config.seed, "fixed-price-merchant", str(index))
+        if rng.random() < settings.fixed_price_merchant_share:
+            prices[merchant.merchant_id] = int(math.exp(rng.uniform(*_FIXED_PRICE_LOG_RANGE)))
+    return prices
 
 
 def _legitimate_device(
@@ -653,7 +733,14 @@ def _plan_eval_v2(
                         attempt_ms,
                         index + 1,
                         3,
-                        _LegitimateTransaction(account, device, True, _ATTEMPT, index),
+                        _LegitimateTransaction(
+                            account,
+                            device,
+                            True,
+                            _ATTEMPT,
+                            index,
+                            ip_id=_household_ip(devices, device),
+                        ),
                     )
                 )
                 plan.append(
@@ -661,7 +748,14 @@ def _plan_eval_v2(
                         at_ms,
                         index,
                         3,
-                        _LegitimateTransaction(account, device, False, _RETRY, index),
+                        _LegitimateTransaction(
+                            account,
+                            device,
+                            False,
+                            _RETRY,
+                            index,
+                            ip_id=_household_ip(devices, device),
+                        ),
                     )
                 )
                 consumed = True
@@ -686,7 +780,14 @@ def _plan_eval_v2(
                             moment,
                             tiebreak,
                             3,
-                            _LegitimateTransaction(account, device, declined, _SINGLE, tiebreak),
+                            _LegitimateTransaction(
+                                account,
+                                device,
+                                declined,
+                                _SINGLE,
+                                tiebreak,
+                                ip_id=_household_ip(devices, device),
+                            ),
                         )
                     )
                 consumed = True
@@ -700,14 +801,17 @@ def _plan_eval_v2(
                 at_ms,
                 index,
                 3,
-                _LegitimateTransaction(account, device, declined, _SINGLE, index),
+                _LegitimateTransaction(
+                    account, device, declined, _SINGLE, index, ip_id=_household_ip(devices, device)
+                ),
             )
         )
 
     # Planted episodes: placement and timing (N6, M4, G5, bursts), T2, M1-M3 and G3 in one
     # proposal loop per instance; then G4's devices on the final times.
-    plan = _locate_legitimate(config, universe, plan)
-    placed = _place_planted(config, universe, planted, plan)
+    trips = plan_trips(config, universe)
+    plan = _locate_legitimate(config, universe, plan, trips)
+    placed = _place_planted(config, universe, planted, plan, trips)
     plan.extend(_resolve_planted_devices(config, universe, placed, payment))
 
     # Legitimate identity and device events. Tiebreaks start above every other.
@@ -827,6 +931,12 @@ _SESSION_JITTER_KM: Final = 0.3
 _MICRO_SESSION_GAP_MS: Final = (3_000, 60_000)
 """N3: from a legitimate purchase to its follow-up (chosen)."""
 
+_TRIP_DAYS: Final = (2.0, 7.0)
+"""N2: a trip's length in days (chosen)."""
+
+_Trip = tuple[int, int, GeoPoint]
+"""(first millisecond, end millisecond exclusive, destination)."""
+
 _Located = tuple[int, float, float, bool]
 """(event time, latitude, longitude, whether G3 binds the row)."""
 
@@ -846,12 +956,56 @@ def _session_point(
     return sample_location(rng, anchor, jitter_km)
 
 
+def plan_trips(config: GeneratorConfig, universe: Universe) -> dict[int, list[_Trip]]:
+    """N2: every account's trips, from `derive(seed, "baseline-travel", str(account))`.
+
+    A Poisson count at `travel_trips_per_account_year` over the window, each starting uniformly in
+    it and lasting U(2, 7) days, to a population centre chosen as a takeover's destination is.
+    Trips of one account may overlap; the earliest-starting trip that covers a moment wins. Empty
+    when N2 is ablated or the gate is off.
+
+    Known limit: a payment at home just before a trip and one at the destination just after its
+    start can imply a fast leg. A real outbound journey would separate them."""
+    settings = config.baseline_identity
+    if settings is None or not settings.applies("N2"):
+        return {}
+    start_ms = to_millis(config.start_at)
+    window_ms = config.window_seconds * 1000
+    years = config.window_seconds / 86_400 / 365.25
+    trips: dict[int, list[_Trip]] = {}
+    for account, profile in enumerate(universe.profiles):
+        rng = derive(config.seed, "baseline-travel", str(account))
+        count = poisson(rng, settings.travel_trips_per_account_year * years)
+        planned: list[_Trip] = []
+        for _ in range(count):
+            first = start_ms + rng.randrange(window_ms)
+            length = int(rng.uniform(*_TRIP_DAYS) * _DAY_MS)
+            planned.append((first, first + length, distant_city(rng, profile.account.home)))
+        if planned:
+            trips[account] = sorted(planned, key=lambda trip: trip[0])
+    return trips
+
+
+def _anchor(
+    universe: Universe, trips: Mapping[int, list[_Trip]], account: int, at_ms: int
+) -> GeoPoint:
+    """Where an account is at `at_ms`: a trip's destination while one covers it, else home (N2)."""
+    for first, end, destination in trips.get(account, ()):
+        if first <= at_ms < end:
+            return destination
+    return universe.profiles[account].account.home
+
+
 def _locate_legitimate(
-    config: GeneratorConfig, universe: Universe, entries: list[tuple[int, int, int, Any]]
+    config: GeneratorConfig,
+    universe: Universe,
+    entries: list[tuple[int, int, int, Any]],
+    trips: Mapping[int, list[_Trip]],
 ) -> list[tuple[int, int, int, Any]]:
     """Every legitimate transaction's point, account by account in time order.
 
-    Drawn from `derive(seed, "baseline-location", str(tiebreak))` around home, or near the
+    Drawn from `derive(seed, "baseline-location", str(tiebreak))` around home or the current trip's
+    destination (N2), or near the
     account's previous legitimate transaction when it was minutes earlier (`_session_point`). A
     retry keeps its declined attempt's point, as it keeps every other field."""
     order = sorted(
@@ -864,7 +1018,7 @@ def _locate_legitimate(
     for n in order:
         at_ms, tiebreak, kind, row = entries[n]
         account = row.account_index
-        anchor = universe.profiles[account].account.home
+        anchor = _anchor(universe, trips, account, at_ms)
         if row.role == _RETRY and row.pair in attempts:
             point = attempts.pop(row.pair)
         else:
@@ -1089,13 +1243,15 @@ def _locate_planted(
     universe: Universe,
     candidate: list[tuple[int, int, int, Any]],
     attempt: int,
+    trips: Mapping[int, list[_Trip]],
 ) -> list[tuple[int, int, int, Any]]:
     """Points for one instance's transactions, in time order (M1, M2 and home anchors).
 
     - A planted point is the anchor of the legitimate noise model: drawn around it from
       `derive(seed, "scenario-location", f"{instance_id}:{ordinal}:{attempt}")`, or copied exactly
       when its correction is ablated (M2 for a point on the account's home, M1 otherwise).
-    - Every other transaction is anchored at home, from
+    - Every other transaction is anchored where the account is -- home, or a trip's destination
+      (N2) -- from
       `derive(seed, "scenario-home-location", f"{instance_id}:{ordinal}")`.
     - Either way, a transaction minutes after the instance's previous one on that account, from the
       same anchor, is drawn near it (`_session_point`), as a legitimate one is. Impossible travel's
@@ -1123,7 +1279,7 @@ def _locate_planted(
             else:
                 point = anchor
         else:
-            anchor = home
+            anchor = _anchor(universe, trips, account, at_ms)
             rng = derive(config.seed, "scenario-home-location", key)
             point = _session_point(rng, anchor, previous.get(account), at_ms, config.geo_jitter_km)
         previous[account] = (at_ms, anchor, point)
@@ -1143,6 +1299,7 @@ def _place_instance(
     universe: Universe,
     entries: list[tuple[int, int, int, Any]],
     located: Mapping[int, list[_Located]],
+    trips: Mapping[int, list[_Trip]],
 ) -> list[tuple[int, int, int, Any]]:
     """One instance's events at their final times and places (`_place_planted`)."""
     settings = config.baseline_identity
@@ -1188,7 +1345,7 @@ def _place_instance(
                 subsecond = derive(seed, "scenario-subsecond", f"{iid}:{ordinal}")
                 at_ms = at_ms - at_ms % 1000 + subsecond.randrange(1000)
             candidate.append(_with_redrawn_entry_mode(config, (at_ms, tiebreak, kind, payload)))
-        candidate = _locate_planted(config, universe, candidate, attempt)
+        candidate = _locate_planted(config, universe, candidate, attempt, trips)
         if not _travel_stays_impossible(candidate):
             continue
         if instance.pattern in _G3_PATTERNS:
@@ -1216,6 +1373,7 @@ def _place_planted(
     universe: Universe,
     planted: list[tuple[int, int, int, Any]],
     legitimate: Sequence[tuple[int, int, int, Any]],
+    trips: Mapping[int, list[_Trip]],
 ) -> list[tuple[int, int, int, Any]]:
     """Planted episodes placed and timed under the gate: one proposal loop per instance.
 
@@ -1255,7 +1413,7 @@ def _place_planted(
             located[legitimate_row.account_index].append((occurred_ms, latitude, longitude, False))
     placed: list[tuple[int, int, int, Any]] = []
     for entries in groups:
-        candidate = _place_instance(config, universe, entries, located)
+        candidate = _place_instance(config, universe, entries, located, trips)
         for at_ms, _, _, (instance, planned, _) in candidate:
             if planned.topic == "tx.raw.v1" and planned.account_index in bound_accounts:
                 located[planned.account_index].append(
@@ -1459,6 +1617,7 @@ def generate_dataset(
 
     eval_v2 = config.baseline_identity is not None
     decisions: random.Random | None = None
+    fixed_prices = plan_fixed_prices(config, universe, legit_count) if eval_v2 else {}
     if eval_v2:
         merged = _plan_eval_v2(config, universe, merged, legit_count, instances)
         decisions = derive(config.seed, "authorization-decision")
@@ -1504,11 +1663,21 @@ def generate_dataset(
                     overrides["device_id"] = legitimate.device_id
                 if legitimate.declined:
                     overrides["authorization_outcome"] = "DECLINED"
+                if legitimate.ip_id is not None:
+                    overrides["ip_id"] = legitimate.ip_id
                 if legitimate.location is None:  # pragma: no cover - `_locate_legitimate` sets it
                     raise ValueError(f"legitimate draw {legitimate.pair} has no planned point")
                 overrides["latitude"], overrides["longitude"] = legitimate.location
             event = _build_transaction(
-                config, universe, legitimate.account_index, occurred_ms, position, lag, overrides
+                config,
+                universe,
+                legitimate.account_index,
+                occurred_ms,
+                position,
+                lag,
+                overrides,
+                legitimate=True,
+                fixed_prices=fixed_prices,
             )
             if legitimate.role == _ATTEMPT:
                 pending_retries[legitimate.pair] = {

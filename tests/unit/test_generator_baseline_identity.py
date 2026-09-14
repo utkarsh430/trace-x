@@ -50,6 +50,7 @@ from data.generator.baseline import (
     BaselinePlan,
     DeviceReferences,
     plan_baseline,
+    plan_households,
     poisson,
     standalone_change_rates,
 )
@@ -1083,20 +1084,26 @@ def test_mfa_changes_coupled_to_new_devices_honour_their_share(
 def test_secondary_device_account_share_is_honoured(
     rates_plan: BaselinePlan, rates_universe: Universe
 ) -> None:
+    """Household members (N5) pay from their household's device, so they are counted apart."""
+    households = plan_households(_rates_config(), rates_universe, DeviceReferences())
     secondaries = {
         index: devices.secondary
         for index, devices in rates_plan.payment_devices.items()
-        if devices.secondary is not None
+        if devices.secondary is not None and index not in households
     }
+    others = RATE_ACCOUNTS - len(households)
     share = BaselineIdentityConfig().secondary_device_account_share
     _assert_within(
         len(secondaries),
-        RATE_ACCOUNTS * share,
-        math.sqrt(RATE_ACCOUNTS * share * (1 - share)),
+        others * share,
+        math.sqrt(others * share * (1 - share)),
         "secondary accounts",
     )
     for index, device in secondaries.items():
         assert device not in set(rates_universe.profiles[index].home_devices)
+    for index, (device, network) in households.items():
+        devices = rates_plan.payment_devices[index]
+        assert devices.secondary == device and devices.household_ip == network
 
 
 def test_new_devices_are_always_new_to_the_account(
@@ -1840,17 +1847,31 @@ def _km(a: GeneratedRow, b: GeneratedRow) -> float:
 
 
 def test_n1_legitimate_payments_come_from_away_ips_at_the_declared_share(
-    gate_on: list[GeneratedRow], universe: Universe
+    gate_on: list[GeneratedRow], plan: tuple[Universe, BaselinePlan]
 ) -> None:
+    """Payments from a household device go over the household network (N5) and are not N1's."""
+    universe, baseline = plan
     home = {p.account_id: set(p.home_ips) for p in universe.profiles}
-    legitimate = [r for r in gate_on if _is_legit_tx(r)]
+    index_of = {p.account_id: i for i, p in enumerate(universe.profiles)}
+    legitimate: list[GeneratedRow] = []
+    for row in gate_on:
+        if not _is_legit_tx(row):
+            continue
+        payload = row.event["payload"]
+        devices = baseline.payment_devices.get(index_of[payload["account_id"]])
+        if (
+            devices is not None
+            and devices.household_ip is not None
+            and payload["device_id"] == devices.secondary
+        ):
+            continue
+        legitimate.append(row)
     away = [
         r
         for r in legitimate
         if r.event["payload"]["ip_id"] not in home[r.event["payload"]["account_id"]]
     ]
-    share = BaselineIdentityConfig().transaction_away_ip_share
-    expected = len(legitimate) * share
+    expected = len(legitimate) * BaselineIdentityConfig().transaction_away_ip_share
     # An away draw can land on a home IP by chance, so the observed count sits just below.
     _assert_within(len(away), expected, math.sqrt(expected), "away-IP payments")
 
@@ -1858,12 +1879,18 @@ def test_n1_legitimate_payments_come_from_away_ips_at_the_declared_share(
 def test_ablating_n1_keeps_legitimate_payments_on_home_ips() -> None:
     config = _ablation_config("N1")
     universe = build_universe(config)
+    references = scenario_device_references(config, universe, plan_fraud(config, universe)[0])
+    households = plan_households(config, universe, references)
     home = {p.account_id: set(p.home_ips) for p in universe.profiles}
+    index_of = {p.account_id: i for i, p in enumerate(universe.profiles)}
     legitimate = [r for r in generate_dataset(config, universe) if _is_legit_tx(r)]
     assert legitimate
-    assert all(
-        r.event["payload"]["ip_id"] in home[r.event["payload"]["account_id"]] for r in legitimate
-    )
+    for row in legitimate:
+        payload = row.event["payload"]
+        shared = households.get(index_of[payload["account_id"]])
+        if shared is not None and payload["ip_id"] == shared[1]:
+            continue
+        assert payload["ip_id"] in home[payload["account_id"]], payload
 
 
 def test_n3_micro_sessions_exist_at_about_the_declared_share(gate_on: list[GeneratedRow]) -> None:
@@ -1896,3 +1923,155 @@ def test_transactions_minutes_apart_by_one_actor_stay_close(gate_on: list[Genera
     ).values():
         ordered = sorted(rows, key=_millis)
         assert all(_km(a, b) < 5.0 for a, b in itertools.pairwise(ordered))
+
+
+# ================================================================ 6d-2: trips =====
+
+
+def _far_share(rows: list[GeneratedRow], universe: Universe) -> float:
+    homes = {p.account_id: p.account.home for p in universe.profiles}
+    legitimate = [r for r in rows if _is_legit_tx(r)]
+    far = sum(
+        1
+        for r in legitimate
+        if haversine_km(
+            homes[r.event["payload"]["account_id"]],
+            GeoPoint(r.event["payload"]["latitude"], r.event["payload"]["longitude"]),
+        )
+        >= 100
+    )
+    return far / len(legitimate)
+
+
+def test_n2_legitimate_customers_travel(gate_on: list[GeneratedRow], universe: Universe) -> None:
+    """About one trip a year of two to seven days puts roughly one legitimate payment in a
+    hundred far from home; eval-v1 put none there."""
+    assert 0.003 <= _far_share(gate_on, universe) <= 0.04
+
+
+def test_n2_trips_follow_their_plan(gate_on: list[GeneratedRow], universe: Universe) -> None:
+    from data.generator.engine import plan_trips
+
+    config = _coherence_config(baseline_identity=_EVAL_V1_INSTANCES)
+    trips = plan_trips(config, universe)
+    index_of = {p.account_id: i for i, p in enumerate(universe.profiles)}
+    checked = 0
+    for row in gate_on:
+        if not _is_legit_tx(row):
+            continue
+        payload = row.event["payload"]
+        covering = [
+            destination
+            for first, end, destination in trips.get(index_of[payload["account_id"]], ())
+            if first <= _millis(row) < end
+        ]
+        if covering:
+            point = GeoPoint(payload["latitude"], payload["longitude"])
+            assert haversine_km(covering[0], point) < 100
+            checked += 1
+    assert checked > 0
+
+
+def test_ablating_n2_keeps_every_legitimate_payment_near_home() -> None:
+    config = _ablation_config("N2")
+    universe = build_universe(config)
+    assert _far_share(list(generate_dataset(config, universe)), universe) == 0.0
+
+
+# ============================================ 6d-3: fixed prices and households =====
+
+
+def _dense_config(*disabled: str) -> GeneratorConfig:
+    """Busy enough that moderately popular merchants take ten to forty payments a day."""
+    return GeneratorConfig(
+        row_count=20_000,
+        account_count=400,
+        merchant_count=60,
+        device_count=480,
+        ip_count=200,
+        fraud_rate=0.0,
+        seed=17,
+        start_at=dt.datetime(2026, 1, 1, tzinfo=dt.UTC),
+        end_at=dt.datetime(2026, 1, 15, tzinfo=dt.UTC),
+        baseline_identity=BaselineIdentityConfig(disabled_corrections=disabled),
+    )
+
+
+def _same_price_crowds(rows: list[GeneratedRow], prices: dict[str, int]) -> int:
+    """Rows at a fixed-price merchant whose price five or more accounts paid in the last 24 h."""
+    by_merchant: dict[str, list[tuple[int, str]]] = collections.defaultdict(list)
+    for row in rows:
+        if row.topic != TX:
+            continue
+        payload = row.event["payload"]
+        price = prices.get(payload["merchant_id"])
+        if price is not None and 50 * abs(payload["amount_minor"] - price) <= price:
+            by_merchant[payload["merchant_id"]].append((_millis(row), payload["account_id"]))
+    crowded = 0
+    for payments in by_merchant.values():
+        payments.sort()
+        for index, (at_ms, _) in enumerate(payments):
+            window = {account for t, account in payments[: index + 1] if t > at_ms - 86_400_000}
+            crowded += len(window) >= 5
+    return crowded
+
+
+def test_n4_fixed_price_merchants_gather_many_ordinary_payers() -> None:
+    from data.generator.engine import plan_fixed_prices
+
+    config = _dense_config()
+    universe = build_universe(config)
+    rows = list(generate_dataset(config, universe))
+    prices = plan_fixed_prices(config, universe, config.row_count)
+    assert prices
+    assert _same_price_crowds(rows, prices) >= 30
+    profiles = {p.account_id: p for p in universe.profiles}
+    at_price = ordinary = 0
+    for row in rows:
+        if row.topic != TX:
+            continue
+        payload = row.event["payload"]
+        price = prices.get(payload["merchant_id"])
+        if price is not None and 100 * abs(payload["amount_minor"] - price) <= price:
+            profile = profiles[payload["account_id"]]
+            at_price += 1
+            spread = abs(math.log(payload["amount_minor"]) - profile.amount_mu)
+            ordinary += spread <= profile.amount_sigma + 0.011
+    # An ordinary purchase can land within 1 % of a price by chance; almost every one is planned.
+    assert at_price and ordinary / at_price >= 0.9, (ordinary, at_price)
+
+
+def test_ablating_n4_leaves_no_fixed_price_merchant() -> None:
+    from data.generator.engine import plan_fixed_prices
+
+    config = _dense_config("N4")
+    assert plan_fixed_prices(config, build_universe(config), config.row_count) == {}
+
+
+def test_n5_household_members_share_a_device_and_a_network(
+    gate_on: list[GeneratedRow], plan: tuple[Universe, BaselinePlan]
+) -> None:
+    universe, baseline = plan
+    households = {
+        index: (devices.secondary, devices.household_ip)
+        for index, devices in baseline.payment_devices.items()
+        if devices.household_ip is not None
+    }
+    share = BaselineIdentityConfig().household_account_share
+    assert abs(len(households) - share * len(universe.profiles)) <= 3
+    index_of = {p.account_id: i for i, p in enumerate(universe.profiles)}
+    paying: dict[tuple[object, object], set[str]] = collections.defaultdict(set)
+    for row in gate_on:
+        if not _is_legit_tx(row):
+            continue
+        payload = row.event["payload"]
+        shared = households.get(index_of[payload["account_id"]])
+        if shared is not None and payload["device_id"] == shared[0]:
+            assert payload["ip_id"] == shared[1]
+            paying[shared].add(payload["account_id"])
+    assert any(len(members) >= 2 for members in paying.values())
+
+
+def test_ablating_n5_plans_no_household() -> None:
+    config = _ablation_config("N5")
+    assert plan_households(config, build_universe(config), DeviceReferences()) == {}

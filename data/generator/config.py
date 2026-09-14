@@ -184,6 +184,28 @@ class BaselineIdentityConfig(StrictModel):
     rate, so unrelated accounts briefly share an IP. Applies to every transaction whose IP is not
     planted, since an unplanted IP is drawn the legitimate way."""
 
+    travel_trips_per_account_year: _YearlyRate = 1.0
+    """N2: trips away from home per account-year -- holidays, work, family. Each lasts U(2, 7) days
+    in another population centre, chosen as a takeover's destination is, and the account pays there
+    as it would at home. Without trips, distance from home marks fraud."""
+
+    fixed_price_merchant_share: _Share = 0.3
+    """N4: share of moderately busy merchants -- ten to forty expected payments a day -- that sell
+    at one price: transit, parking, subscriptions, a set menu. Quieter merchants never gather five
+    payers a day at one price; busier ones rarely have one. Without them, one price paid by many
+    accounts marks merchant collusion."""
+
+    fixed_price_purchase_share: _Share = 0.8
+    """N4: at such a merchant, the share of purchases made at its price, by customers for whom
+    the price is ordinary -- as a colluding merchant's payers are (G6). The rest is ordinary
+    spending."""
+
+    household_account_share: _Share = 0.1
+    """N5: share of accounts in a household or small workplace of two or three that shares a
+    device and a network. A member pays from the shared device at
+    `secondary_device_transaction_share`, over the shared network. Without households, accounts
+    sharing a device and an IP mark a fraud ring."""
+
     micro_session_share_per_transaction: _Share = 0.03
     """N3: share of legitimate purchases followed within a minute by another from the same account
     -- split tender, a transit tap, a basket then a tip. One extra transaction, never a burst, so

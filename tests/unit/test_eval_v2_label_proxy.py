@@ -610,6 +610,10 @@ ZERO_RATE_FIELDS = frozenset(
         "decline_share_per_transaction",
         "decline_retry_share_per_transaction",
         "transaction_away_ip_share",
+        "fixed_price_merchant_share",
+        "fixed_price_purchase_share",
+        "household_account_share",
+        "travel_trips_per_account_year",
         "micro_session_share_per_transaction",
     }
 )

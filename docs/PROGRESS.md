@@ -756,8 +756,18 @@ Phase 3, in the wave order of `docs/PHASE3_PLAN.md` §5:
           near that point. This holds for legitimate transactions and within a planted instance,
           so bursts and micro-sessions no longer imply impossible speeds.
         - Ablation switches wired for N1 and N3.
-      - **6d-2 next:** N2 legitimate trips.
-      - **6d-3:** N4 fixed-price merchants and N5 households.
+      - **6d-2 and 6d-3 done.**
+        - N2: about one legitimate trip a year of two to seven days, to the destinations takeovers
+          use. A trip's destination anchors legitimate points, and the home-anchored planted
+          points of an account while it lasts.
+        - N4: moderately busy merchants may sell at one price, which buyers pay when it is
+          ordinary for them, as G6's payers do.
+        - N5: households of two or three share a pre-window device and a network.
+        - Ablation switches wired for N2, N4 and N5.
+        - **Known limit:** a legitimate payment just before a trip and one just after it starts can
+          imply a fast leg, because no outbound journey is modelled.
+      - **Step 6 status.** Every correction except N12 is implemented and switchable. N12 comes
+        with step 7. Whether the corrections pass `LPC-5` is step 9's diagnostic probe.
    7. U7/N12 (ADR-0049).
    8. Ablation controls.
    9. Diagnostic eval-v2 probe.
