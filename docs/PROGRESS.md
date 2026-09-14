@@ -24,8 +24,7 @@ planning surfaced recorded under *What Phase 3 planning found in Phase 2's artef
 complete locally** — `make verify`, the real-JVM stream tests on macOS, a hashed install in a Linux
 container, and a Linux build of the gateway image from its hashed runtime lock. Its first GitHub CI run
 (including the new `test-stream` job) is still pending. Wave B (Steps 1, 2, 3 and E) is under way; see
-*WORK IN PROGRESS*. One
-Phase 3 capability is PASS: `P3.pin-failfast`. The plan was built by six specialist reviews whose load-bearing claims were
+*WORK IN PROGRESS*. Two Phase 3 capabilities are PASS: `P3.pin-failfast` and `P3.semantics-hardening`. The plan was built by six specialist reviews whose load-bearing claims were
 checked against the code, by experiment in a throwaway container, or against cited upstream
 documentation — claims resting only on documentation are re-verified by the step that depends on
 them. The architecture that
@@ -1217,8 +1216,10 @@ Phase 3, in the wave order of `docs/PHASE3_PLAN.md` §5:
        - **The eval-v2 Stage 2 sub-track is CLOSED for Phase 3** (user decision, 2026-09-14). `LPC-5`
          reopens only for a downstream Category A correctness or leakage defect; Category B or C
          findings do not. Further synthetic-data work is D16, and acceptance-scale controls are D15.
-       - **Remaining feature set 3.0.0 gate:** the Phase 2 load gate on 3.0.0, for
-         `P3.semantics-hardening`.
+       - **Phase 2 load gate re-met on feature set 3.0.0:** `run_id: load-20260914-gateway-bb2f0fa1`
+         passes every exit condition from a cold store on a clean tree, with thresholds unchanged
+         (`benchmarks/gateway/REPORT.md`). With the manual replay and the controlled rule re-validation
+         above, `P3.semantics-hardening` is PASS again.
 
    No `LPC-5` threshold is tuned after the final candidate is seen.
 3. ~~**R010 threshold study (U10)**~~ **Done 2026-09-14 on eval-v2, with its LPC-5 FAIL disclosed:
