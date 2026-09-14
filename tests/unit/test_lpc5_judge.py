@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from data.generator.lpc5 import declaration as d
+from data.generator.lpc5 import stats
 from data.generator.lpc5.attributes import Column, Table
 from data.generator.lpc5.fixtures import account
 from data.generator.lpc5.judge import (
@@ -27,6 +28,10 @@ TX = d.Population.TX
 ATO = FraudPattern.ACCOUNT_TAKEOVER.value
 CT = FraudPattern.CARD_TESTING.value
 IT = FraudPattern.IMPOSSIBLE_TRAVEL.value
+VA = FraudPattern.VELOCITY_ATTACK.value
+ULD = FraudPattern.UNUSUAL_LOCATION_DEVICE.value
+FR = FraudPattern.FRAUD_RING.value
+DF = FraudPattern.DEVICE_FARM.value
 ALLOW = Allowlist()
 
 
@@ -190,37 +195,115 @@ def test_representation_values_may_not_be_planted_only_or_differ() -> None:
     assert s2_representation({TX: same.table()}).passed
 
 
-def test_pooled_enrichment_is_exempt_only_when_every_contributing_scenario_admits_it() -> None:
-    """Revision 3: no realised share of planted rows. Takeovers admit `device_home = not` (ATO-4);
-    card testing does not, so it blocks the exemption once its own share exceeds the legitimate
-    bound, and not while its share stays at the legitimate level."""
-    legit = ["not"] * 10 + ["home"] * 1_990
+Cell = tuple[str | None, str | None, str | None]
+NOT_POOLED = ("device_home", "not", d.POOLED)
 
-    def pooled_cells(ct_not: int) -> set[tuple[str | None, str | None, str | None]]:
-        build = Build(planted=((ATO, 10), (CT, 90)))
-        build.column("device_home", legit, ["not"] * (10 + ct_not) + ["home"] * (90 - ct_not))
-        tables = {TX: build.table()}
-        _, r8 = r7_r8(tables, ALLOW)
-        s1u = s1_unconditional(tables, ALLOW)
-        return {cell for result in (r8, s1u) for cell in _cells(result, result.check)} | {
-            (f.attribute, f.value, f.group) for f in s1u.findings
-        }
 
-    assert ("device_home", "not", d.POOLED) not in pooled_cells(0)
-    assert ("device_home", "not", d.POOLED) not in pooled_cells(1)
-    assert ("device_home", "not", d.POOLED) in pooled_cells(30)
-    # Realised shares of planted rows play no part: a small scenario that contributes and does not
-    # admit the value makes the cell judged, and one whose only contributor admits it is exempt.
-    build = Build(planted=((ATO, 90), (CT, 10)))
-    build.column("device_home", ["home"] * 2_000, ["not"] * 100)
-    build.column("tx_count_1m", ["1"] * 2_000, ["1"] * 90 + ["5-9"] * 10)
-    _, r8 = r7_r8({TX: build.table()}, ALLOW)
-    assert ("device_home", "not", d.POOLED) in _cells(
-        r8, "R8"
-    )  # CT contributes; no CT row admits it
-    assert ("tx_count_1m", "5-9", d.POOLED) not in _cells(
-        r8, "R8"
-    )  # only CT contributes; CT-1 admits
+def _device_home_not(
+    planted: Sequence[tuple[str, int, int]], legit_not: int = 10
+) -> tuple[set[Cell], set[Cell]]:
+    """`device_home = not` on `hits` of each scenario's `rows`: R7's cells, and every pooled cell R8
+    or S1-U reports. Takeovers (ATO-4), unusual-location transactions (ULD-1) and rings (FR-1's
+    consequence) admit the value; card testing does not."""
+    build = Build(planted=tuple((scenario, rows) for scenario, rows, _ in planted))
+    values: list[str | None] = []
+    for _, rows, hits in planted:
+        values += ["not"] * hits + ["home"] * (rows - hits)
+    build.column("device_home", ["not"] * legit_not + ["home"] * (2_000 - legit_not), values)
+    tables = {TX: build.table()}
+    r7, r8 = r7_r8(tables, ALLOW)
+    s1u = s1_unconditional(tables, ALLOW)
+    pooled = _cells(r8, "R8") | {(f.attribute, f.value, f.group) for f in s1u.findings}
+    return _cells(r7, "R7"), {cell for cell in pooled if cell[2] == d.POOLED}
+
+
+def test_r8_trivial_non_enriched_support_does_not_block_an_enriched_contributor() -> None:
+    """Revision 4: card testing's single row exceeds the legitimate upper bound (revision 3 counted
+    that) but is not itself ENRICHED, so only the takeovers contribute, and they admit the value."""
+    legit = stats.Share(10, 2_000, 400)
+    assert legit.hi < 1 / 40
+    assert not stats.enriched(stats.Share(1, 40, 40), legit)
+    r7, pooled = _device_home_not([(ATO, 40, 40), (CT, 40, 1)])
+    assert NOT_POOLED not in pooled
+    assert ("device_home", "not", CT) not in r7
+
+
+def test_r8_two_enriched_allowlisted_contributors_are_exempt() -> None:
+    r7, pooled = _device_home_not([(ATO, 40, 40), (ULD, 40, 40)])
+    assert NOT_POOLED not in pooled
+    assert not r7
+
+
+def test_r8_an_enriched_contributor_that_is_not_allowlisted_fails() -> None:
+    r7, pooled = _device_home_not([(CT, 40, 40)])
+    assert NOT_POOLED in pooled
+    assert ("device_home", "not", CT) in r7
+
+
+def test_r8_mixed_allowlisted_and_non_allowlisted_enriched_contributors_fail() -> None:
+    r7, pooled = _device_home_not([(ATO, 40, 40), (CT, 40, 40)])
+    assert NOT_POOLED in pooled
+    assert r7 == {("device_home", "not", CT)}
+
+
+def test_r8_a_pooled_enrichment_with_no_individually_enriched_contributor_is_judged() -> None:
+    """Every scenario admits the value, but none is ENRICHED on its own: nothing contributes
+    materially, so the pooled enrichment is judged rather than exempt."""
+    legit = stats.Share(0, 2_000, 400)
+    assert not stats.enriched(stats.Share(5, 100, 100), legit)
+    assert stats.enriched(stats.Share(15, 300, 300), legit)
+    r7, pooled = _device_home_not([(ATO, 100, 5), (ULD, 100, 5), (FR, 100, 5)], legit_not=0)
+    assert NOT_POOLED in pooled
+    assert not r7
+
+
+def test_a_documented_consequence_value_is_admitted_and_keeps_its_support_check() -> None:
+    """Revision 4 §6.7: VA-C1 lists `distinct_merchants_1h` `3-4`, `5-9` and `10+` for velocity
+    attacks, `5-9` with no support check. Listed values skip R7 and precision and admit R8; `3-4`
+    keeps its support check. An unlisted value, and the same value for another scenario, stay
+    judged."""
+    build = Build(planted=((VA, 40), (IT, 40)))
+    build.column(
+        "distinct_merchants_1h",
+        ["1"] * 2_000,
+        ["3-4"] * 15 + ["5-9"] * 15 + ["2"] * 10 + ["3-4"] * 20 + ["1"] * 20,
+    )
+    tables = {TX: build.table()}
+    r7, r8 = r7_r8(tables, ALLOW)
+    s1u = s1_unconditional(tables, ALLOW)
+    name = "distinct_merchants_1h"
+    assert (name, "3-4", VA) not in _cells(r7, "R7")
+    assert (name, "5-9", VA) not in _cells(r7, "R7")
+    assert (name, "2", VA) in _cells(r7, "R7")
+    assert (name, "3-4", IT) in _cells(r7, "R7")
+    assert (name, "3-4", VA) in _cells(s1u, "S1-U(a)")
+    assert (name, "5-9", VA) not in _cells(s1u, "S1-U(a)")
+    assert (name, "3-4", VA) not in _cells(s1u, "S1-U(b)")
+    assert (name, "2", VA) in _cells(s1u, "S1-U(b)")
+    assert (name, "5-9", d.POOLED) not in _cells(r8, "R8")
+    assert (name, "3-4", d.POOLED) in _cells(r8, "R8")
+
+
+def test_a_documented_value_within_a_row_skips_only_that_rows_sweep() -> None:
+    """Revision 4 §6.7: DF-C1 lists `avail:account_tenure_days = AVAILABLE` inside DF-5's stratum
+    (a first-use device) only. The same value inside DF-1's stratum stays judged."""
+    build = Build(planted=((DF, 40),))
+    build.column("device_age", ["first-use"] * 1_000 + ["≥7d"] * 1_000, ["first-use"] * 40)
+    build.column("device_accounts", ["3-5"] * 1_000 + ["1"] * 1_000, ["3-5"] * 40)
+    build.column(
+        "avail:account_tenure_days",
+        ["INSUFFICIENT_HISTORY"] * 1_000 + ["AVAILABLE"] * 1_000,
+        ["AVAILABLE"] * 40,
+    )
+    s1b = s1_conditional({TX: build.table()}, ALLOW)
+    strata = {
+        row_id
+        for f in s1b.findings
+        if f.check == "S1-B(i)" and f.attribute == "avail:account_tenure_days"
+        for row_id in ("DF-1", "DF-5")
+        if f"within {row_id} (" in f.detail
+    }
+    assert strata == {"DF-1"}
 
 
 def test_an_episode_consequence_skips_enrichment_but_keeps_its_support_check() -> None:

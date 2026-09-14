@@ -602,7 +602,9 @@ both reports.
     - To be recorded as a decision that updates ADR-0030 (Stage 2 step 5).
   * **U7 decided.** See UNRESOLVED DECISIONS; designed in ADR-0049 (Proposed), not implemented.
   * **`LPC-5` amended and frozen** as `eval/track_a/criteria/lpc-5.md`. Revision 1 was committed
-    first; **revision 2**, the current freeze, has sha256 `40b5733b5296c3cf32329b74e8331cb241fa56e95f5d60c6d7fbedd76b24f8fc`.
+    first. The current freeze is **revision 4**, sha256
+    `96dad012376f2b30aaca9450ed14c21a5803f9f3042e4bbb4f21ee672190ee28`; revisions 3 and 4 are recorded
+    under Stage 2 step 9.
     - **Revision 2 applies the user's blocking corrections** of the same day:
       - a thirds rule for per-scenario calendar coverage, with the pooled 20-slice rule unchanged;
       - disclosure whenever the G2 coverage floor changes the natural scenario mix;
@@ -1029,6 +1031,32 @@ Phase 3, in the wave order of `docs/PHASE3_PLAN.md` §5:
         - **Consequence for acceptance.** Category B findings still fail `LPC-5`'s mechanical checks.
           Under revision 3, an acceptance run on any candidate records FAIL on them, whatever R8's
           rule. Raised with the user before any candidate is frozen.
+      - **Step 9 decisions, second round (user, 2026-09-14): `LPC-5` revision 4, the last planned
+        revision.** Probe 2 found no Category A defect in the data, so the generator is unchanged.
+        - **R8 (§5.4).** A scenario contributes materially only when it is itself `ENRICHED` for the
+          value, by §3's unchanged test. No new threshold.
+        - **Documented consequence values (§6.7).** 36 value-scoped entries for exactly probe 2's
+          Category B list: 19 scenario-wide, 17 inside named rows' strata. Support exemptions sit only
+          on VA-C1, VA-C2 and ATO-C3, for values legitimate traffic essentially never reaches.
+        - **Rows (§6.4).** ATO-3 adds `rare` `ADDRESS_CHANGE`; VA-2 and VA-4 add `rare` `3-4`. ATO-E1's
+          prior-decision count and share are confirmed as they stand.
+        - **Left judged:**
+          - the CT-3 and MC-2 near misses;
+          - chance and sample-size findings;
+          - every finding outside the Category B list (§6.7, "What is not here"): takeover
+            transaction-side and unusual-location findings inside their strata, card testing inside
+            CT-3, CT-6, CT-7 and CT-8, daily counts inside VA-3 and CT-3, impossible travel's gap
+            inside IT-2, `leg_speed` jitter, device-farm findings outside its strata, and judged
+            compositions.
+        - **Tests.**
+          - The five hand-built R8 cases the user required.
+          - A scenario-wide and a within-stratum consequence test.
+          - Declaration structure and verbatim citations.
+          - Each test kills its mutant: revision 3's contributor rule, a vacuous exemption with no
+            contributor, ignored consequences, `within` read scenario-wide, and dropped exemptions.
+        - **Re-judging probe 2.** The report prints findings only, so the saved evidence cannot show
+          what revision 4 still judges. Probe 2 is therefore regenerated once at seed 44 under revision
+          4, as the decision allows.
    10. Final candidate.
    11. Frozen `LPC-5` acceptance.
    12. Freeze the manifest and digests.

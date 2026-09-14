@@ -128,6 +128,7 @@ class Allowlist:
         self,
         rows: Sequence[d.AllowRow] = d.ALLOWLIST,
         episodes: Sequence[d.EpisodeConsequence] = d.EPISODE_CONSEQUENCES,
+        documented: Sequence[d.DocumentedConsequence] = d.DOCUMENTED_CONSEQUENCES,
     ) -> None:
         self.rows = tuple(rows)
         self._by: dict[tuple[str, d.Population], list[d.AllowRow]] = defaultdict(list)
@@ -138,6 +139,21 @@ class Allowlist:
         for episode in episodes:
             for population in episode.populations:
                 self._episode[(episode.scenario.value, population)] |= episode.attributes
+        self._documented: dict[tuple[str, d.Population, str], set[str]] = defaultdict(set)
+        self._documented_exempt: dict[tuple[str, d.Population, str, str], str] = {}
+        self._within: dict[tuple[str, d.Population, str], set[str]] = defaultdict(set)
+        for entry in documented:
+            for name in entry.attributes:
+                if entry.within:
+                    for row_id in entry.within:
+                        self._within[(row_id, entry.population, name)] |= entry.values
+                    continue
+                key = (entry.scenario.value, entry.population, name)
+                self._documented[key] |= entry.values
+                for value in entry.none:
+                    self._documented_exempt[(*key, value)] = "none"
+                for value in entry.rare:
+                    self._documented_exempt[(*key, value)] = "rare"
 
     def rows_of(self, scenario: str, population: d.Population) -> list[d.AllowRow]:
         return self._by.get((scenario, population), [])
@@ -165,7 +181,7 @@ class Allowlist:
                     return "none"
                 if value in row.consequence_rare.get(name, frozenset()):
                     return "rare"
-        return None
+        return self._documented_exempt.get((scenario, population, name, value))
 
     def consequence_of(
         self, scenario: str, population: d.Population, name: str
@@ -190,30 +206,42 @@ class Allowlist:
             return d.DEPENDS[name.removeprefix(d.AVAIL_PREFIX)] in names
         return False
 
+    def documented(self, scenario: str, population: d.Population, name: str, value: str) -> bool:
+        """§6.7: a value a scenario-wide documented-consequence entry of the scenario lists."""
+        return value in self._documented.get((scenario, population, name), frozenset())
+
+    def documented_within(
+        self, row_id: str, population: d.Population, name: str, value: str
+    ) -> bool:
+        """§6.7: a value a documented-consequence entry lists inside the stratum of `row_id`."""
+        return value in self._within.get((row_id, population, name), frozenset())
+
     def is_ordinary(self, scenario: str, population: d.Population, name: str, value: str) -> bool:
         return (
             not self.allowlisted(scenario, population, name, value)
             and self.consequence_of(scenario, population, name) is None
             and not self.episode_consequence(scenario, population, name)
+            and not self.documented(scenario, population, name, value)
         )
 
     def pooled_exempt(
         self, population: d.Population, name: str, stratum: str, value: str, counts: Tally
     ) -> bool:
-        """R8's exemption (revision 3): every scenario contributing the pooled cell admits `value`.
+        """R8's exemption (revision 4): every materially contributing scenario admits `value`.
 
-        A scenario contributes when its own point share of the value, within the stratum, exceeds
-        `hiF`. With no contributing scenario, or one that does not admit the value, the cell is
-        judged. No realised share of planted rows enters the rule."""
+        A scenario contributes materially only when it is itself `ENRICHED` for the value within the
+        stratum, by §3's test. With no such scenario, or one that does not admit the value, the cell
+        is judged. Scenarios at trivial, non-enriched shares neither block nor grant the exemption;
+        R7 still judges each scenario on its own."""
         legit = counts.share(d.LEGIT, stratum, (value,))
-        floor = max(legit.hi, d.LEGIT_SHARE_FLOOR)
-        contributors = []
-        for group, cell_stratum, cell_value in counts.cells():
-            if group in (d.LEGIT, d.POOLED) or cell_stratum != stratum or cell_value != value:
-                continue
-            share = counts.share(group, stratum, (value,))
-            if share.r and share.x / share.r > floor:
-                contributors.append(group)
+        contributors = [
+            group
+            for group, cell_stratum, cell_value in counts.cells()
+            if group not in (d.LEGIT, d.POOLED)
+            and cell_stratum == stratum
+            and cell_value == value
+            and stats.enriched(counts.share(group, stratum, (value,)), legit)
+        ]
         return bool(contributors) and all(
             not self.is_ordinary(scenario, population, name, value) for scenario in contributors
         )
@@ -432,7 +460,11 @@ def s1_conditional(tables: Mapping[d.Population, Table], allow: Allowlist) -> Ch
                     continue
                 counts = tally(table, spec.name, [*scenario_rows, *reference], pooled=False)
                 for group, stratum, value in counts.cells():
-                    if group != scenario:
+                    if (
+                        group != scenario
+                        or allow.documented(scenario, population, spec.name, value)
+                        or allow.documented_within(row.row_id, population, spec.name, value)
+                    ):
                         continue
                     judged += 1
                     row_judged[row.row_id] += 1

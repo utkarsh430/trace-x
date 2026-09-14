@@ -1,6 +1,6 @@
 # `LPC-5` — the eval-v2 label-proxy acceptance criterion
 
-- **Status:** FROZEN, revision 3 (§20). Declared 2026-09-14, before any eval-v2 candidate dataset exists and
+- **Status:** FROZEN, revision 4 (§20). Declared 2026-09-14, before any eval-v2 candidate dataset exists and
   before any code implementing this revision.
 - **Freeze.** The commit that adds this file. Its sha256 is recorded in `docs/PROGRESS.md`. The
   acceptance command must refuse to run when this file's digest differs from the digest named in the
@@ -14,6 +14,9 @@
   - Revision 3 (2026-09-14): the user's Step 9 decisions after the diagnostic quarter-scale probe —
     episode consequences, value-specific support exemptions, applicability by event type, R8's
     contributor rule, G4 for velocity attacks, and no minimum effect for MC-5 and DF-5.
+  - Revision 4 (2026-09-14): the user's decisions after the second diagnostic probe, the last planned
+    revision — R8 counts only individually enriched scenarios as contributing, and documented
+    consequence values (§6.7) admit the findings that probe classified as documented behaviour.
 - **What it replaces.** It replaces, as eval-v2's acceptance criterion, LPC-1 to LPC-4 of the eval-v2
   draft ADR.
   - Their rules are restated in §5, so this file is complete on its own.
@@ -460,11 +463,12 @@ Windows are `[t − W, t)`, and account attribution uses the payload `account_id
   - R attributes are always ORDINARY.
 - **R8 — pooled enrichment.**
   - The same test with `g = POOLED`.
-  - **Exempt cells (revision 3).** A scenario `s` contributes to the pooled cell of `v` when its own
-    point share `x_s(v) / r_s`, within the stratum, exceeds `hiF`. The cell is exempt when at least one
-    scenario contributes and every contributing scenario admits `v`: `v` is not ORDINARY for it (§6.3).
-    A cell with any contributing scenario that does not admit `v` is judged. No realised share of
-    planted rows enters the rule.
+  - **Exempt cells (revision 4).** A scenario `s` contributes materially to the pooled cell of `v` when
+    `ENRICHED(s)` holds for `v` within the stratum, by §3's test. The cell is exempt when at least one
+    scenario contributes materially and every materially contributing scenario admits `v`: `v` is not
+    ORDINARY for it (§6.3). A cell with a materially contributing scenario that does not admit `v`, or
+    with none, is judged. No realised share of planted rows enters the rule, and each scenario's own
+    enrichment stays judged by R7.
 - **R9 — non-vacuity.** Fails if any of these holds:
   - a population has fewer than 30 legitimate rows or fewer than 30 legitimate clusters;
   - TX has fewer than 30 planted clusters.
@@ -547,10 +551,12 @@ They are the R attributes (§4) and the exact rules of §8 S2c, and they are che
   status.
 - **EPISODE CONSEQUENCE** if an episode-consequence entry of `s` (§6.6) lists `b` in `P`, or through
   §4.7. Every value of `b` then has this status.
+- **DOCUMENTED CONSEQUENCE (revision 4)** for the values a §6.7 entry of `s` with no `within` rows lists
+  for `b` in `P`. Only those values have this status.
 - **ORDINARY** otherwise — including the values of an allowlisted attribute that lie outside `V*`.
 
-A declaration test rejects an attribute that a row of `s` names and that is also a consequence, or an
-episode consequence, for `s`.
+A declaration test rejects an attribute that a row of `s` names and that is also a consequence, an
+episode consequence, or a scenario-wide documented consequence, for `s`.
 
 **Effect.**
 - ALLOWLISTED values skip S1-U's precision check and R7. R8 exempts their attribute through its own
@@ -558,8 +564,11 @@ episode consequence, for `s`.
 - CONSEQUENCE values skip S1-U's precision check and R7. They are judged for enrichment only in S1-B.
 - EPISODE CONSEQUENCE values skip S1-U's precision check, R7 and S1-B's sweep for `s`. Nothing judges
   them for enrichment.
+- DOCUMENTED CONSEQUENCE values skip S1-U's precision check, R7 and S1-B's sweep for `s`, and R8 treats
+  `s` as admitting them. A §6.7 entry with `within` rows changes no status: its values skip S1-B's
+  sweep only inside those rows' strata.
 - Every value keeps S1-U's support check, unless it is an exempt value, or an exempt consequence value,
-  of a row of `s`.
+  of a row of `s`, or an exempt value of a §6.7 entry of `s`.
 
 ### 6.4 Entries
 
@@ -577,7 +586,7 @@ episode consequence, for `s`.
 |---|---|---|---|---|---|---|---|---|
 | ATO-1 | TX | `prior_events_24h` | `identity-change` | — | — | 0.80 | S "An identity change, then within hours" | — |
 | ATO-2 | TX | `hours_since_identity_change` | `<1h`, `[1h,6h)` | rare: `<1h`, `[1h,6h)` | documented | 0.80 | S "then within hours" | — |
-| ATO-3 | ID | `event_type` | the Q4e set | rare: `EMAIL_CHANGE`, `PHONE_CHANGE` | judged | 0.80 | S "An identity change" | — |
+| ATO-3 | ID | `event_type` | the Q4e set | rare: `ADDRESS_CHANGE`, `EMAIL_CHANGE`, `PHONE_CHANGE` | judged | 0.80 | S "An identity change" | — |
 | ATO-4 | TX, ID | `device_home` | `not` | — | — | 0.80 | S "a device the account has never used" | TX: `device_accounts`, `device_accounts_24h`, `distinct_devices_24h`, `device_account_tx`; ID: `device_login_accounts` |
 | ATO-5 | TX, ID | `device_age` | `first-use`/`first-reference`, `<1h`, `[1h,24h)` | — | judged | 0.80 | S "a device the account has never used" | — |
 | ATO-6 | TX | `amount_vs_account` | `[2,5)`, `[5,20)`, `≥20` | rare: `≥20` | judged | 0.80 | S "spending well above profile" | `amount_decile`, `amount_z` |
@@ -614,7 +623,7 @@ above its own short-window baseline".
 | # | P | Attribute | V* | Exempt | Composition | E_min | Consequences |
 |---|---|---|---|---|---|---|---|
 | VA-1 | TX | `tx_count_1m` | `2`, `3-4`, `5-9`, `10-19`, `20+` | none: `3-4`, `5-9`, `10-19`, `20+` | documented | 0.30 | — |
-| VA-2 | TX | `tx_count_5m` | `2`, `3-4`, `5-9`, `10-19`, `20+` | none: `5-9`, `10-19`, `20+` | documented | 0.60 | — |
+| VA-2 | TX | `tx_count_5m` | `2`, `3-4`, `5-9`, `10-19`, `20+` | rare: `3-4`; none: `5-9`, `10-19`, `20+` | documented | 0.60 | — |
 | VA-3 | TX | `tx_count_1h` | `2`, `3-4`, `5-9`, `10-19`, `20+` | none: `5-9`, `10-19`, `20+`; `tx_count_24h`: rare `10-19`, none `20+` | documented | 0.80 | `tx_count_24h` |
 | VA-4 | TX | `card_count_5m` | as VA-2 | as VA-2 | documented | 0.60 | — |
 | VA-5 | TX | `gap_prev` | `<10s`, `[10s,60s)`, `[1,10)min` | — | judged | 0.50 | — |
@@ -720,6 +729,78 @@ check, and nothing may cite them as fraud evidence.
   eval-v2 evidence alone may not justify them as a model feature (`docs/ROADMAP.md` Phase 4).
 - **Checks.** §6.3 gives the status and its effect. S1-U's support check still applies to every value.
 
+### 6.7 Documented consequence values (revision 4)
+
+Specific values a documented mechanism produces in an attribute no row of the scenario names. They were
+recorded after the second diagnostic probe classified them as documented behaviour. Every other value of
+the attribute keeps its status. These are not signatures: no `E_min`, no composition, no S7b.
+
+- **No `within` rows:** the values are DOCUMENTED CONSEQUENCES of the scenario (§6.3).
+- **`within` rows:** the values skip S1-B's sweep inside those rows' strata only. R7, R8 and S1-U are
+  unchanged.
+- **Exempt:** support exemptions (§6.3) for listed values, on entries with no `within` rows only.
+
+| # | Scenario | P | Attributes | Values | Within | Exempt | Source |
+|---|---|---|---|---|---|---|---|
+| VA-C1 | `VELOCITY_ATTACK` | TX | `distinct_merchants_1h` | `3-4`, `5-9`, `10+` | — | none: `5-9`, `10+` | S "A burst of transactions on one account far above its own short-window baseline" |
+| VA-C2 | `VELOCITY_ATTACK` | TX | `distinct_mcc_5m` | `3-4`, `5+` | — | rare: `3-4`; none: `5+` | as VA-C1 |
+| VA-C3 | `VELOCITY_ATTACK` | TX | `distinct_devices_24h`, `distinct_countries_24h` | `3+` | — | — | as VA-C1 |
+| VA-C4 | `VELOCITY_ATTACK` | TX | `device_age` | `<1h` | — | — | as VA-C1 |
+| VA-C5 | `VELOCITY_ATTACK` | TX | `account_activity` | `51+` | — | — | as VA-C1 |
+| VA-C6 | `VELOCITY_ATTACK` | TX | `profile_depth` | `20-127` | — | — | as VA-C1 |
+| IT-C1 | `IMPOSSIBLE_TRAVEL` | TX | `tx_count_1h`, `distinct_merchants_1h` | `2` | — | — | S "Two card-present transactions" |
+| IT-C2 | `IMPOSSIBLE_TRAVEL` | TX | `prior_decisions_1h` | `1` | — | — | as IT-C1 |
+| IT-C3 | `IMPOSSIBLE_TRAVEL` | TX | `prior_declined_share_1h` | `0` | — | — | as IT-C1 |
+| IT-C4 | `IMPOSSIBLE_TRAVEL` | TX | `avail:declined_ratio_1h` | `AVAILABLE` | — | — | as IT-C1 |
+| IT-C5 | `IMPOSSIBLE_TRAVEL` | TX | `tx_count_24h` | `2`, `3-4` | IT-3 | — | as IT-C1 |
+| IT-C6 | `IMPOSSIBLE_TRAVEL` | TX | `distinct_countries_24h` | `2`, `3+` | IT-3 | — | S "Two card-present transactions" + "great-circle distance" |
+| IT-C7 | `IMPOSSIBLE_TRAVEL` | TX | `tx_count_1m`, `tx_count_5m`, `card_count_5m`, `distinct_mcc_5m` | `1` | IT-2 | — | as IT-C1 |
+| ATO-C1 | `ACCOUNT_TAKEOVER` | DEV | `event_type` | `FIRST_SEEN` | — | — | S "then within hours a device the account has never used" |
+| ATO-C2 | `ACCOUNT_TAKEOVER` | DEV | `device_home` | `not` | — | — | as ATO-C1 |
+| ATO-C3 | `ACCOUNT_TAKEOVER` | DEV | `device_age` | `<1h`, `[1h,24h)` | — | none: `<1h` | as ATO-C1 |
+| CT-C1 | `CARD_TESTING` | TX | `distinct_countries_24h` | `3+` | — | — | S "across many distinct merchants" |
+| CT-C2 | `CARD_TESTING` | TX | `account_activity` | `31-50` | — | — | S "Many sub-threshold authorisations" + "inside a few minutes" |
+| CT-C3 | `CARD_TESTING` | TX | `profile_depth` | `20-127` | — | — | as CT-C2 |
+| CT-C4 | `CARD_TESTING` | TX | `outcome_event` | `DECLINED` | — | — | S "a substantial share declined" |
+| MC-C1 | `MERCHANT_COLLUSION` | TX | `amount_vs_account` | `[2,5)` | — | — | S "high, unusually uniform amounts" |
+| MC-C2 | `MERCHANT_COLLUSION` | TX | `amount_z` | `[0.5,1)` | — | — | as MC-C1 |
+| FR-C1 | `FRAUD_RING` | TX | `device_account_tx` | `1`, `2`, `3-5` | FR-1 | — | S "Several accounts sharing a small pool of devices and IPs" |
+| FR-C2 | `FRAUD_RING` | TX | `device_accounts_24h` | `3-4`, `5+` | FR-1 | — | as FR-C1 |
+| FR-C3 | `FRAUD_RING` | TX | `device_age` | `first-use`, `[1h,24h)` | FR-1 | — | as FR-C1 |
+| FR-C4 | `FRAUD_RING` | TX | `device_home` | `not` | FR-1 | — | as FR-C1 |
+| FR-C5 | `FRAUD_RING` | TX | `distinct_devices_24h` | `3+` | FR-1 | — | as FR-C1 |
+| FR-C6 | `FRAUD_RING` | TX | `ip_home` | `not` | FR-2 | — | as FR-C1 |
+| FR-C7 | `FRAUD_RING` | TX | `merchant_popularity` | `31-100`, `101+` | FR-3 | — | S "converging on a shared merchant set" |
+| CS-C1 | `CREDENTIAL_STUFFING` | ID | `device_age` | `first-reference` | CS-4 | — | S "A burst of failed logins across many unrelated accounts" |
+| CS-C2 | `CREDENTIAL_STUFFING` | ID | `device_home` | `not` | CS-4 | — | as CS-C1 |
+| CS-C3 | `CREDENTIAL_STUFFING` | TX | `ip_accounts_1h` | `2`, `3-4` | CS-5 | — | S "from a small datacenter IP pool" |
+| CS-C4 | `CREDENTIAL_STUFFING` | TX | `ip_home` | `not` | CS-5 | — | as CS-C3 |
+| DF-C1 | `DEVICE_FARM` | TX | `avail:account_tenure_days`, `avail:amount_zscore_vs_account`, `avail:distance_from_account_home_km`, `avail:mcc_is_habitual_for_account`, `avail:merchant_is_habitual` | `AVAILABLE` | DF-5 | — | S "each account transacting only once or twice" |
+| DF-C2 | `DEVICE_FARM` | TX | `profile_depth` | `3-19` | DF-5 | — | as DF-C1 |
+| DF-C3 | `DEVICE_FARM` | TX | `avail:device_is_known_for_account` | `INSUFFICIENT_HISTORY` | DF-1, DF-2 | — | as DF-C1 |
+
+- **Why these values.** Each follows from the cited mechanism:
+  - velocity attacks: a burst of ordinary per-transaction choices of merchant, MCC, device and country,
+    whose volume also raises the account's activity;
+  - impossible travel: two transactions, hours apart and far apart, and the one decision between them;
+  - the takeover's new device, first seen in the device-event stream within hours of the change;
+  - card testing: a burst across many merchants, which adds activity and countries, a substantial
+    share of it declined;
+  - merchant collusion: G6's price is high for the collusion and ordinary for each payer;
+  - ring, credential-stuffing and device-farm rows: inside their strata, the shared device or IP pool
+    reaches accounts for which it is new, and a farm's participants are accounts with a history
+    meeting a device new to them.
+- **What is not here.** These stay judged:
+  - session jitter in `leg_speed`;
+  - judged compositions;
+  - device-farm findings outside its strata;
+  - the takeover's transaction-side findings inside ATO-5 and ATO-6;
+  - unusual-location findings inside its strata;
+  - card-testing findings inside CT-3, CT-6, CT-7 and CT-8;
+  - daily counts inside VA-3 and CT-3;
+  - impossible travel's gap inside IT-2;
+  - sample-size findings.
+
 ## 7. S1 — no undocumented exclusivity or enrichment
 
 **S1-U — unconditional.**
@@ -740,8 +821,9 @@ check, and nothing may cite them as fraud evidence.
 - **Reference.** `ref` is the LEGIT rows in `σ` if they number ≥ 30 and come from ≥ 20 accounts.
   Otherwise it is all LEGIT rows of `P`, within `b`'s stratum.
 - **(i) Sweep.** For every attribute `b` of class B or V that no row of `s` names in `P`, that is not a
-  consequence of another row of `s`, and that is not an episode consequence of `s`: for every value `v`, fail if `ENRICHED`, where `g` is `s`'s rows
-  in `σ` and the legitimate side is `ref`.
+  consequence of another row of `s`, and that is not an episode consequence of `s`: for every value `v`
+  that is not a documented consequence of `s`, scenario-wide or within `e` (§6.7), fail if `ENRICHED`,
+  where `g` is `s`'s rows in `σ` and the legitimate side is `ref`.
 - **(ii) Consequences are judged only here.** A consequence of `e` is exempt, for `s`, from R7 and from
   S1-U's precision check. S1-U still checks its support.
 - **(iii) Composition.** When `e` is `judged` and `V*` has at least two values:
@@ -1189,6 +1271,8 @@ route. None is resolved by editing this criterion.
 - **Thresholds.** All thresholds are chosen.
 - **Episode consequences.** ATO-E1, ATO-E2 and IT-E1 are judged for support only, so an enrichment of
   those attributes beyond what the episode causes would pass.
+- **Documented consequences.** §6.7's values are judged for support only within their scope, so an
+  effect at those values beyond what the mechanism causes would pass there.
 
 ## 20. Revision log
 
@@ -1234,3 +1318,27 @@ route. None is resolved by editing this criterion.
    - **Card testing's `DEVICE_SHARING`.** Its removal as a causal key is confirmed; the documented
      "from one device" stays a per-instance invariant (S7a, G4).
    - **Not changed:** the CT-3 and MC-2 near misses, the S2b ingest-lag finding, and every threshold.
+4. **2026-09-14, revision 4.** The user's decisions after the second diagnostic probe: the last planned
+   revision before the eval-v2 candidate. No eval-v2 candidate exists. Disclosed under the revision rule,
+   it follows the quarter-scale probe on revision 3 (250,000 transactions, seed 44,
+   `eval/track_a/audits/stage-2-evidence/lpc5-eval-v2-probe-quarter-scale-rev3.txt`) and its
+   pooled-contributor analysis (`eval/track_a/audits/stage-2-evidence/probe2-pooled-contributors.txt`).
+   That probe found no correctness, leakage, representation or generator defect in the data.
+   - **R8 (§5.4).** A scenario contributes materially only when it is itself `ENRICHED` for the value.
+     The enrichment test is unchanged.
+   - **Documented consequence values (§6.7).** Value-scoped entries for exactly the findings that probe
+     classified as documented behaviour:
+     - velocity-attack volume in merchant, MCC, device, country and activity attributes;
+     - impossible travel's two-transaction counts and decisions;
+     - the takeover's new device in the device-event stream;
+     - card testing's countries, activity and declines;
+     - merchant-collusion amounts under G6;
+     - ring, credential-stuffing and device-farm consequences inside their strata.
+   - **Allowlist rows (§6.4).** ATO-3 adds `rare` `ADDRESS_CHANGE`; VA-2 and VA-4 add `rare` `3-4`.
+   - **Confirmed, unchanged:** ATO-E1's prior-decision count and share (§6.6), as VA-6 treats them.
+   - **Not changed:**
+     - every threshold and the enrichment test;
+     - the generator;
+     - the CT-3 and MC-2 near misses;
+     - chance and sample-size findings;
+     - the findings §6.7 lists as not there.

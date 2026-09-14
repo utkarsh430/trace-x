@@ -96,7 +96,7 @@ def test_the_generator_rules_are_pinned() -> None:
     }
 
 
-def test_the_allowlist_has_the_revision_3_rows() -> None:
+def test_the_allowlist_has_the_revision_4_rows() -> None:
     ids = [row.row_id for row in d.ALLOWLIST]
     assert len(ids) == len(set(ids)) == 55
     assert "MC-3" not in ids
@@ -110,7 +110,7 @@ def test_the_allowlist_has_the_revision_3_rows() -> None:
     assert by_id["ATO-4"].populations == (d.Population.TX, d.Population.ID)
     # Revision 3: no minimum effect for MC-5 and DF-5; value-specific support exemptions.
     assert {row.row_id for row in d.ALLOWLIST if row.e_min is None} == {"MC-5", "DF-5"}
-    assert by_id["ATO-3"].rare == {"EMAIL_CHANGE", "PHONE_CHANGE"}
+    assert by_id["ATO-3"].rare == {"ADDRESS_CHANGE", "EMAIL_CHANGE", "PHONE_CHANGE"}  # revision 4
     assert not by_id["CT-1"].rare
     assert by_id["CT-1"].none == {"3-4", "5-9", "10-19", "20+"}
     assert by_id["CT-2"].rare == {"3-4"}
@@ -123,6 +123,7 @@ def test_the_allowlist_has_the_revision_3_rows() -> None:
     assert by_id["CT-11"].rare == {"(0,0.4)"}
     assert by_id["VA-1"].none == {"3-4", "5-9", "10-19", "20+"}
     assert by_id["VA-2"].none == by_id["VA-4"].none == {"5-9", "10-19", "20+"}
+    assert by_id["VA-2"].rare == by_id["VA-4"].rare == {"3-4"}  # revision 4
     assert by_id["VA-3"].none == {"5-9", "10-19", "20+"}
     assert dict(by_id["VA-3"].consequence_rare) == {"tx_count_24h": {"10-19"}}
     assert dict(by_id["VA-3"].consequence_none) == {"tx_count_24h": {"20+"}}
@@ -211,6 +212,58 @@ def test_episode_consequences_are_declared_once_and_never_named_or_row_consequen
                 assert name not in named | consequences, (episode.row_id, population, name)
 
 
+def test_documented_consequences_are_value_scoped_and_never_named() -> None:
+    """Revision 4 §6.7: specific values of attributes no row of the scenario names, never every
+    value of an attribute; `within` entries stay inside rows of the same scenario, unexempt."""
+    entries = d.DOCUMENTED_CONSEQUENCES
+    ids = [entry.row_id for entry in entries]
+    assert len(ids) == len(set(ids)) == 36
+    other_ids = {row.row_id for row in d.ALLOWLIST} | {e.row_id for e in d.EPISODE_CONSEQUENCES}
+    assert not set(ids) & other_ids
+    by_row = {row.row_id: row for row in d.ALLOWLIST}
+    by_id = {entry.row_id: entry for entry in entries}
+    exempt = {entry.row_id for entry in entries if entry.rare or entry.none}
+    assert exempt == {"VA-C1", "VA-C2", "ATO-C3"}
+    assert by_id["VA-C1"].none == {"5-9", "10+"}
+    assert by_id["VA-C2"].rare == {"3-4"} and by_id["VA-C2"].none == {"5+"}
+    assert by_id["ATO-C3"].none == {"<1h"}
+    assert by_id["DF-C3"].within == {"DF-1", "DF-2"}
+    scopes: set[tuple[FraudPattern, d.Population, str, str]] = set()
+    for entry in entries:
+        where = entry.row_id
+        rows = [row for row in d.ALLOWLIST if row.scenario is entry.scenario]
+        named = {row.attribute for row in rows if entry.population in row.populations}
+        consequences = {name for row in rows for name in row.consequences_in(entry.population)}
+        episodes = {
+            name
+            for episode in d.EPISODE_CONSEQUENCES
+            if episode.scenario is entry.scenario and entry.population in episode.populations
+            for name in episode.attributes
+        }
+        assert entry.values and entry.attributes, where
+        assert entry.rare <= entry.values and entry.none <= entry.values, where
+        assert not entry.rare & entry.none, where
+        assert entry.source.kind is not d.SourceKind.KEY, where
+        if entry.within:
+            assert not entry.rare and not entry.none, f"{where}: exemptions need scenario scope"
+        else:
+            assert not entry.attributes & (named | consequences | episodes), where
+        for row_id in entry.within:
+            row = by_row[row_id]
+            assert row.scenario is entry.scenario, (where, row_id)
+            assert entry.population in row.populations, (where, row_id)
+            assert row.attribute not in entry.attributes, (where, row_id)
+        for name in entry.attributes:
+            spec = d.attribute(entry.population, name)
+            assert spec.klass in (d.Klass.BEHAVIOUR, d.Klass.AVAILABILITY), (where, name)
+            if spec.values is not None:
+                assert entry.values < set(spec.values), f"{where}: {name} must stay value-scoped"
+            for scope in sorted(entry.within) or [""]:
+                key = (entry.scenario, entry.population, name, scope)
+                assert key not in scopes, (where, key)
+                scopes.add(key)
+
+
 def test_optional_field_attributes_exist_and_are_behavioural() -> None:
     assert {
         population: dict(fields) for population, fields in d.OPTIONAL_FIELD_ATTRIBUTES.items()
@@ -268,6 +321,10 @@ def test_every_citation_is_verbatim_in_its_scenario_subsection() -> None:
         assert episode.source.kind is not d.SourceKind.KEY, episode.row_id
         for fragment in episode.source.fragments:
             assert _normalised(fragment) in _normalised(body), (episode.row_id, fragment)
+    for entry in d.DOCUMENTED_CONSEQUENCES:
+        body = sections[d.CATALOGUE_SECTIONS[entry.scenario]]
+        for fragment in entry.source.fragments:
+            assert _normalised(fragment) in _normalised(body), (entry.row_id, fragment)
 
 
 def test_key_citations_admit_only_values_the_map_allows() -> None:

@@ -24,11 +24,11 @@ from trace_core.contracts.topics import TX_AUTHORIZATION_V1
 from trace_core.domain.enums import FraudPattern
 
 CRITERION_ID: Final = "LPC-5"
-REVISION: Final = 3
+REVISION: Final = 4
 CRITERION_PATH: Final = "eval/track_a/criteria/lpc-5.md"
 # The frozen document's public sha256, not a credential.
 CRITERION_SHA256: Final = (
-    "40b5733b5296c3cf32329b74e8331cb241fa56e95f5d60c6d7fbedd76b24f8fc"  # pragma: allowlist secret
+    "96dad012376f2b30aaca9450ed14c21a5803f9f3042e4bbb4f21ee672190ee28"  # pragma: allowlist secret
 )
 
 # ------------------------------------------------------------------ §3 statistics --------------
@@ -541,7 +541,7 @@ ALLOWLIST: Final[tuple[AllowRow, ...]] = (
         0.80,
         (_s("An identity change"),),
         composition=JUDGED,
-        rare=("EMAIL_CHANGE", "PHONE_CHANGE"),
+        rare=("ADDRESS_CHANGE", "EMAIL_CHANGE", "PHONE_CHANGE"),
     ),
     _row(
         "ATO-4",
@@ -789,6 +789,7 @@ ALLOWLIST: Final[tuple[AllowRow, ...]] = (
         0.60,
         (_VA_BURST,),
         composition=DOCUMENTED,
+        rare=("3-4",),
         none=("5-9", "10-19", "20+"),
     ),
     _row(
@@ -814,6 +815,7 @@ ALLOWLIST: Final[tuple[AllowRow, ...]] = (
         0.60,
         (_VA_BURST,),
         composition=DOCUMENTED,
+        rare=("3-4",),
         none=("5-9", "10-19", "20+"),
     ),
     _row(
@@ -1173,6 +1175,257 @@ EPISODE_CONSEQUENCES: Final[tuple[EpisodeConsequence, ...]] = (
         EpisodeKind.INCIDENTAL,
     ),
 )
+
+
+@dataclass(frozen=True, slots=True)
+class DocumentedConsequence:
+    """§6.7 (revision 4): specific values a documented mechanism produces in attributes no row of
+    the scenario names.
+
+    Not an allowlist row and not a signature: no `E_min`, no composition, no S7b. With no `within`
+    rows the values are DOCUMENTED CONSEQUENCES of the scenario (§6.3); with `within` rows they
+    skip S1-B's sweep inside those rows' strata only. Every other value of the attribute keeps its
+    status."""
+
+    row_id: str
+    scenario: FraudPattern
+    population: Population
+    attributes: frozenset[str]
+    values: frozenset[str]
+    source: Source
+    within: frozenset[str] = frozenset()
+    rare: frozenset[str] = frozenset()
+    none: frozenset[str] = frozenset()
+
+
+def _dc(
+    row_id: str,
+    scenario: FraudPattern,
+    population: Population,
+    attributes: tuple[str, ...],
+    values: tuple[str, ...],
+    source: Source,
+    *,
+    within: tuple[str, ...] = (),
+    rare: tuple[str, ...] = (),
+    none: tuple[str, ...] = (),
+) -> DocumentedConsequence:
+    return DocumentedConsequence(
+        row_id=row_id,
+        scenario=scenario,
+        population=population,
+        attributes=frozenset(attributes),
+        values=frozenset(values),
+        source=source,
+        within=frozenset(within),
+        rare=frozenset(rare),
+        none=frozenset(none),
+    )
+
+
+_IT_PAIR = _s("Two card-present transactions")
+_ATO_NEW_DEVICE = _s("then within hours a device the account has never used")
+_CS_LOGINS = _s("A burst of failed logins across many unrelated accounts")
+_CS_POOL = _s("from a small datacenter IP pool")
+_DF_ONCE = _s("each account transacting only once or twice")
+_MC_AMOUNTS = _s("high, unusually uniform amounts")
+_AVAILABLE = ("AVAILABLE",)
+
+DOCUMENTED_CONSEQUENCES: Final[tuple[DocumentedConsequence, ...]] = (
+    _dc(
+        "VA-C1",
+        FP.VELOCITY_ATTACK,
+        TX,
+        ("distinct_merchants_1h",),
+        ("3-4", "5-9", "10+"),
+        _VA_BURST,
+        none=("5-9", "10+"),
+    ),
+    _dc(
+        "VA-C2",
+        FP.VELOCITY_ATTACK,
+        TX,
+        ("distinct_mcc_5m",),
+        ("3-4", "5+"),
+        _VA_BURST,
+        rare=("3-4",),
+        none=("5+",),
+    ),
+    _dc(
+        "VA-C3",
+        FP.VELOCITY_ATTACK,
+        TX,
+        ("distinct_devices_24h", "distinct_countries_24h"),
+        ("3+",),
+        _VA_BURST,
+    ),
+    _dc("VA-C4", FP.VELOCITY_ATTACK, TX, ("device_age",), ("<1h",), _VA_BURST),
+    _dc("VA-C5", FP.VELOCITY_ATTACK, TX, ("account_activity",), ("51+",), _VA_BURST),
+    _dc("VA-C6", FP.VELOCITY_ATTACK, TX, ("profile_depth",), ("20-127",), _VA_BURST),
+    _dc(
+        "IT-C1",
+        FP.IMPOSSIBLE_TRAVEL,
+        TX,
+        ("tx_count_1h", "distinct_merchants_1h"),
+        ("2",),
+        _IT_PAIR,
+    ),
+    _dc("IT-C2", FP.IMPOSSIBLE_TRAVEL, TX, ("prior_decisions_1h",), ("1",), _IT_PAIR),
+    _dc("IT-C3", FP.IMPOSSIBLE_TRAVEL, TX, ("prior_declined_share_1h",), ("0",), _IT_PAIR),
+    _dc("IT-C4", FP.IMPOSSIBLE_TRAVEL, TX, ("avail:declined_ratio_1h",), _AVAILABLE, _IT_PAIR),
+    _dc(
+        "IT-C5",
+        FP.IMPOSSIBLE_TRAVEL,
+        TX,
+        ("tx_count_24h",),
+        ("2", "3-4"),
+        _IT_PAIR,
+        within=("IT-3",),
+    ),
+    _dc(
+        "IT-C6",
+        FP.IMPOSSIBLE_TRAVEL,
+        TX,
+        ("distinct_countries_24h",),
+        ("2", "3+"),
+        _s("Two card-present transactions", "great-circle distance"),
+        within=("IT-3",),
+    ),
+    _dc(
+        "IT-C7",
+        FP.IMPOSSIBLE_TRAVEL,
+        TX,
+        ("tx_count_1m", "tx_count_5m", "card_count_5m", "distinct_mcc_5m"),
+        ("1",),
+        _IT_PAIR,
+        within=("IT-2",),
+    ),
+    _dc("ATO-C1", FP.ACCOUNT_TAKEOVER, DEV, ("event_type",), ("FIRST_SEEN",), _ATO_NEW_DEVICE),
+    _dc("ATO-C2", FP.ACCOUNT_TAKEOVER, DEV, ("device_home",), ("not",), _ATO_NEW_DEVICE),
+    _dc(
+        "ATO-C3",
+        FP.ACCOUNT_TAKEOVER,
+        DEV,
+        ("device_age",),
+        ("<1h", "[1h,24h)"),
+        _ATO_NEW_DEVICE,
+        none=("<1h",),
+    ),
+    _dc(
+        "CT-C1",
+        FP.CARD_TESTING,
+        TX,
+        ("distinct_countries_24h",),
+        ("3+",),
+        _s("across many distinct merchants"),
+    ),
+    _dc("CT-C2", FP.CARD_TESTING, TX, ("account_activity",), ("31-50",), _CT_BURST),
+    _dc("CT-C3", FP.CARD_TESTING, TX, ("profile_depth",), ("20-127",), _CT_BURST),
+    _dc(
+        "CT-C4",
+        FP.CARD_TESTING,
+        TX,
+        ("outcome_event",),
+        ("DECLINED",),
+        _s("a substantial share declined"),
+    ),
+    _dc("MC-C1", FP.MERCHANT_COLLUSION, TX, ("amount_vs_account",), ("[2,5)",), _MC_AMOUNTS),
+    _dc("MC-C2", FP.MERCHANT_COLLUSION, TX, ("amount_z",), ("[0.5,1)",), _MC_AMOUNTS),
+    _dc(
+        "FR-C1",
+        FP.FRAUD_RING,
+        TX,
+        ("device_account_tx",),
+        ("1", "2", "3-5"),
+        _FR_POOL,
+        within=("FR-1",),
+    ),
+    _dc(
+        "FR-C2",
+        FP.FRAUD_RING,
+        TX,
+        ("device_accounts_24h",),
+        ("3-4", "5+"),
+        _FR_POOL,
+        within=("FR-1",),
+    ),
+    _dc(
+        "FR-C3",
+        FP.FRAUD_RING,
+        TX,
+        ("device_age",),
+        ("first-use", "[1h,24h)"),
+        _FR_POOL,
+        within=("FR-1",),
+    ),
+    _dc("FR-C4", FP.FRAUD_RING, TX, ("device_home",), ("not",), _FR_POOL, within=("FR-1",)),
+    _dc("FR-C5", FP.FRAUD_RING, TX, ("distinct_devices_24h",), ("3+",), _FR_POOL, within=("FR-1",)),
+    _dc("FR-C6", FP.FRAUD_RING, TX, ("ip_home",), ("not",), _FR_POOL, within=("FR-2",)),
+    _dc(
+        "FR-C7",
+        FP.FRAUD_RING,
+        TX,
+        ("merchant_popularity",),
+        ("31-100", "101+"),
+        _s("converging on a shared merchant set"),
+        within=("FR-3",),
+    ),
+    _dc(
+        "CS-C1",
+        FP.CREDENTIAL_STUFFING,
+        ID,
+        ("device_age",),
+        ("first-reference",),
+        _CS_LOGINS,
+        within=("CS-4",),
+    ),
+    _dc(
+        "CS-C2",
+        FP.CREDENTIAL_STUFFING,
+        ID,
+        ("device_home",),
+        ("not",),
+        _CS_LOGINS,
+        within=("CS-4",),
+    ),
+    _dc(
+        "CS-C3",
+        FP.CREDENTIAL_STUFFING,
+        TX,
+        ("ip_accounts_1h",),
+        ("2", "3-4"),
+        _CS_POOL,
+        within=("CS-5",),
+    ),
+    _dc("CS-C4", FP.CREDENTIAL_STUFFING, TX, ("ip_home",), ("not",), _CS_POOL, within=("CS-5",)),
+    _dc(
+        "DF-C1",
+        FP.DEVICE_FARM,
+        TX,
+        (
+            "avail:account_tenure_days",
+            "avail:amount_zscore_vs_account",
+            "avail:distance_from_account_home_km",
+            "avail:mcc_is_habitual_for_account",
+            "avail:merchant_is_habitual",
+        ),
+        _AVAILABLE,
+        _DF_ONCE,
+        within=("DF-5",),
+    ),
+    _dc("DF-C2", FP.DEVICE_FARM, TX, ("profile_depth",), ("3-19",), _DF_ONCE, within=("DF-5",)),
+    _dc(
+        "DF-C3",
+        FP.DEVICE_FARM,
+        TX,
+        ("avail:device_is_known_for_account",),
+        ("INSUFFICIENT_HISTORY",),
+        _DF_ONCE,
+        within=("DF-1", "DF-2"),
+    ),
+)
+"""§6.7 (revision 4): exactly the findings the second diagnostic probe classified as documented
+behaviour, value by value."""
 
 OPTIONAL_FIELD_ATTRIBUTES: Final[Mapping[Population, Mapping[str, tuple[str, ...]]]] = (
     MappingProxyType(
