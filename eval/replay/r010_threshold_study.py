@@ -40,6 +40,7 @@ import yaml
 from eval.replay import gateway_replay
 from eval.replay.attribute_rule_changes import (
     EPOCH,
+    ROOT,
     RULE_PACK,
     WINDOW_MS,
     _labels,
@@ -155,6 +156,14 @@ def operating_points(
     return points
 
 
+def _relative(path: Path) -> str:
+    """A repository path, so two files sharing a name cannot be confused in the report."""
+    try:
+        return str(path.resolve().relative_to(ROOT))
+    except ValueError:
+        return str(path)
+
+
 def _sha256(path: Path) -> str:
     return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -180,8 +189,8 @@ def render(
         "|---|---|",
         f"| transactions decided | {transactions:,} |",
         f"| decisions file | `{decisions_path.name}` `{_sha256(decisions_path)}` |",
-        f"| rule pack | `{RULE_PACK.name}` `{_sha256(RULE_PACK)}` |",
-        f"| thresholds | `{DEFAULT_CONFIG.name}` `{_sha256(DEFAULT_CONFIG)}` |",
+        f"| rule pack | `{_relative(RULE_PACK)}` `{_sha256(RULE_PACK)}` |",
+        f"| thresholds | `{_relative(DEFAULT_CONFIG)}` `{_sha256(DEFAULT_CONFIG)}` |",
         f"| declared R010 threshold | {declared} |",
         "",
         "## Self-checks",

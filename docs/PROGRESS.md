@@ -680,7 +680,7 @@ both reports.
 | U6 | Whether Phase 13 (Go gateway) is worth doing | Phase 13 entry |
 | **U7** | **Decided 2026-09-14: authorization decisions are their own dated events.** A transaction's own outcome is post-decision and never enters its own features. Outcomes arrive as `tx.authorization.v1` events (field `authorization_outcome`). PostgreSQL records them first and decides duplicates and conflicts; the Redis store holds derived state only. An outcome is pending until its transaction is known with the same account, and pending outcomes never count. `declined_ratio_1h` reads only verified outcomes decided before `as_of` and known before the read, never the scored transaction's own (`CurrentObservation.PRIOR_KNOWN`, feature set 3.0.0). Historical sources replay the transaction first and the decision after it, through the declared delay model DM-1. Designed in ADR-0049 (Proposed). **Partly implemented (Stage 2 step 7):** the stream and its producers (unit 1); feature set 3.0.0 in the reference implementation (unit 2a), the Redis store and the gateway (unit 2b); outcome replay (unit 3a). The `LPC-5` availability provider follows | Decided; implementation in Stage 2 step 7 |
 | **U9** | **Decided 2026-09-14: snake_case** for every data-platform identifier -- schema and table identifiers and the lake directories derived from them, streaming query and checkpoint names, Delta transaction app ids, Databricks job and task identifiers, and metric and manifest identifiers for the same logical name. CLAUDE.md §6 amended narrowly; no mapping layer; a consistency test pins it (ADR-0048) | Decided |
-| **U10** | **Decided 2026-09-14: R010 stays at `device_distinct_accounts_24h >= 5`.** The `eval-v1` replay delta -- 9 more legitimate and 3 more fraud high-risk decisions, all attributed to self-inclusion -- is expected semantic drift, not a regression. Not retuned on `eval-v1`, whose device-related label proxies would fit the ruleset to a flawed dataset. A threshold study follows on `eval-v2` (NEXT EXECUTABLE TASKS); any change is a separate, versioned ruleset decision | Decided |
+| **U10** | **Decided 2026-09-14: R010 stays at `device_distinct_accounts_24h >= 5`.** The `eval-v1` replay delta -- 9 more legitimate and 3 more fraud high-risk decisions, all attributed to self-inclusion -- is expected semantic drift, not a regression. Not retuned on `eval-v1`, whose device-related label proxies would fit the ruleset to a flawed dataset. The threshold study ran on `eval-v2` on 2026-09-14 and found no clear better operating point, so R010 stays at 5 (`benchmarks/gateway/r010-threshold-study-eval-v2.md`); any change is a separate, versioned ruleset decision | Decided; studied |
 
 ---
 
@@ -1176,11 +1176,53 @@ Phase 3, in the wave order of `docs/PHASE3_PLAN.md` §5:
          - The unit and self-tests, the smoke controls and the control framework are unchanged.
          - The host slept on low battery at 21:44:37Z, 25 s into the eval-v1 control, and resumed on AC
            at 22:05:51Z. That run's wall time includes the pause; its result does not depend on it.
-   12. Freeze the manifest and digests.
-   13. Re-run replay validation, rules validation, the R010 study and the Phase 2 manual comparison.
+   12. **eval-v2 frozen (2026-09-14).** `eval/track_a/eval-v2.manifest.json`.
+       - Materialisation run `gen-20260914-eval-v2-276b661d`, at `a4b3d4c` on a clean tree, reproduced
+         every candidate stream digest before ground truth was written.
+       - The manifest records the files' digests, the materialisation's provenance and `lpc5`: strict
+         acceptance FAIL, Category A findings 0, not compliant, with the Category B and C reasons and
+         the disclosures.
+       - `tests/unit/test_eval_v2_freeze.py` keeps it honest; its slow lane regenerates every stream.
+   13. **Replay validation, rule re-validation and the R010 study, on feature set 3.0.0 (2026-09-14).**
+       - **Harness.** Changes found by replaying eval-v2:
+         - prefix loading now cuts context streams at the horizon while reading;
+         - a replay refuses a system of record holding another dataset's outcomes or cases;
+         - new options `--vouch-from-manifest`, `--decisions`, `--withhold-outcomes` and `--report`.
+
+         The procedure is in `docs/LOCAL_DEVELOPMENT.md`.
+       - **eval-v1 manual replay.** The 60,000-transaction prefix, with outcomes derived from eval-v1's
+         run record, on a store vouched from the window start: `benchmarks/gateway/triage-bands.md`.
+       - **Rule re-validation, controlled.** The same prefix through the same client, on the 2.0.0
+         gateway (`b43a75c`, outcomes withheld) and on 3.0.0, produced byte-identical decision files:
+         no rule, score or band changed (`benchmarks/gateway/rule-revalidation-fs3.md`).
+         - R002, the only rule reading the feature 3.0.0 changes, fired in neither run.
+         - Profile rules abstain on a store vouched from the window start.
+
+         Both limits are disclosed there.
+       - **eval-v2 replay.** The 60,000-transaction prefix on 3.0.0, with eval-v2's LPC-5 status:
+         `benchmarks/gateway/triage-bands-eval-v2.md`.
+       - **R010 threshold study (U10): R010 stays at `>= 5`.**
+         `benchmarks/gateway/r010-threshold-study-eval-v2.md`.
+         - Both self-checks are clean: recomputed bands match the gateway's, and offline R010
+           agrees with the served R010 on every decision.
+         - At 6, the legitimate high-risk decisions R010 alone causes disappear, but so do about a
+           fifth of its fraudulent ones.
+         - At 4, the legitimate ones rise by an order of magnitude.
+
+         Neither is clear evidence of a better operating point on a prefix of a non-compliant
+         dataset, so the ruleset is unchanged.
+       - **Found along the way, not Category A.** Frozen datasets reuse positional transaction ids, so
+         replaying a second dataset into the same system of record meets a correct 409. The harness
+         now refuses first.
+       - **The eval-v2 Stage 2 sub-track is CLOSED for Phase 3** (user decision, 2026-09-14). `LPC-5`
+         reopens only for a downstream Category A correctness or leakage defect; Category B or C
+         findings do not. Further synthetic-data work is D16, and acceptance-scale controls are D15.
+       - **Remaining feature set 3.0.0 gate:** the Phase 2 load gate on 3.0.0, for
+         `P3.semantics-hardening`.
 
    No `LPC-5` threshold is tuned after the final candidate is seen.
-3. **R010 threshold study (U10)**, once `eval-v2` is frozen and its label-proxy checks pass. Compare
+3. ~~**R010 threshold study (U10)**~~ **Done 2026-09-14 on eval-v2, with its LPC-5 FAIL disclosed:
+   R010 stays at 5** (Stage 2 step 13). Originally: once `eval-v2` is frozen and its label-proxy checks pass. Compare
    candidate thresholds on fraud recall, false-positive rate, legitimate and fraud high-risk counts,
    the business and risk trade-off, and confidence intervals or sample counts, with attribution
    confirming R010 is responsible. Any change is a separate, versioned ruleset decision.

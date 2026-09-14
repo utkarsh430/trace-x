@@ -11,15 +11,15 @@ numbers with no meaning attached (CLAUDE.md §13). The question it answers is wh
 the hot path puts known fraud into the bands that open an investigation more often
 than it does legitimate traffic. A 'no' would mean the rules are blind.
 
-Dataset `eval-v1`, 60,000 transactions scored.
+Dataset `eval-v2`, 60,000 transactions scored.
 
 ## What was replayed
 
 | stream | events |
 |---|---|
 | `tx.raw.v1` | 60,000 |
-| `identity.events.v1` | 41 |
-| `device.events.v1` | 5 |
+| `identity.events.v1` | 63,168 |
+| `device.events.v1` | 2,123 |
 | `tx.authorization.v1` | 59,999 |
 
 All four released ingress streams, merged on `occurred_at` and replayed in that
@@ -28,7 +28,7 @@ order, an outcome after transactions at one instant. Transactions alone would ho
 permanently absent, and every rule over them would abstain rather than fire.
 
 **Event-time projection:** every event shifted forward by one constant of
-`21,900,013s` (253 days), applied identically to all
+`21,900,270s` (253 days), applied identically to all
 four streams. Relative gaps and cross-stream ordering are preserved exactly; the
 frozen dataset is unmodified. Without it every decision in the run carries the
 `occurred_at_backdated` flag -- correct, since the events really are old, but a
@@ -40,33 +40,24 @@ among it.
 Feature set `3.0.0` reads verified authorization outcomes, never a
 transaction's own request field (ADR-0049 §5).
 
-The dataset has no `tx.authorization.v1` stream, so 59,999
-outcomes were derived from its transactions' outcome column by the generator's own
-builder (DM-1: 40 ms + |N(300 ms, 150 ms)|, keyed by the seed and the transaction id; seed `42`, the source
-manifest's). Loaded transactions whose column derives nothing:
-
-| value | transactions |
-|---|---|
-| _none_ | 0 |
+Replayed from the dataset's `tx.authorization.v1` stream: 59,999 outcomes.
 
 ## Triage bands
 
 | label | LOW | MEDIUM | HIGH | CRITICAL | triaged |
 |---|---|---|---|---|---|
-| fraudulent (322) | 193 | 4 | 8 | 117 | 38.8% |
-| legitimate (59,678) | 59,650 | 0 | 2 | 26 | 0.0% |
+| fraudulent (143) | 60 | 0 | 0 | 83 | 58.0% |
+| legitimate (59,857) | 59,841 | 0 | 1 | 15 | 0.0% |
 
 ## Rules that fired, by label
 
 | rule | on fraud | on legitimate |
 |---|---|---|
-| `R001_card_testing_burst` | 62 | 0 |
-| `R003_card_probing_velocity` | 53 | 0 |
-| `R004_velocity_spike_1m` | 10 | 0 |
-| `R005_velocity_spike_5m` | 29 | 0 |
-| `R007_impossible_travel` | 16 | 12 |
-| `R010_device_shared_across_accounts` | 43 | 14 |
-| `R015_high_value_anomaly` | 5 | 2 |
+| `R001_card_testing_burst` | 33 | 0 |
+| `R003_card_probing_velocity` | 15 | 0 |
+| `R007_impossible_travel` | 3 | 0 |
+| `R010_device_shared_across_accounts` | 47 | 15 |
+| `R015_high_value_anomaly` | 0 | 1 |
 
 ## Degradation
 
@@ -81,8 +72,10 @@ to look for an outage that did not happen.
 
 ## Reading this honestly
 
-- Known fraud is triaged at **38.8%** against **0.0%** for legitimate traffic. The hot path separates them, which is what this check asks.
+- Known fraud is triaged at **58.0%** against **0.0%** for legitimate traffic. The hot path separates them, which is what this check asks.
 - A replayed prefix is not a fraud rate: which scenarios fall inside it is a property of where the prefix ends, not of the dataset.
 - Every transaction was scored against a cold store that warmed as the replay proceeded, so early transactions had less history than later ones -- the same condition a real deployment starts in.
 
-**Feature store:** vouched from the shifted window start, 2026-09-11T11:20:13.428763Z.
+**Feature store:** vouched from the shifted window start, 2026-09-11T11:24:30.615261Z.
+
+**eval-v2 status.** `LPC-5` strict acceptance: FAIL; Category A findings: 0 (`eval/track_a/eval-v2.manifest.json`). eval-v2 is not `LPC-5` compliant, its scenario mix is a coverage floor, and no natural fraud prevalence may be claimed from it.
