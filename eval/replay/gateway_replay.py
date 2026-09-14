@@ -223,6 +223,10 @@ def load_streams(
     merged: list[tuple[dt.datetime, str, dict[str, Any]]] = []
     horizon: dt.datetime | None = None
 
+    # Transactions first: they fix the horizon. Every other stream is then kept only up to it while
+    # it is read. Rows beyond the horizon were always dropped (below); keeping them until then made
+    # a short prefix of a dataset with a full identity or outcome stream -- eval-v2 -- hold every
+    # row of those files in memory at once.
     for topic in ("tx.raw.v1", "identity.events.v1", "device.events.v1"):
         path = dataset_dir / f"{topic}.parquet"
         if not path.exists():
@@ -238,6 +242,8 @@ def load_streams(
                     break
                 taken += 1
                 horizon = occurred if horizon is None else max(horizon, occurred)
+            elif horizon is None or occurred > horizon:
+                continue
             merged.append((occurred, topic, record))
 
     if horizon is None:
@@ -246,10 +252,10 @@ def load_streams(
     omitted: Counter[str] = Counter()
     derived = not (dataset_dir / f"{TX_AUTHORIZATION_V1}.parquet").exists()
     if not derived:
-        merged.extend(
-            (_parse(record["envelope"]["occurred_at"]), TX_AUTHORIZATION_V1, record)
-            for record in records(TX_AUTHORIZATION_V1)
-        )
+        for record in records(TX_AUTHORIZATION_V1):
+            occurred = _parse(record["envelope"]["occurred_at"])
+            if occurred <= horizon:
+                merged.append((occurred, TX_AUTHORIZATION_V1, record))
     elif seed is None:
         raise SystemExit(
             f"{dataset_dir} has no {TX_AUTHORIZATION_V1} stream, and deriving its outcomes needs "
@@ -428,6 +434,39 @@ def vouch(store: Any, *, epoch_ms: int, open_holes: int) -> None:
 
 def _text_key(key: Any) -> str:
     return key.decode() if isinstance(key, bytes) else str(key)
+
+
+RESET_STATE_SQL: Final = (
+    "TRUNCATE app.case_transitions, app.investigation_queue, app.cases, app.outbox, "
+    "app.authorization_outcomes"
+)
+"""What a local operator runs, as the database owner, before replaying a different dataset."""
+
+
+def existing_state_problem(*, outcomes: int, cases: int, reuse: bool) -> str | None:
+    """Why a replay may not start on the system of record it found, or None.
+
+    Frozen datasets reuse positional transaction ids, so a second dataset replayed onto a system
+    of record holding the first one's outcomes meets a 409 conflict mid-run, and its triage reuses
+    the first dataset's cases. Refused unless the operator asserts the rows came from this same
+    dataset (`--reuse-existing-state`), where every repeat is an identical, idempotent delivery."""
+    if reuse or (outcomes == 0 and cases == 0):
+        return None
+    return (
+        f"the system of record already holds {outcomes:,} authorization outcome(s) and {cases:,} "
+        f"case(s) for this prefix's transaction ids. If they came from another dataset, reset it "
+        f"locally as the database owner ({RESET_STATE_SQL}); if they came from this one, pass "
+        f"--reuse-existing-state."
+    )
+
+
+def withhold_outcomes(
+    events: list[tuple[dt.datetime, str, dict[str, Any]]],
+) -> list[tuple[dt.datetime, str, dict[str, Any]]]:
+    """The same events without `tx.authorization.v1`: for a controlled comparison against a
+    gateway that predates ADR-0049 and has no outcome route. Transactions, identity and device
+    events are unchanged, in the same order."""
+    return [event for event in events if event[1] != TX_AUTHORIZATION_V1]
 
 
 def write_decisions(path: Path, replayed: list[Replayed]) -> None:
@@ -680,6 +719,19 @@ def main() -> int:
         help="Also write every decision, unlabelled, as JSON lines.",
     )
     parser.add_argument(
+        "--withhold-outcomes",
+        action="store_true",
+        help="Do not post authorization outcomes: only to compare with a gateway that predates "
+        "ADR-0049. Outcomes are still loaded or derived, so a dataset without the stream still "
+        "needs --source-manifest, and then withheld: the events and the time shift match the "
+        "run that posts them. The report says so.",
+    )
+    parser.add_argument(
+        "--reuse-existing-state",
+        action="store_true",
+        help="Replay onto a system of record that already holds this dataset's outcomes or cases.",
+    )
+    parser.add_argument(
         "--vouch-from-manifest",
         type=Path,
         default=None,
@@ -718,6 +770,32 @@ def main() -> int:
         return 2
 
     events, outcome_source = load_streams(args.dataset_dir, limit=args.limit, seed=seed)
+    prefix_ids = [
+        str(record["payload"]["transaction_id"])
+        for _o, topic, record in events
+        if topic == "tx.raw.v1"
+    ]
+    import psycopg
+
+    with psycopg.connect(_eval_dsn()) as conn:
+        found_outcomes = conn.execute(
+            "SELECT count(*) FROM app.authorization_outcomes WHERE transaction_id = ANY(%s)",
+            (prefix_ids,),
+        ).fetchone()
+        found_cases = conn.execute(
+            "SELECT count(*) FROM app.cases WHERE trigger_transaction_id = ANY(%s)", (prefix_ids,)
+        ).fetchone()
+    problem = existing_state_problem(
+        outcomes=int(found_outcomes[0]) if found_outcomes else 0,
+        cases=int(found_cases[0]) if found_cases else 0,
+        reuse=args.reuse_existing_state,
+    )
+    if problem is not None:
+        print(f"refused: {problem}", file=sys.stderr)
+        return 2
+    if args.withhold_outcomes:
+        events = withhold_outcomes(events)
+        print("authorization outcomes WITHHELD: a comparison against a pre-ADR-0049 gateway")
     shifted, delta = shift_to_now(events)
     fingerprint = hashlib.sha256(
         f"{args.dataset_version}:{args.limit}:{int(delta.total_seconds())}:{seed}".encode()
@@ -786,6 +864,11 @@ def main() -> int:
         outcome_source=outcome_source,
     )
     report += f"\n**Feature store:** {store_note}.\n"
+    if args.withhold_outcomes:
+        report += (
+            "\n**Authorization outcomes were withheld** for a comparison against a gateway that "
+            "predates ADR-0049; this is not the feature set 3.0.0 replay.\n"
+        )
     args.report.parent.mkdir(parents=True, exist_ok=True)
     args.report.write_text(report)
     print(report)

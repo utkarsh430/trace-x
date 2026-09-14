@@ -296,6 +296,11 @@ make seed ARGS="--rows 10000 --no-groundtruth --out /tmp/tx"
 # Publish to Kafka instead of files (needs the `stream` extra, a broker and `make kafka-topics`).
 # The run fails, and writes no run record, unless every event is confirmed delivered.
 make seed ARGS="--sink kafka --bootstrap localhost:9092"
+
+# A frozen dataset, exactly as its manifest describes it (eval-v2's gate included). Refused unless
+# the configuration digest matches, and exits before writing ground truth unless every recorded
+# stream digest is reproduced.
+make seed ARGS="--manifest eval/track_a/eval-v2.candidate.manifest.json --sink parquet --out data/generated"
 ```
 
 Useful options:
@@ -308,7 +313,8 @@ Useful options:
 | `--fraud-rate` | Target fraudulent share. Has no effect below the coverage floor — see `docs/FRAUD_SCENARIOS.md` §2. |
 | `--validate` | `all` (default), `sample`, or `none`. Produce-time schema validation (`docs/EVENT_CONTRACTS.md` §6.1). Whichever is used is recorded in the run record. |
 | `--no-groundtruth` | Skip the PostgreSQL write. |
-| `--sink` | `jsonl`, `kafka`, or `none`. `none` measures generation without I/O. |
+| `--sink` | `jsonl`, `parquet`, `kafka`, or `none`. `none` measures generation without I/O. |
+| `--manifest` | Generate a frozen manifest's configuration instead of the sizing options, and verify its digests. |
 
 **Every run writes a record** to `eval/manifest/`. That record is what
 `make check-claims` resolves when a number appears in the documentation — a measurement with no
@@ -318,6 +324,45 @@ publishable**, and the CLI says so when it happens.
 Ground truth is written as `trace_generator`, a role that may **insert** labels and cannot **read**
 them (ADR-0031). If that step fails, the command exits non-zero rather than leaving a dataset nobody
 can evaluate.
+
+## Replaying a frozen dataset through the gateway
+
+`eval/replay/gateway_replay.py` posts a dataset's prefix to the running gateway in event-time order,
+then joins labels as `trace_eval`. `eval/replay/r010_threshold_study.py` reads its saved decisions.
+
+```bash
+set -a; . ./.env; set +a
+
+# 1. The gateway must run the code you mean to validate.
+docker compose -f deploy/compose.yml --env-file .env --profile core up -d --build gateway
+
+# 2. Switching datasets? Reset the replay tables first, as the database owner. Frozen datasets reuse
+#    positional transaction ids, so a second dataset's outcomes conflict with the first one's (409)
+#    and its triage reuses the first one's cases. The harness refuses rather than finding out mid-run;
+#    `--reuse-existing-state` is for replaying the same dataset again.
+docker exec -e PGPASSWORD="$POSTGRES_SUPERUSER_PASSWORD" tracex-postgres-1 psql -U "$POSTGRES_SUPERUSER" \
+  -d tracex -c "TRUNCATE app.case_transitions, app.investigation_queue, app.cases, app.outbox, app.authorization_outcomes"
+
+# 3. An empty feature store, vouched for the whole replay from the dataset's shifted window start.
+docker exec tracex-redis-1 redis-cli -n 0 FLUSHDB
+.venv/bin/python eval/replay/gateway_replay.py --dataset-dir data/generated/eval-v2 \
+  --dataset-version eval-v2 --limit 60000 --vouch-from-manifest eval/track_a/eval-v2.manifest.json \
+  --decisions /tmp/decisions.jsonl --report benchmarks/gateway/triage-bands-eval-v2.md
+
+# 4. R010's operating points from those decisions.
+.venv/bin/python -m eval.replay.r010_threshold_study --dataset-dir data/generated/eval-v2 \
+  --dataset-version eval-v2 --limit 60000 --decisions /tmp/decisions.jsonl \
+  --report benchmarks/gateway/r010-threshold-study-eval-v2.md
+```
+
+- **eval-v1 has no outcome stream.** Pass its generation run record as `--source-manifest`
+  (`eval/manifest/gen-20260912-eval-v1-ccfd38d9.json`) so outcomes are derived with its seed.
+- **`history_incomplete` on every decision is expected** for a prefix of a few days. The store is
+  vouched from the window start, and a 30-day feature cannot be complete inside a few days of data, so
+  profile rules abstain. Windowed rules are unaffected.
+- **Comparing with an older gateway** that predates authorization outcomes: run it on another port and
+  add `--withhold-outcomes --base-url http://localhost:8011`. Outcomes are still derived and then
+  withheld, so both runs see the same events and time shift.
 
 ## Regenerating event models
 

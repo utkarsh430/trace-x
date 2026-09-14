@@ -278,3 +278,56 @@ def test_vouching_sets_the_epoch_only_on_an_empty_store_without_open_holes() -> 
         vouch(_FakeStore([EPOCH_KEY, "f:acct:x"]), epoch_ms=1_000, open_holes=0)
     with pytest.raises(SystemExit, match="open feature-store hole"):
         vouch(_FakeStore([]), epoch_ms=1_000, open_holes=1)
+
+
+def test_withholding_outcomes_drops_only_the_outcome_stream_in_order() -> None:
+    from eval.replay.gateway_replay import withhold_outcomes
+
+    at = dt.datetime(2026, 1, 1, tzinfo=dt.UTC)
+    events = [
+        (at, "tx.raw.v1", {"n": 1}),
+        (at, TX_AUTHORIZATION_V1, {"n": 2}),
+        (at, "identity.events.v1", {"n": 3}),
+        (at, TX_AUTHORIZATION_V1, {"n": 4}),
+        (at, "device.events.v1", {"n": 5}),
+    ]
+    assert [event[2]["n"] for event in withhold_outcomes(events)] == [1, 3, 5]
+
+
+def test_a_replay_refuses_a_system_of_record_holding_another_run_unless_reuse_is_asserted() -> None:
+    from eval.replay.gateway_replay import RESET_STATE_SQL, existing_state_problem
+
+    assert existing_state_problem(outcomes=0, cases=0, reuse=False) is None
+    problem = existing_state_problem(outcomes=59_999, cases=153, reuse=False)
+    assert problem is not None
+    assert "59,999" in problem and RESET_STATE_SQL in problem
+    assert existing_state_problem(outcomes=59_999, cases=153, reuse=True) is None
+
+
+def test_loading_keeps_exactly_the_rows_a_full_read_then_horizon_cut_would(
+    with_stream: Path,
+) -> None:
+    """Context streams are cut at the horizon while they are read, not after: a short prefix of a
+    dataset with full identity and outcome streams must not hold every row. The result is the same
+    events, in the same order, as reading everything and cutting afterwards."""
+    import pyarrow.parquet as pq
+
+    def every(topic: str) -> list[tuple[dt.datetime, str, dict[str, Any]]]:
+        table = pq.read_table(with_stream / f"{topic}.parquet")
+        return [(_at(row["envelope"]["occurred_at"]), topic, row) for row in table.to_pylist()]
+
+    transactions = every(TX)[:LIMIT]
+    horizon = max(at for at, _, _ in transactions)
+    context = [
+        row
+        for topic in ("identity.events.v1", "device.events.v1", TX_AUTHORIZATION_V1)
+        for row in every(topic)
+    ]
+    assert any(at > horizon for at, topic, _ in context if topic == "identity.events.v1")
+    assert any(at > horizon for at, topic, _ in context if topic == TX_AUTHORIZATION_V1)
+    expected = [row for row in [*transactions, *context] if row[0] <= horizon]
+    expected.sort(key=lambda row: (row[0], REPLAY_ORDER[row[1]]))
+
+    events, source = load_streams(with_stream, limit=LIMIT)
+    assert [(at, topic, record) for at, topic, record in events] == expected
+    assert source.count == sum(1 for _, topic, _ in expected if topic == TX_AUTHORIZATION_V1)
