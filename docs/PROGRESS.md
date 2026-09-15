@@ -748,8 +748,28 @@ both reports.
     2's record are kept outside the repository as diagnostic history, never published. Run ids are now
     unique per run, and a record is never overwritten. Because arm order is part of the method, and
     the critic fixes change the hot path, the A/B reruns in full after those fixes land.
-  * **Not yet built:** the critic fixes, then the controlled hot-path A/B (slice 6), which also decides
-    where the relay runs.
+  * **The authorization-outcome delivery watermark (user decision, Option 1, 2026-09-15): in progress.**
+    Authorization outcomes change online state outside session coverage (critic finding B4). The user
+    chose an outbox delivery watermark over a second gateway sequencing path.
+    * **Implemented:**
+      * migration 0008, `app.outbox_delivery_watermark`: per topic, moves only forward, never in the
+        future; `trace_app` may create and advance it, never move it back or delete it;
+      * `trace_core.observation.outbox_watermark.advance`, which runs inside a transaction and never
+        passes an unpublished, refused or still-uncommitted authorization row. It reads marks, never
+        record counts, so duplicates cannot move it;
+      * `trace_core.observation.history_completeness.assess_history`: COMPLETE only when no
+        observation gap intersects the horizon, the log was assessed through its end, and the
+        watermark clears it.
+    * **Evidence (2026-09-15):** `tests/unit/test_history_completeness.py` and
+      `tests/integration/test_outbox_delivery_watermark.py` against PostgreSQL, 16 passed. They include
+      a row written by a still-open transaction that a naive bound would have passed, and the
+      watermark holding at it.
+    * **Waiting on the critic fixes to `outbox_relay.py`:** the relay advancing the watermark in its
+      marking transaction, the relay-level tests (a partial batch stops at the first unconfirmed row),
+      and a chaos test in which a confirmed batch loses its marking commit, is re-delivered as
+      duplicates, and history stays INCOMPLETE until the rows are marked.
+  * **Not yet built:** the critic fixes and the watermark's relay wiring, then the controlled hot-path
+    A/B (slice 6), which also decides where the relay runs.
 * **Step E — `eval-v2`.** Stages 1, 1b and 1c are complete. Their code is integrated onto this branch.
   * **Integration.** The worktree branch `worktree-agent-aae9faa608636c9c8` was fast-forwarded to the
     phase branch, and the Step E work was committed on top. The phase branch fast-forwards to it.

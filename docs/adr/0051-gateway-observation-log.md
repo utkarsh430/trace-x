@@ -36,6 +36,9 @@
   sequenced until they do.
 - **Not covered, by design:** authorization outcomes and investigations keep the transactional outbox
   (ADR-0007, ADR-0049). Their durability comes from PostgreSQL, not from a session.
+- **Authorization outcomes still change online state**, so their history's completeness is covered
+  separately, by the outbox delivery watermark in §5 (user decision, 2026-09-15). No second
+  gateway sequencing or durability path is added for them.
 
 ### 2. Producer sessions (fencing)
 - **Migration 0006, `app.producer_sessions`:** `session_id`, `producer`, `instance_id`, `started_at`,
@@ -114,6 +117,21 @@ Bronze (Step 5) applies it; it is stated here because the producer must make it 
 - A gateway record without session headers is a gap.
 - A live session certifies only its contiguous prefix below Bronze's high-water mark.
 - Arrival-time gaps map to event time conservatively (§4.1 point 6).
+- **Authorization outcomes: the outbox delivery watermark (user decision, 2026-09-15).**
+  - `delivered_through` is the time before which every `tx.authorization.v1` outbox row has a
+    confirmed Kafka delivery. It is stored per topic (migration 0008), moves only forward, never
+    lies in the future, and so survives a restart.
+  - The relay advances it in the transaction that marks confirmed rows published. The candidate
+    is the least of that transaction's start, the start of the oldest other open `trace_app`
+    transaction (read first), and the oldest unpublished row's `created_at`. So it never passes
+    an unconfirmed, refused or uncommitted row. This relies on `created_at` being the inserting
+    transaction's start (migration 0007) and on only `trace_app` inserting outbox rows.
+  - It reads which rows are marked, never how many records Kafka holds, so at-least-once
+    duplicates cannot move it.
+  - **Feature history is COMPLETE over a horizon only when both paths vouch**
+    (`trace_core.observation.history_completeness.assess_history`): no observation-coverage gap
+    intersects it, the log was assessed through its end, and the watermark clears its end by the
+    clock margin. Any unresolved gap on either path keeps it INCOMPLETE.
 
 ### 6. `tx.scored.v1`
 - **Key:** `account_id`. **Dedup identity:** `payload.transaction_id`.
