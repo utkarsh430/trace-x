@@ -1101,8 +1101,41 @@ both reports.
       re-run of Phase 2's load gate measures this layout's real end-of-run memory (ADR-0054 §3).
     * **Evidence:** `tests/unit/test_memory_model.py` 7 passed; every measured family non-zero; the
       record is clean.
-  * **Still to run:** score latency by account depth, the other Step 12 measurement, on a quiet
-    machine after the Silver suites.
+  * **Score latency by account depth, measured (2026-09-15)**, on a quiet machine and a clean commit
+    (`run_id: bench-20260915-071647-score-latency-86fabdbf`, `benchmarks/features/SCORE_LATENCY.md`).
+    * *What it measures.* One account, one throwaway Redis, 200 scores per depth. Depth is the
+      transactions the account holds in its 25-hour raw window.
+    * *The result.* Cost grows about linearly with depth, and the client's decoding and reductions
+      dominate the Redis script's own time. At depth 8,192 a score took p50 171.5 ms and p99
+      190.3 ms, and the script alone 32.8 ms per call; at depth 2,048, p99 54.8 ms and 6.9 ms
+      (`run_id: bench-20260915-071647-score-latency-86fabdbf`).
+  * **A security finding from it: the depth that makes scoring blind is adversary-controlled.**
+    * *Why the depth matters.* The gateway's Redis client has a 20 ms socket timeout
+      (`REDIS_TIMEOUT_S`) and no retries. A score whose script outruns it goes rules-only
+      (`redis_unavailable`), is recorded as a coverage hole, and counts toward the store-wide breaker,
+      which opens after 3 consecutive failures for 5 s. The script crosses the timeout between depths
+      2,048 and 8,192 (`run_id: bench-20260915-071647-score-latency-86fabdbf`).
+    * *Nothing bounds one account's depth.* The rate limiter is keyed per API token, not per account.
+    * *What follows.*
+      - A deep account's own transactions lose their feature-based checks.
+      - A diagnostic probe with no `run_id` also saw other accounts' calls exceed the timeout while
+        one deep account scored. It used a throwaway Redis and the gateway's client settings.
+        Redis runs scripts on one thread, so a long script delays every other call.
+      - The breaker did not open in that probe. The probe did not feed the deep account's own
+        failures to it, so a breaker trip from a burst is plausible and unmeasured.
+    * **Decided by the user (2026-09-15): cap the score-time read and make depth a signal.**
+      * A score reads at most a declared number of each window's most recent observations.
+      * Above the cap, the context says so explicitly: a depth-capped flag, with counts as declared
+        lower bounds.
+      * Policy treats a capped read as a risk signal, not a blind spot.
+      * *Not chosen:* pre-aggregating windows in the Lua script, a per-account admission cap, and
+        leaving it as a known limit.
+      * *Next:*
+        - the lead designs the cap as an ADR-0046 amendment: its value fixed before the load gate is
+          re-measured, the features it covers, the flag, policy's treatment, and what parity and Gold
+          do with a capped read;
+        - the reference, the Redis store and Gold then implement it against shared fixtures.
+      * Step 12 stays in progress until the cap is implemented and re-measured.
 * **Step 6 — Silver: complete** (ADR-0053, Proposed; `P3.event-time` PASS, 2026-09-15).
   * **Design (ADR-0053):**
     * **Tables:** one canonical Silver table per released topic, plus shared `silver.late_events`
