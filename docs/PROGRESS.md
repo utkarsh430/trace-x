@@ -1279,8 +1279,10 @@ both reports.
         after the latency benchmark, which had already written its report, so the worktree was
         dirty and the record said so. The record is set aside in the session scratchpad. The model
         is re-run on a clean commit next.
+      * **Memory model re-measured for the per-stream identity layout** (`run_id: bench-20260915-095206-memory-model-77d9afa4`, clean
+        commit): the ten-minute run 477.7 MiB, which implies a 640 MiB limit, and steady state 37,401.9 MiB.
+        The configured limit stays until the load gate re-runs (ADR-0054).
       * **Still to do:**
-        - the memory model on a clean commit, since identity events now use one set per stream;
         - the Phase 2 load gate re-run, measuring latency with the cap in place.
       * Step 12 stays in progress until then.
 * **Step 6 — Silver: complete** (ADR-0053, Proposed; `P3.event-time` PASS, 2026-09-15).

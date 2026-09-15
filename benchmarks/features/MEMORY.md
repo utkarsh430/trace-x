@@ -1,7 +1,7 @@
 # Online feature store — memory model
 
 > Written by `benchmarks/features/memory_model.py`, never by hand. Every figure comes
-> from the run recorded as `run_id: bench-20260915-054159-memory-model-5ee55136`, which `make check-claims` resolves.
+> from the run recorded as `run_id: bench-20260915-095206-memory-model-77d9afa4`, which `make check-claims` resolves.
 
 Measured through `RedisOnlineFeatureStore` itself, the Step 1b layout (ADR-0046 §5), on a
 throwaway `redis:7-alpine` (Redis 7.4.11), with Redis's exact
@@ -12,14 +12,14 @@ from Phase 2: 669,767 accounts, 50,233 merchants, 803,720 devices,
 It supersedes the Phase 2 model (`run_id: bench-20260913-memory-model-5c770259`), which
 measured the Phase 2 key shapes.
 
-## Measured curves — `run_id: bench-20260915-054159-memory-model-5ee55136`
+## Measured curves — `run_id: bench-20260915-095206-memory-model-77d9afa4`
 
 | family | size driver | measured points (size, bytes per key) |
 |---|---|---|
 | `obs` | one key | (1, 416) |
-| `tx` | members | (1, 128), (16, 960), (64, 3,648), (128, 7,232), (129, 18,040), (256, 32,824), (1,024, 129,304) |
-| `card` | members | (1, 128), (16, 960), (64, 3,648), (128, 7,232), (129, 18,184), (256, 32,968), (1,024, 129,152) |
-| `dev` | members | (1, 144), (16, 1,344), (64, 5,184), (128, 10,304), (129, 20,032), (256, 37,104), (1,024, 145,744) |
+| `tx` | members | (1, 128), (16, 960), (64, 3,648), (128, 7,232), (129, 18,272), (256, 32,688), (1,024, 130,088) |
+| `card` | members | (1, 128), (16, 960), (64, 3,648), (128, 7,232), (129, 17,992), (256, 33,040), (1,024, 129,824) |
+| `dev` | members | (1, 144), (16, 1,344), (64, 5,184), (128, 10,304), (129, 20,168), (256, 37,264), (1,024, 146,528) |
 | `epoch` | one key | (1, 56) |
 | `position` | one key | (1, 56) |
 | `hw` | one key | (1, 48) |
@@ -31,13 +31,13 @@ measured the Phase 2 key shapes.
 | `hll` | accounts in the bucket | (1, 124), (2, 124), (4, 124), (8, 124), (16, 172), (32, 268), (64, 460), (128, 460), (256, 844), (512, 1,612), (1,024, 2,636) |
 | `mcv` | minutes held | (1, 120), (16, 960), (128, 7,232), (512, 94,328), (1,440, 317,304) |
 | `obs_identity` | one key | (1, 304) |
-| `ie` | members | (1, 112), (16, 704), (64, 2,624), (128, 5,184), (129, 16,024), (256, 28,968), (1,024, 113,008) |
+| `ie` | members | (1, 120), (16, 712), (64, 2,632), (128, 5,192), (129, 15,928), (256, 29,024), (1,024, 113,448) |
 | `obs_outcome` | one outcome | (1, 360) |
 | `aov` | one key | (1, 104) |
-| `ao` | members | (1, 112), (16, 704), (128, 5,184), (129, 16,096) |
-| `aod` | members | (1, 112), (16, 704), (128, 5,184), (129, 15,952) |
+| `ao` | members | (1, 112), (16, 704), (128, 5,184), (129, 15,800) |
+| `aod` | members | (1, 112), (16, 704), (128, 5,184), (129, 16,160) |
 
-## The ten-minute acceptance run — `run_id: bench-20260915-054159-memory-model-5ee55136`
+## The ten-minute acceptance run — `run_id: bench-20260915-095206-memory-model-77d9afa4`
 
 | family | scope | retention | keys | size | bytes/key | total | basis |
 |---|---|---|---|---|---|---|---|
@@ -51,7 +51,7 @@ measured the Phase 2 key shapes.
 | `mcv` | merchant/GBP | 90,060s | 50,105 | 6.0 | 399 | **19.1 MiB** | measured curve at the minutes each merchant holds |
 | `hll` | MERCHANT | 7,500s | 100,210 | 3.0 | 124 | **11.9 MiB** | measured sketch at its bucket's cardinality x active buckets |
 | `obs` | identity | 90,000s | 260 | 1.0 | 304 | **0.1 MiB** | one string key per identity event, for the raw window |
-| `ie` | account | 90,000s | 259 | 1.0 | 112 | **0.0 MiB** | measured curve at the active accounts' depth |
+| `ie` | account | 90,000s | 259 | 1.0 | 120 | **0.0 MiB** | measured curve at the active accounts' depth |
 | `epoch` | store | 0s | 1 | 1.0 | 56 | **0.0 MiB** | one key |
 | `position` | store | 0s | 1 | 1.0 | 56 | **0.0 MiB** | one key |
 | `hw` | store | 0s | 1 | 1.0 | 48 | **0.0 MiB** | one key |
@@ -64,7 +64,7 @@ rounded up to 64 MiB. The store runs with `noeviction`, so exceeding it is a ref
 write
 and a failed run, not a silent loss.
 
-## Steady state at 500 TPS with the declared retention — `run_id: bench-20260915-054159-memory-model-5ee55136`
+## Steady state at 500 TPS with the declared retention — `run_id: bench-20260915-095206-memory-model-77d9afa4`
 
 | family | scope | retention | keys | size | bytes/key | total | basis |
 |---|---|---|---|---|---|---|---|
@@ -79,11 +79,11 @@ and a failed run, not a silent loss.
 | `hll` | MERCHANT | 7,500s | 1,255,825 | 3.0 | 124 | **148.5 MiB** | measured sketch at its bucket's cardinality x active buckets |
 | `card` | card | 3,900s | 633,334 | 3.1 | 243 | **147.0 MiB** | measured curve at the active entities' depth |
 | `obs` | identity | 90,000s | 38,925 | 1.0 | 304 | **11.3 MiB** | one string key per identity event, for the raw window |
-| `ie` | account | 90,000s | 37,815 | 1.0 | 113 | **4.1 MiB** | measured curve at the active accounts' depth |
+| `ie` | account | 90,000s | 37,815 | 1.0 | 121 | **4.4 MiB** | measured curve at the active accounts' depth |
 | `epoch` | store | 0s | 1 | 1.0 | 56 | **0.0 MiB** | one key |
 | `position` | store | 0s | 1 | 1.0 | 56 | **0.0 MiB** | one key |
 | `hw` | store | 0s | 1 | 1.0 | 48 | **0.0 MiB** | one key |
-| | | | | | | **37,401.7 MiB** | |
+| | | | | | | **37,401.9 MiB** | |
 
 This is the capacity requirement for serving the target rate indefinitely, and it is not
 expected to fit a laptop. Lines marked ASSUMED rest on a stated upper bound, not on the
