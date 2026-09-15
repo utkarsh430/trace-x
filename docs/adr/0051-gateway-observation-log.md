@@ -54,6 +54,27 @@
 - **Heartbeat:** every few seconds, never per transaction. It confirms that the lock is still this
   backend's (`pg_locks`) and that the row is still open. If either fails, or the database cannot be
   reached, the session is lost, and the process stops online writes and produce at once.
+- **Lease:** the request path does not wait for a heartbeat to report a loss. `ready` holds only
+  while the fence was confirmed within the lease (6 s, three heartbeat intervals), so a heartbeat
+  stuck on a silent network expires the process's claim by itself.
+- **Takeover grace:** PostgreSQL can release a lock before its holder learns of it (a restart, a
+  terminated backend).
+  - A process that acquires the lock while another session is unclosed, and was heartbeated
+    within the grace, writes nothing until the grace has passed.
+  - The grace is the lease plus a 2 s margin, for a request already past its readiness check.
+  - A predecessor that closed cleanly is not waited out, and one that cannot be ruled out is.
+  - Both guards compare durations: the process's monotonic clock for its own lease and grace, and
+    the database clock for a predecessor's heartbeat age.
+- **Connection bounds:** the dedicated connection has a 2 s connect timeout, a 2 s statement
+  timeout, TCP keepalives, and `tcp_user_timeout` where the platform supports it.
+- **Gateway surface:** while the process is not the writer:
+  - `/readyz` returns 503, and `checks.writer_session` names the reason;
+  - scoring, identity events a released feature reads, and authorization outcomes are refused
+    with 503 and `Retry-After`, before the rate limiter and before anything is recorded;
+  - events that change no online state are accepted;
+  - `writer_refused_total{surface}` counts the refusals.
+  The start-up writes to online state (inheriting holes, dating the epoch) run only after
+  acquisition and any grace.
 
 ### 3. Write order, per observation
 1. Assign the next contiguous sequence number, in process memory.
@@ -133,9 +154,13 @@ Bronze (Step 5) applies it; it is stated here because the producer must make it 
 **Risks.**
 - Producer callbacks, served by `poll` on the event loop, could stall it under a slow broker. The
   signal is the A/B's scoring-core p99; the mitigation is measured, not assumed.
-- A network partition can keep a stale backend's lock until PostgreSQL notices the dead connection.
-  The partitioned process loses its session at its next heartbeat, and the gap is bounded by that
-  heartbeat.
+- A network partition can keep a stale backend's lock until PostgreSQL notices the dead connection,
+  so no successor takes over until then. The partitioned process stops writing when its lease
+  expires, and its gap is bounded by its last heartbeat.
+- A process suspended between its readiness check and its write (a paused VM) can outlive both its
+  lease and a successor's grace. The store checks no fencing token, so an overlap is not prevented.
+  The session headers planned for published observations (slice 3) are what could make it
+  detectable.
 - A misestimated clock margin would misplace gap edges. The signal is the coverage tests at gap
   boundaries.
 
@@ -143,8 +168,12 @@ Bronze (Step 5) applies it; it is stated here because the producer must make it 
 - **Slice 1 (implemented):** migration 0006, `PostgresSessionLedger`, `PostgresWriterLock` and
   `trace_core.observation.session.WriterSession`, with unit tests and integration tests against
   PostgreSQL.
+- **Slice 2 (implemented):** the gateway wiring:
+  - `trace_core.observation.supervisor.WriterSupervisor`: acquire, heartbeat, lease, takeover grace,
+    and re-acquisition with a new session;
+  - readiness, the 503 refusals, and the start-up writes behind the fence;
+  - unit tests, integration tests, and a chaos test that terminates the writer's backend.
 - **Not yet built:**
-  - gateway wiring and readiness;
   - sequencing and session headers;
   - `tx.scored.v1`;
   - the outbox relay;

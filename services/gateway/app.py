@@ -8,7 +8,9 @@ propagation, and turning outcomes into the status codes
 
 **The order of the checks is part of the design.** Authenticate before rate
 limiting, because an unauthenticated caller must not be able to consume a real
-token's budget. Rate limit before scoring, because the limiter exists to protect
+token's budget. Refuse before rate limiting when this instance is not the online
+store's fenced writer, because such a refusal must not consume a budget either
+(ADR-0051). Rate limit before scoring, because the limiter exists to protect
 the scoring path. Check the replay cache before scoring, because a replay must
 cost nothing. Score before triage, because triage needs the decision. Each step
 can degrade or refuse, and which one it does is the substance of ADR-0035.
@@ -73,6 +75,7 @@ from trace_core.features.semantics import Stream, identity_stream
 from trace_core.observability.logging import configure_logging
 from trace_core.observability.metrics import HotPathMetrics, register_online_store_gauges
 from trace_core.observability.telemetry import configure_telemetry, current_trace_id
+from trace_core.observation.supervisor import WriterSupervisor
 from trace_core.repositories.circuit_breaker import CircuitBreaker
 from trace_core.repositories.postgres_authorization import (
     AuthorizationOutcomeRecord,
@@ -81,6 +84,7 @@ from trace_core.repositories.postgres_authorization import (
     validate_event,
 )
 from trace_core.repositories.postgres_completeness import PostgresHoleLedger
+from trace_core.repositories.postgres_sessions import writer_connection
 from trace_core.repositories.postgres_triage import PostgresTriageStore, new_case_id
 from trace_core.repositories.redis_idempotency import RedisIdempotencyCache, ReplayVerdict
 from trace_core.repositories.redis_ratelimit import RedisRateLimiter
@@ -135,6 +139,10 @@ class GatewayState:
     """Kept on the state so readiness can report how warm the store is."""
     completeness: CompletenessGuard | None = None
     """The same guard the pipeline holds (ADR-0046 §5); readiness reports a pending hole."""
+    writer: WriterSupervisor | None = None
+    """The online store's fenced writer session (ADR-0051 §2). While it is not ready, neither is
+    the instance, and every request that would write online state is refused. None when no fence
+    is configured: in tests, and without a system of record, which readiness refuses anyway."""
 
     def ready(self) -> tuple[bool, dict[str, str]]:
         """Readiness, per ADR-0035.
@@ -144,6 +152,10 @@ class GatewayState:
         balancer drains it. Redis unreachable does NOT fail readiness: the hot
         path is designed to work without it, and draining would turn a planned
         degradation into an outage.
+
+        Not holding the online store's writer fence is NOT ready either (ADR-0051
+        §2): another instance is, or may still be, writing the store, and this one
+        refuses every request that would write it.
         """
         checks: dict[str, str] = {}
         healthy = True
@@ -170,6 +182,12 @@ class GatewayState:
             )
         except Exception as exc:
             checks["redis_cache"] = f"degraded: {type(exc).__name__}"
+        if self.writer is None:
+            checks["writer_session"] = "not configured: online writes are not fenced"
+        else:
+            writer_ready = self.writer.ready
+            checks["writer_session"] = self.writer.status
+            healthy = healthy and writer_ready
         checks["feature_history"] = self._history_status()
         return healthy, checks
 
@@ -205,6 +223,26 @@ class GatewayState:
             f"warming since {since.isoformat()}; "
             f"complete for every feature at {warm_at.isoformat()}"
         )
+
+
+def _prepare_online_state(completeness: CompletenessGuard | None, store: Any) -> None:
+    """The start-up writes to online state, run only by the fenced writer (ADR-0051 §2).
+
+    A hole a previous process recorded and never withdrew is inherited, and withdrawn before the
+    epoch is (re)established (ADR-0046 §5). The epoch is set NX, so a store that has been running
+    for a day is not re-dated by a restart. Until the store has warmed for the widest declared
+    lookback every decision carries `history_incomplete`; readiness reports when that clears
+    (ADR-0044).
+    """
+    if completeness is not None:
+        completeness.resume()
+        completeness.reconcile()
+    if store is not None and hasattr(store, "establish_epoch"):
+        try:
+            since = store.establish_epoch()
+            log.info("feature_store_epoch", complete_since=since.isoformat())
+        except Exception as exc:
+            log.warning("feature_store_epoch_unavailable", error=type(exc).__name__)
 
 
 def build_state(settings: GatewaySettings | None = None) -> GatewayState:
@@ -284,13 +322,26 @@ def build_state(settings: GatewaySettings | None = None) -> GatewayState:
         log.error("postgres_pool_unavailable", detail="triage cannot be recorded")
 
     breaker = CircuitBreaker("redis-features")
+    instance_id = f"gateway-{uuid.uuid4().hex[:12]}"
     completeness = (
         CompletenessGuard(
             feature_store,
             PostgresHoleLedger(pool) if pool is not None else None,
-            instance_id=f"gateway-{uuid.uuid4().hex[:12]}",
+            instance_id=instance_id,
         )
         if feature_store is not None
+        else None
+    )
+    # One process writes online state at a time (ADR-0051 §2). The fence needs the system of
+    # record; without one the gateway is not ready anyway.
+    writer = (
+        WriterSupervisor(
+            connect=lambda: writer_connection(resolved.postgres_dsn),
+            producer=producer_string(SERVICE_VERSION),
+            instance_id=instance_id,
+            on_acquired=lambda: _prepare_online_state(completeness, feature_store),
+        )
+        if pool is not None
         else None
     )
     cache_breaker = CircuitBreaker("redis-cache")
@@ -318,6 +369,7 @@ def build_state(settings: GatewaySettings | None = None) -> GatewayState:
         completeness=completeness,
         cache_breaker=cache_breaker,
         feature_store=feature_store,
+        writer=writer,
     )
 
 
@@ -344,23 +396,13 @@ def create_app(state: GatewayState | None = None) -> FastAPI:
                 # crash loop here would make a slow database into an outage.
                 log.warning("postgres_pool_not_ready", error=type(exc).__name__)
 
-        # Establish the feature store's completeness epoch at start-up (NX, so
-        # a store that has been running for a day is not re-dated by a gateway
-        # restart). Until the store has warmed for the widest declared lookback
-        # every decision carries `history_incomplete`; readiness reports when
-        # that clears (ADR-0044).
-        # A hole a previous process recorded and never withdrew is inherited, and withdrawn
-        # before the epoch is (re)established (ADR-0046 §5).
-        if resolved.completeness is not None:
-            resolved.completeness.resume()
-            resolved.completeness.reconcile()
-        store = resolved.feature_store
-        if store is not None and hasattr(store, "establish_epoch"):
-            try:
-                since = store.establish_epoch()
-                log.info("feature_store_epoch", complete_since=since.isoformat())
-            except Exception as exc:
-                log.warning("feature_store_epoch_unavailable", error=type(exc).__name__)
+        # The start-up writes to online state run only in the fenced writer (ADR-0051 §2): the
+        # supervisor acquires the session, runs them, and only then reports ready. Its first step
+        # runs here, so a gateway with no predecessor starts ready; later steps run on its thread.
+        if resolved.writer is not None:
+            resolved.writer.start()
+        else:
+            _prepare_online_state(resolved.completeness, resolved.feature_store)
 
         # Each Redis instance's own memory and eviction counters, as gauges
         # labelled by store. Registered here rather than in `build_state`
@@ -388,6 +430,10 @@ def create_app(state: GatewayState | None = None) -> FastAPI:
             {"features": _store_info(resolved.redis), "cache": _store_info(resolved.cache_redis)},
         )
         yield
+        if resolved.writer is not None:
+            # Nothing is published yet, so there is no delivery to confirm: the session closes
+            # with the sequence numbers it assigned (ADR-0051 §4).
+            resolved.writer.stop(confirmed=True)
         if resolved.pool is not None:
             resolved.pool.close()
 
@@ -565,7 +611,11 @@ _PROBLEM_STATUSES: Final[dict[int, str]] = {
     ),
     422: "Semantically invalid: the shape is right and a value cannot be (§6.6).",
     429: "Rate limited. Carries Retry-After.",
-    503: "The decision could not be durably recorded, so it was not returned (ADR-0035).",
+    503: (
+        "Unavailable; carries Retry-After. The decision or event could not be durably recorded, so "
+        "it was not returned (ADR-0035, ADR-0049), or this instance is not the online store's "
+        "fenced writer (ADR-0051)."
+    ),
 }
 
 _PROBLEM_RESPONSES: Final[dict[int | str, dict[str, Any]]] = {
@@ -679,6 +729,9 @@ def _register_routes(app: FastAPI) -> None:
                 detail=f"{HEADER_IDEMPOTENCY} is required on every mutating POST.",
             )
 
+        if (refusal := _not_the_writer(request, surface="transaction")) is not None:
+            return refusal
+
         degraded_reasons: list[str] = []
         limit_decision = None
         # The limiter and the replay cache live on the cache instance, so it is
@@ -765,7 +818,7 @@ def _register_routes(app: FastAPI) -> None:
         status_code=202,
         summary="Ingest an identity event",
         response_model=AcceptedResponse,
-        responses={status: _PROBLEM_RESPONSES[status] for status in (400, 401, 409, 422)},
+        responses={status: _PROBLEM_RESPONSES[status] for status in (400, 401, 409, 422, 503)},
     )
     async def ingest_identity(
         request: Request,
@@ -890,9 +943,14 @@ def _ingest(
     optional signal into a required dependency. An observation the store did not record
     still withdraws its completeness (ADR-0046 §5).
 
+    An event that feeds a stream is refused (503) while this instance is not the online store's
+    fenced writer (ADR-0051 §2); an event that changes no online state is not.
+
     A key reused for a different payload is refused (409), as for transactions; without
     the replay cache that check is skipped and the first delivery is the observation.
     """
+    if stream is not None and (refusal := _not_the_writer(request, surface="identity")) is not None:
+        return refusal
     state = _gateway(request)
     request_id = _request_id(request)
     event_id = _identity_event_id(token_id, idempotency_key)
@@ -952,6 +1010,8 @@ def _record_authorization(request: Request, body: AuthorizationOutcomeRequest) -
 
     ADR-0049 §4, in order:
     - an outcome decided before its transaction occurred cannot observe it: 422;
+    - this instance is not the online store's fenced writer: 503, before anything is recorded
+      (ADR-0051 §2);
     - no system of record, an invalid event or a failed write: 503, and nothing is acknowledged;
     - the first delivery for the transaction is recorded with its outbox row: 202;
     - an identical redelivery changes nothing: 202, answered with the recorded event's id;
@@ -976,6 +1036,8 @@ def _record_authorization(request: Request, body: AuthorizationOutcomeRequest) -
                 "its transaction (ADR-0049 §2)."
             ),
         )
+    if (refusal := _not_the_writer(request, surface="authorization")) is not None:
+        return refusal
     if state.authorizations is None:
         return _authorization_unavailable(request)
     outcome = body.authorization_outcome.value
@@ -1081,6 +1143,30 @@ def _apply_authorization(
         state.metrics.degraded.add(1, {"reason": REASON_REDIS})
         return None
     return receipt.verification
+
+
+def _not_the_writer(request: Request, *, surface: str) -> JSONResponse | None:
+    """503 while this instance is not the online store's fenced writer (ADR-0051 §2); else None.
+
+    Checked before anything that writes online state, and before the rate limiter and the replay
+    cache, so a refusal consumes no budget. Scoring records the transaction in the store, so it is
+    refused; so are identity events a released feature reads, and authorization outcomes. Events
+    that change no online state are not.
+    """
+    state = _gateway(request)
+    writer = state.writer
+    if writer is None or writer.ready:
+        return None
+    state.metrics.writer_refused.add(1, {"surface": surface})
+    return _problem_response(
+        request,
+        ErrorType.SERVICE_UNAVAILABLE,
+        detail=(
+            "This instance is not the fenced writer of the online store, so it neither scores nor "
+            "records online state. Retry; a ready instance serves the request."
+        ),
+        headers={"Retry-After": "5"},
+    )
 
 
 def _authorization_unavailable(request: Request) -> JSONResponse:

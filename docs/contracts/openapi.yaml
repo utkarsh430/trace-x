@@ -565,7 +565,9 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/Problem'
-          description: The decision could not be durably recorded, so it was not returned (ADR-0035).
+          description: Unavailable; carries Retry-After. The decision or event could not be durably recorded,
+            so it was not returned (ADR-0035, ADR-0049), or this instance is not the online store's fenced
+            writer (ADR-0051).
       summary: Ingest an authorization outcome
   /v1/events/device:
     post:
@@ -670,6 +672,14 @@ paths:
               schema:
                 $ref: '#/components/schemas/Problem'
           description: "Semantically invalid: the shape is right and a value cannot be (\xA76.6)."
+        '503':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+          description: Unavailable; carries Retry-After. The decision or event could not be durably recorded,
+            so it was not returned (ADR-0035, ADR-0049), or this instance is not the online store's fenced
+            writer (ADR-0051).
       summary: Ingest an identity event
   /v1/transactions:
     post:
@@ -733,5 +743,7 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/Problem'
-          description: The decision could not be durably recorded, so it was not returned (ADR-0035).
+          description: Unavailable; carries Retry-After. The decision or event could not be durably recorded,
+            so it was not returned (ADR-0035, ADR-0049), or this instance is not the online store's fenced
+            writer (ADR-0051).
       summary: Score a transaction synchronously

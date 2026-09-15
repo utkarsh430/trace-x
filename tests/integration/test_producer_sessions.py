@@ -16,9 +16,17 @@ from typing import Any
 import pytest
 
 from trace_core.observation.session import WRITER_LOCK_KEY, SessionState, WriterSession
-from trace_core.repositories.postgres_sessions import PostgresSessionLedger, PostgresWriterLock
+from trace_core.observation.supervisor import WriterSupervisor
+from trace_core.repositories.postgres_sessions import (
+    PostgresSessionLedger,
+    PostgresWriterLock,
+    writer_connection,
+)
 
 pytestmark = pytest.mark.integration
+
+TEST_LOCK_KEY = WRITER_LOCK_KEY + 1
+"""Not the gateway's key: a running gateway holds that one, and these tests must not contend."""
 
 
 def _dsn(user_env: str, password_env: str) -> str:
@@ -32,12 +40,16 @@ def _dsn(user_env: str, password_env: str) -> str:
 
 
 def _truncate() -> None:
-    """As the owner: `trace_app` deliberately has no DELETE or TRUNCATE on the ledger."""
+    """As the owner: `trace_app` deliberately has no DELETE or TRUNCATE on the ledger.
+
+    Only these tests' sessions: a running gateway's own session (`gateway-…`) is left alone, so a
+    test run never takes the fence from under it.
+    """
     psycopg = pytest.importorskip("psycopg")
     with psycopg.connect(
         _dsn("POSTGRES_SUPERUSER", "POSTGRES_SUPERUSER_PASSWORD"), autocommit=True
     ) as owner:
-        owner.execute("TRUNCATE app.producer_sessions")
+        owner.execute("DELETE FROM app.producer_sessions WHERE instance_id NOT LIKE 'gateway-%'")
 
 
 def _app_connection() -> Any:
@@ -121,13 +133,13 @@ def test_the_writer_lock_fences_a_second_writer_until_its_connection_ends(conn: 
     other = _app_connection()
     try:
         first, second = PostgresWriterLock(conn), PostgresWriterLock(other)
-        assert first.try_acquire(WRITER_LOCK_KEY)
-        assert first.still_held(WRITER_LOCK_KEY)
-        assert not second.try_acquire(WRITER_LOCK_KEY)
-        assert not second.still_held(WRITER_LOCK_KEY)
+        assert first.try_acquire(TEST_LOCK_KEY)
+        assert first.still_held(TEST_LOCK_KEY)
+        assert not second.try_acquire(TEST_LOCK_KEY)
+        assert not second.still_held(TEST_LOCK_KEY)
         conn.close()
-        assert second.try_acquire(WRITER_LOCK_KEY), "the lock ends with its connection"
-        assert second.still_held(WRITER_LOCK_KEY)
+        assert second.try_acquire(TEST_LOCK_KEY), "the lock ends with its connection"
+        assert second.still_held(TEST_LOCK_KEY)
     finally:
         other.close()
 
@@ -140,12 +152,14 @@ def test_a_second_writer_session_is_not_ready_while_the_first_holds_the_fence(co
             lock=PostgresWriterLock(conn),
             producer="trace-gateway@0.1.0",
             instance_id="gw-first",
+            lock_key=TEST_LOCK_KEY,
         )
         second = WriterSession(
             ledger=PostgresSessionLedger(other),
             lock=PostgresWriterLock(other),
             producer="trace-gateway@0.1.0",
             instance_id="gw-second",
+            lock_key=TEST_LOCK_KEY,
         )
         assert first.start() and first.ready
         assert not second.start() and not second.ready
@@ -159,3 +173,76 @@ def test_a_second_writer_session_is_not_ready_while_the_first_holds_the_fence(co
         assert row is not None and row.last_seq == 3
     finally:
         other.close()
+
+
+def _skip_if_a_gateway_holds_the_fence(conn: Any) -> None:
+    """A running gateway's live session makes any other writer wait, so no absence of a live
+    predecessor can be asserted while one holds the gateway's lock."""
+    row = conn.execute(
+        "SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND granted "
+        "AND classid = %s::oid AND objid = %s::oid AND objsubid = 1)",
+        (WRITER_LOCK_KEY >> 32, WRITER_LOCK_KEY & 0xFFFFFFFF),
+    ).fetchone()
+    if row is not None and row[0]:
+        pytest.skip(
+            "SKIPPED (NOT PASSED): a running gateway holds the writer fence, so the absence of a "
+            "live predecessor cannot be asserted. Stop it (`docker compose stop gateway`) and "
+            "re-run."
+        )
+
+
+def test_the_writer_connection_is_autocommit_and_time_bounded(conn: Any) -> None:
+    with writer_connection(_dsn("TRACE_APP_DB_USER", "TRACE_APP_DB_PASSWORD")) as writer:
+        assert writer.autocommit
+        assert writer.execute("SHOW statement_timeout").fetchone() == ("2s",)
+        assert writer.execute("SHOW application_name").fetchone() == ("trace-gateway-writer",)
+
+
+def test_a_live_predecessor_is_seen_and_a_closed_or_silent_one_is_not(conn: Any) -> None:
+    _skip_if_a_gateway_holds_the_fence(conn)
+    ledger = PostgresSessionLedger(conn)
+    ledger.open(session_id="s-old", producer="p", instance_id="gw-old")
+    ledger.open(session_id="s-new", producer="p", instance_id="gw-new")
+    assert ledger.others_live("s-new", within_s=60.0)
+    assert not ledger.others_live("s-new", within_s=0.0), "a heartbeat older than the window"
+    assert ledger.close("s-old", last_seq=0)
+    assert not ledger.others_live("s-new", within_s=60.0), "a cleanly closed predecessor"
+    assert ledger.others_live("s-old", within_s=60.0), "the open session is live to anyone else"
+
+
+def _supervisor(name: str, prepared: list[str]) -> WriterSupervisor:
+    dsn = _dsn("TRACE_APP_DB_USER", "TRACE_APP_DB_PASSWORD")
+    return WriterSupervisor(
+        connect=lambda: writer_connection(dsn),
+        producer="trace-gateway@0.1.0",
+        instance_id=name,
+        on_acquired=lambda: prepared.append(name),
+        interval_s=0.2,
+        lease_s=1.0,
+        takeover_grace_s=2.0,
+        lock_key=TEST_LOCK_KEY,
+    )
+
+
+def test_a_writer_that_stopped_cleanly_is_succeeded_at_once(conn: Any) -> None:
+    _skip_if_a_gateway_holds_the_fence(conn)
+    prepared: list[str] = []
+    first, second = _supervisor("gw-first", prepared), _supervisor("gw-second", prepared)
+    try:
+        first.tick()
+        second.tick()
+        assert first.ready and not second.ready, (first.status, second.status)
+        assert second.status == "lock held elsewhere"
+        first.tick()
+        assert first.ready, "the active session is heartbeated"
+        assert first.stop(confirmed=True)
+        second.tick()
+        assert second.ready, second.status
+        assert prepared == ["gw-first", "gw-second"]
+        session = first.session
+        assert session is not None and session.session_id is not None
+        row = PostgresSessionLedger(conn).get(session.session_id)
+        assert row is not None and row.closed_at is not None and row.last_seq == 0
+    finally:
+        first.stop(confirmed=False)
+        second.stop(confirmed=True)

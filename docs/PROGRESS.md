@@ -465,7 +465,8 @@ both reports.
     * Key expiry is wall-clock garbage collection, sized for event time advancing at least as fast
       as the clock. That holds for the live gateway, the load harness and the time-shifted replay.
     * A running gateway learns of another instance's hole only when that instance withdraws it. One
-      gateway runs locally; several instances need plan §4.1's writer fencing (Step 4).
+      gateway runs locally, and since Step 4 slice 2 the writer fence keeps every other instance
+      not ready, so only one gateway writes online state (ADR-0051 §2).
 * **Execution is single-agent from 2026-09-13**, at the user's instruction, to conserve usage.
   Implementation, integration and critic-style self-review run in sequence, and the lead integrates
   the worktrees below itself.
@@ -554,8 +555,49 @@ both reports.
         * that the lock fences a second writer until its connection ends;
         * that a second `WriterSession` is not ready while the first holds the fence.
       * Like the other service-backed integration tests, this suite skips loudly in CI (D14).
+  * **Slice 2, the gateway behind the fence: implemented.**
+    * **`trace_core.observation.supervisor.WriterSupervisor`** runs one step every 2 s on its own
+      thread, never on the event loop. It acquires a session on a dedicated connection and
+      heartbeats it. After a loss it re-acquires with a NEW session; a lost session is never closed.
+    * **Two guards the plan did not spell out, added after reviewing the failure paths:**
+      * *Lease (6 s).* A heartbeat stuck on a silent network never returns to report a loss. So
+        readiness requires a confirmation within the lease, and the request path fences itself.
+      * *Takeover grace (8 s).* PostgreSQL can release a lock (a restart, a terminated backend)
+        before its holder knows. A successor that finds an unclosed, recently heartbeated predecessor
+        writes nothing until the grace has passed. A cleanly closed predecessor is not waited out.
+      * *Residual, recorded in ADR-0051:* a process suspended between its readiness check and its
+        write is not prevented, because the store checks no fencing token.
+    * **The dedicated connection** (`writer_connection`) has 2 s connect and statement timeouts, TCP
+      keepalives, and `tcp_user_timeout` where the platform supports it.
+    * **Gateway:**
+      * `/readyz` returns 503, and `checks.writer_session` names the reason;
+      * scoring, identity events a released feature reads, and authorization outcomes get 503 with
+        `Retry-After`, before the rate limiter and before anything is recorded;
+      * device events, and identity events that feed no stream, are accepted;
+      * the start-up writes to online state (hole inheritance, the epoch) run only inside the fence;
+      * `writer_refused_total{surface}` counts the refusals;
+      * shutdown closes the session. Nothing is published yet, so there is no delivery to confirm.
+    * **The lock key is injectable**, so tests never contend with a running gateway. The integration
+      fixture no longer deletes a gateway's own session row.
+    * **Evidence (2026-09-14):**
+      * Six suites passed, 93 tests, none skipped, run against the local migrated PostgreSQL:
+        * `tests/unit/test_observation_supervisor.py`;
+        * `tests/unit/test_gateway_writer_fence.py`;
+        * `tests/unit/test_observation_writer_session.py`;
+        * `tests/unit/test_gateway_observability.py`;
+        * `tests/contract/test_gateway_http.py`;
+        * `tests/integration/test_producer_sessions.py`.
+      * `pytest -m chaos tests/chaos/test_writer_fence.py`: 1 passed. It terminates the writer's
+        backend with `pg_terminate_backend`, and asserts three things:
+        * the two writers are never ready at once;
+        * the first writer stops at its lease;
+        * the successor starts only after its grace.
+      * The two integration tests that assert the absence of a live predecessor skip loudly while a
+        fenced gateway holds the production lock.
+      * OpenAPI regenerated: the identity route documents 503, and the 503 description names the
+        fence.
+      * `make verify` runs before the commit that records this entry, gated on its exit code.
   * **Not yet built:**
-    * gateway wiring and readiness;
     * sequencing and session headers on produce;
     * the `tx.scored.v1` contract;
     * the outbox relay, whose process ADR-0051 leaves to the A/B;

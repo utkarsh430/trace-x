@@ -202,6 +202,7 @@ without a `--result`.
 | Gateway container restarts in a loop, logs `TokenConfigurationError` | A token shorter than 32 characters | `openssl rand -hex 32`. A short secret is guessable and a gateway is a public surface |
 | `make up` hangs on `Container tracex-gateway-1 Waiting` | The image is building on a cold cache, or the app is waiting out its Postgres pool timeout | `docker compose -f deploy/compose.yml logs -f gateway`. Start-up waits the pool's full timeout before serving degraded, which is why the healthcheck allows for it |
 | Gateway is healthy but `/readyz` returns 503 | Migrations have not run, so the `trace_app` role does not exist | `make migrate`. Health is liveness; readiness needs the database |
+| `/readyz` 503 with `writer_session: lock held elsewhere` | Another gateway process (a second `uvicorn`, a stale container) holds the online store's writer fence | Stop the other process cleanly. One gateway writes online state at a time (ADR-0051) |
 | Gateway logs `connection refused` for port 5442 or 6389 | The container inherited the **host** ports from `.env` | Inside the compose network Postgres is `postgres:5432` and Redis is `redis:6379`; `deploy/compose.yml` sets those explicitly |
 | Code changes have no effect on the running gateway | The image is built, not mounted | `docker compose -f deploy/compose.yml --env-file .env --profile core up -d --build gateway` |
 | Integration tests skipped | Docker not running | Start Docker; the skip message names the reason |

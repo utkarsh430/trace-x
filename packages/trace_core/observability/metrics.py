@@ -72,6 +72,8 @@ RATE_LIMITED_TOTAL: Final = "rate_limited_total"
 UNAUTHENTICATED_TOTAL: Final = "unauthenticated_total"
 AUTHORIZATION_OUTCOME_TOTAL: Final = "authorization_outcome_total"
 RULE_PACK_RELOAD_FAILED_TOTAL: Final = "rule_pack_reload_failed_total"
+WRITER_REFUSED_TOTAL: Final = "writer_refused_total"
+"""Requests refused because this instance is not the online store's fenced writer (ADR-0051)."""
 
 ONLINE_STORE_EVICTED_KEYS: Final = "online_store_evicted_keys_total"
 """Keys Redis has discarded under its own memory pressure.
@@ -108,6 +110,7 @@ HOT_PATH_METRICS: Final[frozenset[str]] = frozenset(
         UNAUTHENTICATED_TOTAL,
         RULE_PACK_RELOAD_FAILED_TOTAL,
         AUTHORIZATION_OUTCOME_TOTAL,
+        WRITER_REFUSED_TOTAL,
         ONLINE_STORE_EVICTED_KEYS,
         ONLINE_STORE_MEMORY_BYTES,
     }
@@ -149,6 +152,7 @@ class HotPathMetrics:
         "scored",
         "triaged",
         "unauthenticated",
+        "writer_refused",
     )
 
     def __init__(self, meter_name: str = "trace_core.gateway") -> None:
@@ -211,6 +215,13 @@ class HotPathMetrics:
         self.reload_failed: Counter = meter.create_counter(
             RULE_PACK_RELOAD_FAILED_TOTAL,
             description="Rule-pack reloads refused; the previous pack stayed in force.",
+        )
+        self.writer_refused: Counter = meter.create_counter(
+            WRITER_REFUSED_TOTAL,
+            description=(
+                "Requests refused because this instance is not the online store's fenced writer, "
+                "by surface."
+            ),
         )
         self.authorization_outcomes: Counter = meter.create_counter(
             AUTHORIZATION_OUTCOME_TOTAL,

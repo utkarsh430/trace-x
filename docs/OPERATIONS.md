@@ -79,6 +79,28 @@ schema, roles and grants are created there and nowhere else (ADR-0004). Do not g
 broader role to clear the error: `trace_app` has no access to `groundtruth` and that is the isolation
 control (CLAUDE.md §11).
 
+### Gateway not the online store's writer
+**Detect:** `/readyz` 503 with `checks.writer_session` other than `active <session>`;
+`writer_refused_total{surface}` rising; log events `writer_supervisor_session_lost` or
+`writer_session_lock_held_elsewhere`.
+**Behaviour:** one process writes online state at a time (ADR-0051 §2). This instance refuses scoring,
+identity events a feature reads and authorization outcomes with 503 and `Retry-After`. It retries the
+fence every 2 s. The status names the cause:
+- `unreachable: …`: PostgreSQL is down or refusing `trace_app`. Follow the Postgres playbook.
+- `lock held elsewhere`: another gateway process is the writer. That is expected for a standby. If no
+  other gateway should exist, find the holder: `SELECT pid, application_name, client_addr FROM
+  pg_stat_activity WHERE pid IN (SELECT pid FROM pg_locks WHERE locktype = 'advisory')`.
+- `taking over: waiting N s …`: a predecessor's session is unclosed and was recently live. Nothing is
+  written until its lease has expired, and this clears by itself within 8 s.
+- `lease expired: …`: no heartbeat has confirmed the fence for 6 s, from a stalled connection or a
+  starved process. Check the host and the connection first.
+- `preparing failed: …`: the fence is held, but the start-up writes (holes, epoch) failed. They are
+  retried every 2 s; read `writer_supervisor_prepare_failed` in the log.
+
+**Action:** stop an unwanted gateway cleanly. Its session closes, and a successor takes over at once.
+Do not terminate a serving writer's backend to promote a standby: the writer loses its session, and
+the standby still waits out the lease.
+
 ### Gateway killed on its memory limit
 **Detect:** exit code 137, no stack trace, restart loop under `restart: unless-stopped`.
 **Behaviour:** the container is bounded so it dies alone rather than starving Postgres and Redis

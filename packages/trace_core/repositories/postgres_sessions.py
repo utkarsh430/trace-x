@@ -12,12 +12,18 @@ from __future__ import annotations
 
 import datetime as dt
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from trace_core.domain.errors import TraceXError
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from psycopg import Connection
+
+WRITER_CONNECT_TIMEOUT_S: Final = 2
+"""libpq's connect timeout, in whole seconds (2 is its minimum)."""
+WRITER_STATEMENT_TIMEOUT_MS: Final = 2_000
+WRITER_TCP_USER_TIMEOUT_MS: Final = 6_000
+"""How long unacknowledged data may wait before the kernel drops the connection, where supported."""
 
 
 class SessionLedgerError(TraceXError):
@@ -92,6 +98,20 @@ class PostgresSessionLedger:
         ).fetchone()
         return None if values is None else _row(values)
 
+    def others_live(self, session_id: str, *, within_s: float) -> bool:
+        """Whether another session is unclosed and was heartbeated within `within_s`.
+
+        Compared on the database clock, which stamped the heartbeat. A writer taking over reads it
+        before it writes: a predecessor that closed cleanly, or whose last heartbeat is older than
+        its lease, can no longer be writing (ADR-0051 §2).
+        """
+        row = self._conn.execute(
+            "SELECT EXISTS (SELECT 1 FROM app.producer_sessions WHERE session_id <> %s "
+            "AND closed_at IS NULL AND heartbeat_at > now() - make_interval(secs => %s))",
+            (session_id, within_s),
+        ).fetchone()
+        return bool(row and row[0])
+
 
 class PostgresWriterLock:
     """The writer's session-scoped advisory lock, held by the dedicated connection's backend."""
@@ -114,4 +134,33 @@ class PostgresWriterLock:
         return bool(row and row[0])
 
 
-__all__ = ["PostgresSessionLedger", "PostgresWriterLock", "SessionLedgerError", "SessionRow"]
+def writer_connection(dsn: str) -> Connection[Any]:
+    """The writer's dedicated connection: autocommit, and bounded however the database fails.
+
+    The statement timeout bounds a slow server. TCP keepalives and `tcp_user_timeout` bound a silent
+    network, where no statement timeout fires because nothing comes back. The supervisor's lease
+    bounds whatever these do not (ADR-0051 §2).
+    """
+    import psycopg
+
+    return psycopg.connect(
+        dsn,
+        autocommit=True,
+        connect_timeout=WRITER_CONNECT_TIMEOUT_S,
+        application_name="trace-gateway-writer",
+        options=f"-c statement_timeout={WRITER_STATEMENT_TIMEOUT_MS}",
+        keepalives=1,
+        keepalives_idle=5,
+        keepalives_interval=1,
+        keepalives_count=3,
+        tcp_user_timeout=WRITER_TCP_USER_TIMEOUT_MS,
+    )
+
+
+__all__ = [
+    "PostgresSessionLedger",
+    "PostgresWriterLock",
+    "SessionLedgerError",
+    "SessionRow",
+    "writer_connection",
+]

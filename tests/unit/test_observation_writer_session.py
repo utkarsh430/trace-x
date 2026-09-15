@@ -57,6 +57,9 @@ class FakeLedger:
         self.closed[session_id] = last_seq
         return True
 
+    def others_live(self, session_id: str, *, within_s: float) -> bool:
+        return False
+
 
 def _session(lock: FakeLock | None = None, ledger: FakeLedger | None = None) -> WriterSession:
     return WriterSession(
@@ -162,3 +165,12 @@ def test_concurrent_callers_receive_every_number_exactly_once() -> None:
     for thread in threads:
         thread.join()
     assert sorted(numbers) == list(range(1, 4_001))
+
+
+def test_a_session_takes_the_lock_key_it_is_given() -> None:
+    lock = FakeLock()
+    session = WriterSession(
+        ledger=FakeLedger(), lock=lock, producer="p", instance_id="i", lock_key=WRITER_LOCK_KEY + 1
+    )
+    assert session.start()
+    assert lock.keys == [WRITER_LOCK_KEY + 1]

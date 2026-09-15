@@ -28,7 +28,10 @@ from trace_core.observability.logging import get_logger
 log = get_logger(__name__)
 
 WRITER_LOCK_KEY: Final = 0x7472_6163_6578_0004
-"""The advisory lock a feature store's single online-state writer holds (a signed bigint)."""
+"""The advisory lock a feature store's single online-state writer holds (a signed bigint).
+
+Tests pass their own key to `WriterSession.lock_key`, so a running gateway and a test never
+contend for the fence."""
 
 
 class WriterSessionError(TraceXError):
@@ -48,6 +51,8 @@ class SessionLedger(Protocol):
     def heartbeat(self, session_id: str) -> bool: ...
 
     def close(self, session_id: str, *, last_seq: int) -> bool: ...
+
+    def others_live(self, session_id: str, *, within_s: float) -> bool: ...
 
 
 class WriterLock(Protocol):
@@ -69,6 +74,7 @@ class WriterSession:
     producer: str
     instance_id: str
     new_session_id: Callable[[], str] = _new_session_id
+    lock_key: int = WRITER_LOCK_KEY
     state: SessionState = SessionState.NOT_STARTED
     session_id: str | None = None
     _last_seq: int = field(default=0, repr=False)
@@ -89,7 +95,7 @@ class WriterSession:
         with self._gate:
             if self.state is not SessionState.NOT_STARTED:
                 raise WriterSessionError(f"a writer session starts once; this one is {self.state}")
-            if not self.lock.try_acquire(WRITER_LOCK_KEY):
+            if not self.lock.try_acquire(self.lock_key):
                 log.warning("writer_session_lock_held_elsewhere", producer=self.producer)
                 return False
             session_id = self.new_session_id()
@@ -116,7 +122,7 @@ class WriterSession:
             return False
         reason: str | None = None
         try:
-            if not self.lock.still_held(WRITER_LOCK_KEY):
+            if not self.lock.still_held(self.lock_key):
                 reason = "lock_lost"
             elif not self.ledger.heartbeat(self.session_id):
                 reason = "row_closed_or_missing"
