@@ -25,12 +25,23 @@ from collections.abc import Iterator, Sequence
 from typing import Any
 
 import pytest
-from tests.conformance.feature_semantics_suite import AsServedConformanceSuite
+from tests.conformance.feature_semantics_suite import (
+    ACCOUNT,
+    WATCHED_LONG_ENOUGH,
+    AsServedConformanceSuite,
+    at,
+    identity_event,
+    transaction,
+)
 
 from trace_core.contracts.canonical import CanonicalTransaction
 from trace_core.domain.time import EventTime, to_millis
-from trace_core.features import FeatureContext
-from trace_core.features.observation import Event
+from trace_core.features import FeatureContext, FeatureState
+from trace_core.features.context import Completeness
+from trace_core.features.definitions import ONLINE_FEATURES
+from trace_core.features.observation import Event, transaction_observation
+from trace_core.features.semantics import Stream
+from trace_core.observation.scored_event import lookback_completeness
 from trace_core.repositories.redis_features import RedisOnlineFeatureStore
 
 pytestmark = [pytest.mark.integration, pytest.mark.parity]
@@ -95,3 +106,39 @@ class TestRedisOnlineFeatureStore(AsServedConformanceSuite):
             # The first write stamped the clock as the epoch; the fixture asked for no claim.
             return dataclasses.replace(served.context, complete_since=None)
         return served.context
+
+    def test_a_legacy_identity_set_is_not_held_until_it_expires(self) -> None:
+        """ADR-0046 §8 moved identity events from one account set to one set per stream, without
+        migrating them: moving a deep set in one atomic script is the stall §8 removes.
+
+        While an account's legacy set exists, its identity windows are not held and not vouched for.
+        A new identity event goes to its stream's set, never the legacy one. The legacy set is given
+        an expiry within the 25 hours identity events are held, and a read reaching behind what it
+        held stays unheld once it has gone.
+        """
+        client = self._client
+        store = RedisOnlineFeatureStore(client)
+        store.establish_epoch(at=WATCHED_LONG_ENOUGH)
+        legacy = f"f:ie:{ACCOUNT}"
+        legacy_ms = to_millis(at(-7_200))
+        client.zadd(legacy, {"identity_event:evt_legacy": legacy_ms})
+
+        login = identity_event("evt_new", stream=Stream.IDENTITY_FAILED_LOGIN, occurred_at=at(-60))
+        store.observe(login)
+        assert client.zscore(f"f:ie:{ACCOUNT}:fl", login.identity) == to_millis(login.occurred_at)
+        assert client.zcard(legacy) == 1, "a new identity event was written to the legacy set"
+        assert 0 < client.pttl(legacy) <= 25 * 3_600_000
+
+        subject = transaction()
+        context = store.score(transaction_observation(subject)).context
+        for feature_id in ("failed_logins_1h", "hours_since_identity_change"):
+            value = ONLINE_FEATURES.get(feature_id).evaluate(subject, context)
+            assert value.state is FeatureState.INSUFFICIENT_HISTORY, feature_id
+            assert lookback_completeness(feature_id, context) == Completeness.INCOMPLETE.value
+
+        client.delete(legacy)  # as its expiry would
+        later = transaction(transaction_id="tx_later", occurred_at=at(1))
+        context = store.score(transaction_observation(later)).context
+        # The hour from T0 + 1 s reaches back only to T0 - 3 599 s, after the legacy set's newest.
+        assert ONLINE_FEATURES.get("failed_logins_1h").evaluate(later, context).value == 1.0
+        assert client.hget(f"f:pf:{ACCOUNT}", "dropped_through_ms") == str(legacy_ms)

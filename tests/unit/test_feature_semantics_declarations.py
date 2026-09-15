@@ -88,9 +88,11 @@ def _tx(event_id: str, seconds: int) -> Event:
     )
 
 
-def test_the_feature_set_version_is_the_one_adr_0049_declares() -> None:
-    """3.0.0: `declined_ratio_1h` changed its stream, time axis, verification and self-exclusion."""
-    assert FEATURE_SET_VERSION == "3.0.0"
+def test_the_feature_set_version_is_the_one_adr_0046_section_8_declares() -> None:
+    """4.0.0: past the score-time read cap, content features and the negative and sample-based
+    profile features are served absent (ADR-0046 §8). 3.0.0 moved `declined_ratio_1h` onto
+    authorization outcomes (ADR-0049)."""
+    assert FEATURE_SET_VERSION == "4.0.0"
 
 
 def test_every_identity_event_type_has_a_declared_stream() -> None:
@@ -296,3 +298,37 @@ def test_the_reference_store_verifies_an_outcome_against_its_transaction() -> No
         decided_at=decided,
     )
     assert store.observe(mismatch).verification is Verification.REJECTED
+
+
+def test_the_bounded_read_caps_exactly_the_content_section_8_names() -> None:
+    """ADR-0046 §8: six features read observation content, from the account's and the device's
+    transactions. The cap is 512, and the raw history behind which the prefix begins is 25 hours."""
+    from trace_core.features.semantics import (
+        SCORE_READ_CAP,
+        Entity,
+        Stream,
+        WindowedAggregate,
+        reads_observation_content,
+    )
+    from trace_core.features.state_plan import PLAN
+
+    content = {
+        spec.feature_id
+        for spec in ONLINE_FEATURES
+        if isinstance(spec.semantics, WindowedAggregate)
+        and reads_observation_content(spec.semantics)
+    }
+    assert content == {
+        "account_amount_sum_1h",
+        "account_distinct_merchants_1h",
+        "account_distinct_mcc_5m",
+        "account_distinct_devices_24h",
+        "account_distinct_countries_24h",
+        "device_distinct_accounts_24h",
+    }
+    assert PLAN.content_reads == {
+        (Entity.ACCOUNT, Stream.TRANSACTION),
+        (Entity.DEVICE, Stream.TRANSACTION),
+    }
+    assert SCORE_READ_CAP == 512
+    assert PLAN.account_raw_ms((Stream.TRANSACTION,)) == 25 * 3_600_000

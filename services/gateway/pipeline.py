@@ -88,6 +88,10 @@ recording for as long as that feature looks back -- not because the entity is
 new. A fresh or restarted store carries this on every decision until it has
 warmed for the widest declared lookback; the decision says so rather than
 presenting a warm-looking answer from a cold store (ADR-0044)."""
+REASON_HISTORY_DEPTH_CAPPED: Final = "history_depth_capped"
+"""At least one feature was absent because its account's or device's history was deeper than the
+bounded score-time read decodes (ADR-0046 §8). The counts stayed exact, and R019 declares the depth
+itself; this says the decision was made without the content features the cap withheld."""
 
 
 class ObserveOutcome(StrEnum):
@@ -348,6 +352,8 @@ class ScoringPipeline:
         features = ONLINE_FEATURES.evaluate_all(canonical, context)
         if history_incomplete(features, context):
             reasons.append(REASON_HISTORY_INCOMPLETE)
+        if history_depth_capped(features):
+            reasons.append(REASON_HISTORY_DEPTH_CAPPED)
         evaluation = evaluate_pack(self.pack, canonical, features)
         decision = build_decision(
             transaction_id=request.transaction_id,
@@ -394,6 +400,15 @@ def history_incomplete(features: dict[str, FeatureValue], context: FeatureContex
         if lookback and context.completeness(lookback) is not Completeness.COMPLETE:
             return True
     return False
+
+
+def history_depth_capped(features: dict[str, FeatureValue]) -> bool:
+    """Was any absence the bounded score-time read's (ADR-0046 §8)?
+
+    Distinct from `history_incomplete`: the store has watched long enough, and holds more than the
+    read decodes. The cause is the entity's depth, which an attacker controls, so it is said apart.
+    """
+    return any(value.depth_capped for value in features.values())
 
 
 def absent_feature_reasons(features: dict[str, FeatureValue]) -> dict[str, str]:

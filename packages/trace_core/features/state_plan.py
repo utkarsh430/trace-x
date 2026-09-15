@@ -33,6 +33,7 @@ on that claim.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Final
 
@@ -47,6 +48,7 @@ from trace_core.features.semantics import (
     Stream,
     Window,
     WindowedAggregate,
+    reads_observation_content,
     required_lookback_s,
 )
 from trace_core.features.spec import FeatureRegistry
@@ -109,6 +111,16 @@ class StatePlan:
     """`feature_id -> seconds`: how far back the store must have been recording
     for that feature's answer to be complete."""
 
+    account_lookback_s: dict[Stream, int] = field(default_factory=dict)
+    """`stream -> seconds`: the widest window or previous-observation lookback any ACCOUNT
+    feature reads on that stream -- what an account's raw observations on it are held for, before
+    the late-arrival margin (ADR-0046 §5)."""
+
+    content_reads: frozenset[tuple[Entity, Stream]] = frozenset()
+    """Raw sets whose observations an as-served read decodes for their content, and so caps at
+    `SCORE_READ_CAP`: every entity and stream with an amount sum or an exact distinct count
+    (ADR-0046 §8)."""
+
     # -- derived views -------------------------------------------------------
 
     def velocity_retention(self, entity: Entity, stream: Stream) -> Retention:
@@ -131,6 +143,13 @@ class StatePlan:
         # because there is no late arrival to a lifetime accumulation.
         window = self.profiles[entity]
         return Retention(seconds=window.seconds, widest_window=window)
+
+    def account_raw_ms(self, streams: Iterable[Stream]) -> int:
+        """How far behind `as_of` an account's observations on `streams` are held raw: the widest
+        lookback reading them, plus the late-arrival margin. Older transactions are folded into the
+        profile prefix, which a capped profile still reads (ADR-0046 §5, §8)."""
+        widest = max((self.account_lookback_s.get(stream, 0) for stream in streams), default=0)
+        return (widest + LATE_ARRIVAL_MARGIN_S) * 1000
 
     def storage(self, entity: Entity, dimension: Dimension) -> CardinalityStorage | None:
         if (entity, dimension) in self.exact_distinct:
@@ -191,10 +210,22 @@ def build_plan(registry: FeatureRegistry) -> StatePlan:
     previous: dict[tuple[Entity, Stream], Window] = {}
     profiles: dict[Entity, Window] = {}
     lookback: dict[str, int] = {}
+    account_lookback: dict[Stream, int] = {}
+    content_reads: set[tuple[Entity, Stream]] = set()
 
     for spec in registry:
         semantics = spec.semantics
         lookback[spec.feature_id] = required_lookback_s(semantics)
+        if (
+            isinstance(semantics, (WindowedAggregate, PairwiseWithPrevious))
+            and semantics.entity is Entity.ACCOUNT
+        ):
+            reach = required_lookback_s(semantics)
+            account_lookback[semantics.stream] = max(
+                account_lookback.get(semantics.stream, 0), reach
+            )
+        if isinstance(semantics, WindowedAggregate) and reads_observation_content(semantics):
+            content_reads.add((semantics.entity, semantics.stream))
 
         if isinstance(semantics, PairwiseWithPrevious):
             pair = (semantics.entity, semantics.stream)
@@ -241,6 +272,8 @@ def build_plan(registry: FeatureRegistry) -> StatePlan:
         previous=previous,
         profiles=profiles,
         lookback_s=lookback,
+        account_lookback_s=account_lookback,
+        content_reads=frozenset(content_reads),
     )
 
 

@@ -314,6 +314,16 @@ ALIGNED_MINUTE_MS: Final = 60_000
 APPROXIMATE_BUCKET_MS: Final = 300_000
 """The bucket width of the approximate distinct counts' edge-inclusive estimand (ADR-0034)."""
 
+SCORE_READ_CAP: Final = 512
+"""How many observations an as-served score-time read decodes from one raw set (ADR-0046 §8).
+
+The read takes the most recent `SCORE_READ_CAP` at or before `as_of`, in the declared order. A
+window whose exact count exceeds it is capped: its count stays exact, and the features that need
+each observation's content read as absent, never as the lower bound what is left would give. The
+account profile reads the same capped set and keeps only what it still answers exactly. Fixed from
+the recorded latency curve and not tuned (`run_id: bench-20260915-071647-score-latency-86fabdbf`).
+An event-time-complete read is never capped."""
+
 FLOAT_PARITY_RELATIVE_TOLERANCE: Final = 1e-9
 """How far two implementations' floating-point distances may differ. Arithmetic, not
 estimation: libm implementations differ in the last bits, and nothing else may."""
@@ -401,6 +411,19 @@ class WindowedAggregate:
         exact sorted-set distinct count is exact, and reporting it as approximate
         would put a tolerance on a comparison that should be equality."""
         return self.storage is CardinalityStorage.APPROXIMATE
+
+
+def reads_observation_content(shape: WindowedAggregate) -> bool:
+    """Whether an as-served read of this window decodes each observation, and so can be capped
+    (ADR-0046 §8).
+
+    Amount sums and exact distinct counts do. Counts are range counts, approximate distinct counts
+    are sketches, the merchant CV reads minute counters and the declined ratio reads outcome counts:
+    none of those is ever capped."""
+    return shape.aggregation is Aggregation.AMOUNT_SUM or (
+        shape.aggregation is Aggregation.DISTINCT_COUNT
+        and shape.storage is CardinalityStorage.EXACT
+    )
 
 
 @dataclass(frozen=True, slots=True)

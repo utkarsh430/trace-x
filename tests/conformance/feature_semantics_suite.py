@@ -37,7 +37,7 @@ from __future__ import annotations
 import datetime as dt
 import math
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Final
 
@@ -229,6 +229,9 @@ class Expectation:
     exists to prevent."""
     tolerance: float = EXACT
     state: FeatureState | None = None
+    capped: bool | None = None
+    """For an absent expectation: whether the absence must be the bounded score-time read's
+    (ADR-0046 §8). None checks neither."""
 
 
 INSUFFICIENT: Final = FeatureState.INSUFFICIENT_HISTORY
@@ -252,6 +255,104 @@ def failed_feature_ids(error: AssertionError) -> frozenset[str]:
 def metres_east(metres: float) -> float:
     """The longitude, in degrees, of an equatorial point `metres` east of longitude 0."""
     return metres / (EARTH_RADIUS_KM * 1_000.0) * 180.0 / math.pi
+
+
+# -- bounded score-time reads (ADR-0046 §8) --------------------------------------
+
+CAP: Final = 512
+"""`SCORE_READ_CAP`, written here and not imported: if the declared cap moved, these fixtures must
+fail rather than follow."""
+
+RAW_HISTORY_MS: Final = 25 * 3_600_000
+"""How far behind `as_of` an account's transactions are still held raw: the 24-hour lookback plus
+the one-hour late-arrival margin. Older ones are the folded prefix (ADR-0046 §5, §8)."""
+
+CAPPED_CONTENT: Final = (
+    "account_amount_sum_1h",
+    "account_distinct_merchants_1h",
+    "account_distinct_mcc_5m",
+    "account_distinct_devices_24h",
+    "account_distinct_countries_24h",
+    "device_distinct_accounts_24h",
+)
+"""The six features ADR-0046 §8 names as reading observation content."""
+
+Shape = Callable[[int], dict[str, object]]
+
+
+def deep(
+    depth: int, *, spacing_ms: int, shape: Shape | None = None, prefix: str = "tx_d"
+) -> list[Event]:
+    """`depth` transactions delivered oldest first. The `j`-th newest is `<prefix><j:04d>`, dated
+    `T0 - j * spacing_ms`, with `shape(j)` applied."""
+    return [
+        tx_event(
+            f"{prefix}{j:04d}",
+            occurred_at=at_ms(-spacing_ms * j),
+            **(shape(j) if shape is not None else {}),  # type: ignore[arg-type]
+        )
+        for j in range(depth, 0, -1)
+    ]
+
+
+def spread(j: int) -> dict[str, object]:
+    """Five merchants, six categories and three countries in rotation, and an amount of 100 + j."""
+    return {
+        "merchant_id": f"mrch_s{j % 5}",
+        "merchant_mcc": f"59{j % 6:02d}",
+        "merchant_country": ("GB", "FR", "DE")[j % 3],
+        "amount_minor": 100 + j,
+    }
+
+
+def other_accounts(j: int) -> dict[str, object]:
+    """A different account for every transaction, on the scored device."""
+    return {"account_id": f"acct_v{j:04d}"}
+
+
+def probe(j: int) -> dict[str, object]:
+    """The probe that found §8's profile gap: of 600, the oldest 88 on `dev_old` at `mrch_old`."""
+    if j > CAP:
+        return {"device_id": "dev_old", "merchant_id": "mrch_old"}
+    return {"device_id": "dev_new", "merchant_id": f"mrch_{j:04d}"}
+
+
+def z_sample(in_read: int) -> Shape:
+    """The newest `in_read` in GBP at 1 000 (odd j) or 3 000 (even j); the rest of the capped read
+    (j < 512) in EUR; everything beyond it in GBP at 3 000."""
+
+    def shape(j: int) -> dict[str, object]:
+        if j <= in_read:
+            return {"currency": "GBP", "amount_minor": 1_000 if j % 2 else 3_000}
+        if j < CAP:
+            return {"currency": "EUR", "amount_minor": 5_000}
+        return {"currency": "GBP", "amount_minor": 3_000}
+
+    return shape
+
+
+def home_sample(in_read: int) -> Shape:
+    """The newest `in_read` located on the equator, at longitude 11 for j = 1 and 10 otherwise; the
+    rest of the capped read (j < 512) unlocated; everything beyond it at longitude 10."""
+
+    def shape(j: int) -> dict[str, object]:
+        if j <= in_read:
+            return {"latitude": 0.0, "longitude": 11.0 if j == 1 else 10.0}
+        if j < CAP:
+            return {"latitude": None, "longitude": None}
+        return {"latitude": 0.0, "longitude": 10.0}
+
+    return shape
+
+
+def capped_absent(feature_id: str) -> Expectation:
+    """Absent because the read was capped: `INSUFFICIENT_HISTORY`, marked as the cap's."""
+    return Expectation(feature_id, None, state=INSUFFICIENT, capped=True)
+
+
+ROBUST_Z_OF_8000: Final = (8_000 - 2_000) / (1.4826 * 1_000)
+"""64 amounts at 1 000 and 64 at 3 000: the median is (1 000 + 3 000) / 2 = 2 000, every absolute
+deviation is 1 000, so the MAD is 1 000, and 8 000 scores (8 000 - 2 000) / (1.4826 * 1 000)."""
 
 
 class FeatureSemanticsConformanceSuite(ABC):
@@ -306,6 +407,11 @@ class FeatureSemanticsConformanceSuite(ABC):
                 elif expected.state is not None and actual.state is not expected.state:
                     failures.append(
                         f"{expected.feature_id}: expected {expected.state}, got {actual.state}"
+                    )
+                elif expected.capped is not None and actual.depth_capped is not expected.capped:
+                    failures.append(
+                        f"{expected.feature_id}: expected depth_capped={expected.capped}, got "
+                        f"{actual.depth_capped} (ADR-0046 §8)"
                     )
                 continue
             if not actual.is_available:
@@ -1614,6 +1720,381 @@ class AsServedConformanceSuite(FeatureSemanticsConformanceSuite):
         ]
         self.check_log(log, 0, subject, [Expectation("merchant_distinct_accounts_1h", 1)])
 
+    # -- bounded score-time reads (ADR-0046 §8) -----------------------------
+
+    def test_a_window_at_the_cap_is_read_whole_and_one_more_caps_its_content(self) -> None:
+        """511 earlier transactions 100 s apart, then the scored one: 512 in 24 hours, read whole.
+
+        The `j`-th newest is `j * 100 s` old, so the hour holds j = 1..35 and five minutes j = 1, 2.
+        One more (j = 512, 51 200 s old) makes 513 in 24 hours: the account's and the device's
+        24-hour windows are capped, and the hour and five minutes, holding 36 and 3, are read whole.
+        A merchant the account never used is unknown at 512 and not called unknown at 513.
+        """
+        exact = [
+            Expectation("account_tx_count_1m", 1),
+            Expectation("account_tx_count_5m", 2 + 1),
+            Expectation("account_tx_count_1h", 35 + 1),
+            Expectation("card_tx_count_5m", 2 + 1),
+            # sum(100 + j for j in 1..35) = 3 500 + 630, plus the scored 5 000
+            Expectation("account_amount_sum_1h", 3_500 + 630 + 5_000),
+            Expectation("account_distinct_merchants_1h", 5 + 1),  # mrch_s0..s4, and mrch_00001
+            Expectation("account_distinct_mcc_5m", 2 + 1),  # 5901, 5902, and 5411
+            Expectation("device_is_known_for_account", 1.0),  # a device the read saw
+        ]
+        self.check(
+            deep(511, spacing_ms=100_000, shape=spread),
+            transaction(),
+            [
+                *exact,
+                Expectation("account_tx_count_24h", 511 + 1),
+                Expectation("account_distinct_devices_24h", 1),
+                Expectation("account_distinct_countries_24h", 3),  # GB, FR, DE
+                Expectation("device_distinct_accounts_24h", 1),
+                Expectation("merchant_is_habitual", 0.0),
+            ],
+            complete_since=WATCHED_LONG_ENOUGH,
+        )
+        self.check(
+            deep(512, spacing_ms=100_000, shape=spread),
+            transaction(),
+            [
+                *exact,
+                Expectation("account_tx_count_24h", 512 + 1),
+                capped_absent("account_distinct_devices_24h"),
+                capped_absent("account_distinct_countries_24h"),
+                capped_absent("device_distinct_accounts_24h"),  # the device's day holds 513 too
+                capped_absent("merchant_is_habitual"),
+            ],
+            complete_since=WATCHED_LONG_ENOUGH,
+        )
+
+    def test_a_burst_past_the_cap_caps_every_content_window_and_no_count(self) -> None:
+        """512 earlier transactions 100 ms apart: 513 in one minute, so every window is capped."""
+        self.check(
+            deep(512, spacing_ms=100, shape=spread),
+            transaction(),
+            [
+                *(Expectation(f"account_tx_count_{w}", 512 + 1) for w in ("1m", "5m", "1h", "24h")),
+                Expectation("card_tx_count_5m", 512 + 1),
+                Expectation("seconds_since_last_transaction", 0.1),  # j = 1, 100 ms old
+                *(capped_absent(feature_id) for feature_id in CAPPED_CONTENT),
+            ],
+        )
+
+    def test_a_device_past_the_cap_has_no_distinct_account_count(self) -> None:
+        """Other accounts transact on the scored device, one each, 100 s apart."""
+        self.check(
+            deep(511, spacing_ms=100_000, shape=other_accounts, prefix="tx_v"),
+            transaction(),
+            [
+                Expectation("device_distinct_accounts_24h", 511 + 1),
+                Expectation("account_tx_count_24h", 1),
+                Expectation("account_distinct_devices_24h", 1),
+            ],
+        )
+        self.check(
+            deep(512, spacing_ms=100_000, shape=other_accounts, prefix="tx_v"),
+            transaction(),
+            [
+                capped_absent("device_distinct_accounts_24h"),
+                Expectation("account_tx_count_24h", 1),
+                Expectation("account_distinct_devices_24h", 1),
+            ],
+        )
+
+    def test_a_redelivery_never_moves_the_cap_boundary(self) -> None:
+        """At 512, a redelivered earlier transaction and a redelivered scored one both count once.
+        A new transaction recorded between two deliveries of the scored one is visible to the
+        redelivery's read, which it takes to 513 (ADR-0046 §2)."""
+        history = deep(511, spacing_ms=100_000, shape=spread)
+        subject = transaction()
+        scored = transaction_observation(subject)
+        whole = [
+            Expectation("account_tx_count_24h", 511 + 1),
+            Expectation("account_distinct_countries_24h", 3),
+        ]
+        log = [*history, history[-1], scored]  # tx_d0001 delivered twice
+        self.check_log(log, len(log) - 1, subject, whole)
+        log = [*history, scored, scored]
+        self.check_log(log, len(log) - 1, subject, whole)
+        log = [*history, scored, tx_event("tx_late", occurred_at=at(-50)), scored]
+        self.check_log(
+            log,
+            len(log) - 1,
+            subject,
+            [
+                Expectation("account_tx_count_24h", 511 + 2),
+                capped_absent("account_distinct_countries_24h"),
+            ],
+        )
+
+    def test_an_observation_at_the_scored_millisecond_reaches_the_cap_only_if_recorded_first(
+        self,
+    ) -> None:
+        """At the boundary millisecond: INCLUDED windows count it when it was recorded before the
+        read, and the previous transaction, EXCLUDED, never is it (j = 1 is 100 s old)."""
+        history = deep(511, spacing_ms=100_000, shape=spread)
+        subject = transaction()
+        scored = transaction_observation(subject)
+        same = tx_event("tx_same", occurred_at=T0)
+        before = [*history, same, scored]
+        self.check_log(
+            before,
+            len(before) - 1,
+            subject,
+            [
+                Expectation("account_tx_count_24h", 511 + 2),
+                capped_absent("account_distinct_countries_24h"),
+                Expectation("seconds_since_last_transaction", 100.0),
+            ],
+        )
+        after = [*history, scored, same]
+        self.check_log(
+            after,
+            len(history),
+            subject,
+            [
+                Expectation("account_tx_count_24h", 511 + 1),
+                Expectation("account_distinct_countries_24h", 3),
+                Expectation("seconds_since_last_transaction", 100.0),
+            ],
+        )
+
+    def test_the_window_edge_and_the_raw_history_edge_count_separately(self) -> None:
+        """One more transaction beside 511 earlier ones. Exactly 24 hours old it is outside the
+        24-hour window but still held raw, so the window holds 512 and is read whole while the
+        profile's raw read holds 513 and is capped. A millisecond younger, it caps the window too.
+        Exactly 25 hours old it is still held raw; a millisecond older it is folded, and the profile
+        is read whole."""
+        history = deep(511, spacing_ms=100_000, shape=spread)
+        subject = transaction()
+
+        def one_more_at(milliseconds: int) -> list[Event]:
+            return [tx_event("tx_edge", occurred_at=at_ms(milliseconds)), *history]
+
+        self.check(
+            one_more_at(-86_400_000),
+            subject,
+            [
+                Expectation("account_tx_count_24h", 511 + 1),
+                Expectation("account_distinct_countries_24h", 3),
+                capped_absent("merchant_is_habitual"),
+                Expectation("device_is_known_for_account", 1.0),
+            ],
+            complete_since=WATCHED_LONG_ENOUGH,
+        )
+        self.check(
+            one_more_at(-86_399_999),
+            subject,
+            [
+                Expectation("account_tx_count_24h", 511 + 2),
+                capped_absent("account_distinct_countries_24h"),
+            ],
+            complete_since=WATCHED_LONG_ENOUGH,
+        )
+        self.check(
+            one_more_at(-RAW_HISTORY_MS),
+            subject,
+            [
+                Expectation("account_tx_count_24h", 511 + 1),
+                capped_absent("merchant_is_habitual"),
+            ],
+            complete_since=WATCHED_LONG_ENOUGH,
+        )
+        self.check(
+            one_more_at(-RAW_HISTORY_MS - 1),
+            subject,
+            [
+                Expectation("account_tx_count_24h", 511 + 1),
+                Expectation("merchant_is_habitual", 0.0),  # mrch_00001: one visit, 25 h old
+            ],
+            complete_since=WATCHED_LONG_ENOUGH,
+        )
+
+    def test_a_failed_login_burst_far_above_the_cap_is_counted_exactly(self) -> None:
+        """1 500 failed logins 2 s apart and 600 identity changes a minute apart from two hours ago.
+        Failed logins are a range count and the latest change one bounded lookup, so depth hides
+        neither: a capped failed-login count would blind R012 during credential stuffing."""
+        changes = [
+            identity_event(
+                f"evt_c{k:04d}", stream=Stream.IDENTITY_CHANGE, occurred_at=at(-7_200 - 60 * k)
+            )
+            for k in range(599, -1, -1)
+        ]
+        edge = identity_event(
+            "evt_f_edge", stream=Stream.IDENTITY_FAILED_LOGIN, occurred_at=at_ms(-3_600_000)
+        )
+        logins = [
+            identity_event(
+                f"evt_f{k:04d}", stream=Stream.IDENTITY_FAILED_LOGIN, occurred_at=at_ms(-2_000 * k)
+            )
+            for k in range(1_500, 0, -1)
+        ]
+        self.check(
+            [*changes, edge, *logins],
+            transaction(),
+            [
+                Expectation("failed_logins_1h", 1_500),  # the one exactly an hour old is outside
+                Expectation("hours_since_identity_change", 2.0),  # the latest change, k = 0
+            ],
+        )
+
+    def test_outcomes_far_above_the_cap_keep_the_declined_ratio_exact(self) -> None:
+        """600 transactions 5 s apart, each decided a millisecond later, every fourth declined. The
+        outcome counts are range counts; the hour's amount sum reads content and is capped."""
+        log: list[Event] = []
+        for k in range(600, 0, -1):
+            transaction_id = f"tx_o{k:04d}"
+            log.append(tx_event(transaction_id, occurred_at=at_ms(-5_000 * k)))
+            log.append(
+                outcome_event(
+                    transaction_id,
+                    decided_at=at_ms(-5_000 * k + 1),
+                    outcome=AuthorizationOutcome.DECLINED
+                    if k % 4 == 0
+                    else AuthorizationOutcome.APPROVED,
+                )
+            )
+        self.check(
+            log,
+            transaction(),
+            [
+                Expectation("declined_ratio_1h", 150 / 600),
+                Expectation("account_tx_count_1h", 600 + 1),
+                capped_absent("account_amount_sum_1h"),
+            ],
+        )
+
+    def test_depth_hides_an_old_device_and_merchant_rather_than_calling_them_unknown(self) -> None:
+        """600 transactions 2 minutes apart; the capped read holds the scored one and the newest
+        511. The oldest 88, on `dev_old` at `mrch_old`, are beyond it and not in the folded prefix.
+        A read of the newest 512 alone would call both unknown; capped, neither is called anything,
+        and the category the read saw 511 times is still habitual."""
+        self.check(
+            deep(600, spacing_ms=120_000, shape=probe),
+            transaction(device_id="dev_old", merchant_id="mrch_old"),
+            [
+                capped_absent("device_is_known_for_account"),
+                capped_absent("merchant_is_habitual"),
+                Expectation("mcc_is_habitual_for_account", 1.0),
+            ],
+            complete_since=WATCHED_LONG_ENOUGH,
+        )
+
+    def test_a_capped_profile_knows_a_device_it_saw_and_calls_no_device_unknown(self) -> None:
+        """One transaction 72 hours old, in the folded prefix, then 600 two minutes apart: the read
+        holds the newest 511 (`dev_new`) and not the 89 beyond them (`dev_unread`)."""
+        history = [
+            tx_event("tx_a_prefix", occurred_at=at(-72 * 3_600), device_id="dev_prefix"),
+            *deep(
+                600,
+                spacing_ms=120_000,
+                shape=lambda j: {"device_id": "dev_new" if j < CAP else "dev_unread"},
+            ),
+        ]
+        for device, expected in (
+            ("dev_new", Expectation("device_is_known_for_account", 1.0)),
+            ("dev_prefix", Expectation("device_is_known_for_account", 1.0)),
+            ("dev_never", capped_absent("device_is_known_for_account")),  # truly unknown: not 0.0
+        ):
+            self.check(
+                history,
+                transaction(device_id=device),
+                [expected],
+                complete_since=WATCHED_LONG_ENOUGH,
+            )
+
+    def test_a_capped_profile_counts_visits_across_the_prefix_and_the_read(self) -> None:
+        """Two visits to `mrch_split` in the prefix and one in the read make three. `mrch_once` has
+        three visits, but the read holds one of them (j = 7) and not j = 520 or 530."""
+
+        def merchant(j: int) -> dict[str, object]:
+            if j == 5:
+                return {"merchant_id": "mrch_split"}
+            if j in (7, 520, 530):
+                return {"merchant_id": "mrch_once"}
+            return {"merchant_id": "mrch_new" if j < CAP else "mrch_unread"}
+
+        history = [
+            tx_event("tx_a_prefix1", occurred_at=at(-72 * 3_600), merchant_id="mrch_split"),
+            tx_event("tx_a_prefix2", occurred_at=at(-71 * 3_600), merchant_id="mrch_split"),
+            *deep(600, spacing_ms=120_000, shape=merchant),
+        ]
+        for merchant_id, expected in (
+            ("mrch_new", Expectation("merchant_is_habitual", 1.0)),
+            ("mrch_split", Expectation("merchant_is_habitual", 1.0)),
+            ("mrch_once", capped_absent("merchant_is_habitual")),
+        ):
+            self.check(
+                history,
+                transaction(merchant_id=merchant_id),
+                [expected],
+                complete_since=WATCHED_LONG_ENOUGH,
+            )
+
+    def test_a_capped_profile_calls_a_category_habitual_only_on_visits_it_saw(self) -> None:
+        """`5812` 511 times in the read; `7011` 89 times, all beyond it."""
+        history = deep(
+            600, spacing_ms=120_000, shape=lambda j: {"merchant_mcc": "5812" if j < CAP else "7011"}
+        )
+        for mcc, expected in (
+            ("5812", Expectation("mcc_is_habitual_for_account", 1.0)),
+            ("7011", capped_absent("mcc_is_habitual_for_account")),
+        ):
+            self.check(
+                history,
+                transaction(merchant_mcc=mcc),
+                [expected],
+                complete_since=WATCHED_LONG_ENOUGH,
+            )
+
+    def test_capped_tenure_is_exact_only_when_the_prefix_holds_the_lifetimes_start(self) -> None:
+        """With a transaction 72 hours old in the prefix, tenure is 3 days. Without it, the lifetime
+        starts at the oldest of 600 (20 hours old), which the read does not reach."""
+        recent = deep(600, spacing_ms=120_000)
+        self.check(
+            [tx_event("tx_a_prefix", occurred_at=at(-72 * 3_600)), *recent],
+            transaction(),
+            [Expectation("account_tenure_days", 3.0)],
+            complete_since=WATCHED_LONG_ENOUGH,
+        )
+        self.check(
+            recent,
+            transaction(),
+            [capped_absent("account_tenure_days")],
+            complete_since=WATCHED_LONG_ENOUGH,
+        )
+
+    def test_a_capped_robust_z_needs_its_whole_sample_inside_the_read(self) -> None:
+        """128 GBP amounts in the read (64 at 1 000, 64 at 3 000) are the whole sample; 127 are not,
+        whatever lies beyond the read."""
+        self.check(
+            deep(600, spacing_ms=120_000, shape=z_sample(128)),
+            transaction(amount_minor=8_000),
+            [Expectation("amount_zscore_vs_account", ROBUST_Z_OF_8000)],
+        )
+        self.check(
+            deep(600, spacing_ms=120_000, shape=z_sample(127)),
+            transaction(amount_minor=8_000),
+            [capped_absent("amount_zscore_vs_account")],
+        )
+
+    def test_a_capped_home_needs_its_whole_sample_inside_the_read(self) -> None:
+        """The newest 20 located: 19 at longitude 10 and the newest at 11. A point at 10 is 1 degree
+        from the rest in total and the one at 11 is 19, so home is at 10, 10 degrees from the scored
+        point at 0. With 19 located in the read, home is absent."""
+        subject = transaction(latitude=0.0, longitude=0.0)
+        self.check(
+            deep(600, spacing_ms=120_000, shape=home_sample(20)),
+            subject,
+            [Expectation("distance_from_account_home_km", along_equator_km(10.0))],
+        )
+        self.check(
+            deep(600, spacing_ms=120_000, shape=home_sample(19)),
+            subject,
+            [capped_absent("distance_from_account_home_km")],
+        )
+
 
 class EventTimeCompleteConformanceSuite(FeatureSemanticsConformanceSuite):
     """What a complete history says: arrival order only decides which delivery came first."""
@@ -1699,6 +2180,61 @@ class EventTimeCompleteConformanceSuite(FeatureSemanticsConformanceSuite):
         s = transaction_observation(subject)
         for log in ([zz, aa, s], [s, zz, aa]):
             self.check_log(log, log.index(s), subject, [Expectation("failed_logins_1h", 2)])
+
+    # -- a complete history is never capped (ADR-0046 §8) -------------------
+
+    def test_a_complete_history_reads_every_window_past_the_cap(self) -> None:
+        """The as-served cap fixtures' logs, over a complete history: every value exact."""
+        self.check(
+            deep(512, spacing_ms=100, shape=spread),
+            transaction(),
+            [
+                Expectation("account_tx_count_24h", 512 + 1),
+                # sum(100 + j for j in 1..512) = 51 200 + 131 328, plus the scored 5 000
+                Expectation("account_amount_sum_1h", 51_200 + 131_328 + 5_000),
+                Expectation("account_distinct_merchants_1h", 5 + 1),
+                Expectation("account_distinct_mcc_5m", 6 + 1),  # 5900..5905, and 5411
+                Expectation("account_distinct_devices_24h", 1),
+                Expectation("account_distinct_countries_24h", 3),
+                Expectation("device_distinct_accounts_24h", 1),
+            ],
+        )
+        self.check(
+            deep(512, spacing_ms=100_000, shape=other_accounts, prefix="tx_v"),
+            transaction(),
+            [Expectation("device_distinct_accounts_24h", 512 + 1)],
+        )
+
+    def test_a_complete_history_reads_the_whole_profile_past_the_cap(self) -> None:
+        """The capped profile fixtures' logs, over a complete history: every value exact."""
+        self.check(
+            deep(600, spacing_ms=120_000, shape=probe),
+            transaction(device_id="dev_old", merchant_id="mrch_old"),
+            [
+                Expectation("device_is_known_for_account", 1.0),
+                Expectation("merchant_is_habitual", 1.0),  # 88 visits
+                Expectation("account_tenure_days", 600 * 120 / 86_400),  # the oldest, 20 h old
+            ],
+            complete_since=WATCHED_LONG_ENOUGH,
+        )
+        self.check(
+            deep(600, spacing_ms=120_000, shape=probe),
+            transaction(device_id="dev_never"),
+            [Expectation("device_is_known_for_account", 0.0)],
+            complete_since=WATCHED_LONG_ENOUGH,
+        )
+        # The last 128 GBP amounts are j = 1..127 and j = 512: 64 at 1 000 and 64 at 3 000.
+        self.check(
+            deep(600, spacing_ms=120_000, shape=z_sample(127)),
+            transaction(amount_minor=8_000),
+            [Expectation("amount_zscore_vs_account", ROBUST_Z_OF_8000)],
+        )
+        # The last 20 located are j = 1..19 and j = 512: 19 at longitude 10 and one at 11.
+        self.check(
+            deep(600, spacing_ms=120_000, shape=home_sample(19)),
+            transaction(latitude=0.0, longitude=0.0),
+            [Expectation("distance_from_account_home_km", along_equator_km(10.0))],
+        )
 
 
 class ReferenceAsServedConformanceTest(AsServedConformanceSuite):

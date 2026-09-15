@@ -486,3 +486,51 @@ def test_an_outcome_with_no_store_write_carries_no_position_or_epoch(store: Any)
     outcome = _pipeline(store).score(_request(), now=NOW)
     assert (outcome.observe_position, outcome.store_epoch_ms) == (None, None)
     assert outcome.context is not None, "the empty context the decision was made on"
+
+
+def _deep_store(earlier: int) -> _ReferenceBackedStore:
+    """`earlier` transactions 100 s apart before NOW, all in GB, observed into the reference."""
+    from trace_core.features.semantics import Stream
+
+    store = _ReferenceBackedStore()
+    for j in range(earlier, 0, -1):
+        store.inner.observe(
+            Event(
+                stream=Stream.TRANSACTION,
+                occurred_at=event_time(NOW - dt.timedelta(seconds=100 * j)),
+                account_id="acct_000001",
+                event_id=f"tx_d{j:04d}",
+                currency="GBP",
+                amount_minor=5_000,
+                device_id="dev_000001",
+                merchant_id="mrch_00001",
+                merchant_mcc="5411",
+                merchant_country="GB",
+            )
+        )
+    return store
+
+
+def test_a_history_deeper_than_the_read_is_declared_and_its_content_withheld() -> None:
+    """ADR-0046 §8 through the real pack. At 512 in 24 hours nothing is capped. At 513 the counts
+    stay exact, the content features are absent and marked as the cap's, the decision says
+    `history_depth_capped`, and R019 fires."""
+    from services.gateway.pipeline import REASON_HISTORY_DEPTH_CAPPED
+
+    request = _request(transaction_id="tx_9999999999")
+    at_cap = _pipeline(_deep_store(511)).score(request, now=NOW)
+    assert at_cap.features["account_tx_count_24h"].value == 512
+    assert at_cap.features["account_distinct_countries_24h"].value == 1
+    assert REASON_HISTORY_DEPTH_CAPPED not in at_cap.decision.degraded_reasons
+    assert "R019_history_depth_capped" not in {r.rule_id for r in at_cap.decision.reasons}
+
+    past = _pipeline(_deep_store(512)).score(request, now=NOW)
+    count = past.features["account_tx_count_24h"]
+    assert count.value == 513
+    assert not count.depth_capped
+    countries = past.features["account_distinct_countries_24h"]
+    assert countries.state is FeatureState.INSUFFICIENT_HISTORY
+    assert countries.depth_capped
+    assert REASON_HISTORY_DEPTH_CAPPED in past.decision.degraded_reasons
+    assert past.decision.degraded
+    assert "R019_history_depth_capped" in {r.rule_id for r in past.decision.reasons}

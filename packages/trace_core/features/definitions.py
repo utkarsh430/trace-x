@@ -36,6 +36,7 @@ from trace_core.contracts.canonical import CanonicalTransaction
 from trace_core.domain.enums import TransactionChannel
 from trace_core.domain.geo import GeoPoint, haversine_km, implied_speed_kmh
 from trace_core.features.context import (
+    HISTORY_DEPTH_CAPPED,
     INSUFFICIENT_HISTORY,
     MIN_OBSERVATIONS_FOR_ROBUST_Z,
     Completeness,
@@ -112,6 +113,8 @@ def _amount_sum(spec: WindowedAggregate) -> Compute:
         state = ctx.window(spec.entity, _entity_id(tx, spec.entity), spec.stream, spec.window.label)
         if state is None:
             return INSUFFICIENT_HISTORY
+        if state.content_capped:
+            return HISTORY_DEPTH_CAPPED  # the sum needs content past the cap (ADR-0046 §8)
         return float(state.amount_sum_minor)
 
     return compute
@@ -122,6 +125,8 @@ def _distinct(spec: WindowedAggregate) -> Compute:
         state = ctx.window(spec.entity, _entity_id(tx, spec.entity), spec.stream, spec.window.label)
         if state is None or spec.dimension is None:
             return INSUFFICIENT_HISTORY
+        if state.content_capped and spec.storage is CardinalityStorage.EXACT:
+            return HISTORY_DEPTH_CAPPED  # the members past the cap are not read (ADR-0046 §8)
         value = state.distinct.get(spec.dimension)
         return INSUFFICIENT_HISTORY if value is None else float(value)
 
@@ -358,6 +363,8 @@ def _robust_z(spec: ProfileAttribute) -> Compute:
 
     def compute(tx: CanonicalTransaction, ctx: FeatureContext) -> float | InsufficientHistory:
         profile = _profile(tx, ctx, Entity.ACCOUNT)
+        if profile is not None and profile.depth_capped and profile.amount_median_minor is None:
+            return HISTORY_DEPTH_CAPPED  # the capped read does not hold the whole sample
         if profile is None or profile.observation_count < MIN_OBSERVATIONS_FOR_ROBUST_Z:
             return INSUFFICIENT_HISTORY
         if profile.amount_median_minor is None or profile.amount_mad_minor is None:
@@ -379,8 +386,11 @@ def _robust_z(spec: ProfileAttribute) -> Compute:
 def _tenure_days(spec: ProfileAttribute) -> Compute:
     def compute(tx: CanonicalTransaction, ctx: FeatureContext) -> float | InsufficientHistory:
         profile = _profile(tx, ctx, Entity.ACCOUNT)
-        if profile is None or profile.first_seen_at is None:
+        if profile is None:
             return INSUFFICIENT_HISTORY
+        if profile.first_seen_at is None:
+            # A capped read knows the lifetime's start only when the folded prefix holds it.
+            return HISTORY_DEPTH_CAPPED if profile.depth_capped else INSUFFICIENT_HISTORY
         # "First seen N days ago" is only tenure if the store has been watching
         # for at least its horizon: to a store that started last week, an
         # account opened last year and one opened last week look identical, and
@@ -404,6 +414,10 @@ def _membership(spec: ProfileAttribute) -> Compute:
             known, subject = profile.habitual_mccs, tx.merchant_mcc
         else:
             known, subject = profile.known_devices, tx.device_id
+        if profile.depth_capped:
+            # ADR-0046 §8: a member the capped read saw is certain; a non-member may be one it did
+            # not reach, so it is never called unfamiliar.
+            return 1.0 if subject is not None and subject in known else HISTORY_DEPTH_CAPPED
         if not known:
             # An empty set is "we have never seen this account use anything",
             # not "this is unfamiliar". Reporting 0.0 would make every new
@@ -431,10 +445,11 @@ def _distance_from_home(spec: ProfileAttribute) -> Compute:
 
     def compute(tx: CanonicalTransaction, ctx: FeatureContext) -> float | InsufficientHistory:
         profile = _profile(tx, ctx, Entity.ACCOUNT)
-        if profile is None or profile.home_latitude is None or profile.home_longitude is None:
-            return INSUFFICIENT_HISTORY
         if tx.latitude is None or tx.longitude is None:
             return INSUFFICIENT_HISTORY
+        if profile is None or profile.home_latitude is None or profile.home_longitude is None:
+            capped = profile is not None and profile.depth_capped
+            return HISTORY_DEPTH_CAPPED if capped else INSUFFICIENT_HISTORY
         return haversine_km(
             GeoPoint(profile.home_latitude, profile.home_longitude),
             GeoPoint(tx.latitude, tx.longitude),

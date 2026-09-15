@@ -11,16 +11,21 @@ nothing -- it never leaves the counters and the distinct sets disagreeing.
 * **Every observation once, under its namespaced identity** (ADR-0046 §1). The first delivery is
   the observation whatever a redelivery carries -- another amount, another account -- so identity
   is checked across the whole store, not per account.
-* **Account transactions and identity events, raw**, for the widest account lookback plus the
-  late-arrival margin (25 h). Every account-level count, sum, ratio, distinct count and previous
-  observation is computed from them by the reference implementation's own reductions
-  (`reference.window_state`, `previous_observation`, `lifetime_profile`), so the two cannot drift.
+* **Account transactions, and identity events one set per stream, raw**, for the widest account
+  lookback plus the late-arrival margin (25 h). A score-time read is bounded at any depth
+  (ADR-0046 §8): every window count is a range count, the previous transaction and the latest
+  identity change are one bounded lookup each, and only the most recent `SCORE_READ_CAP`
+  transactions at or before `as_of` are decoded. Sums, distinct counts and the profile are computed
+  from those by the reference implementation's own reductions (`reference.window_state`,
+  `previous_observation`, `lifetime_profile`), so the two cannot drift. A window holding more than
+  the cap keeps its count and serves its content as absent; a capped profile keeps what is still
+  exact (`reference.depth_capped_profile`).
 * **Beyond that, account transactions are folded, in event-time order, into a bounded profile
   prefix**: the current lifetime run's start, visit counters, known devices, the last 128 amounts
   per currency and the last 20 located points. A profile is the prefix plus the raw lifetime.
 * **Cards**: identities scored by event time. **Devices**: account and identity, scored by event
-  time. **IPs and merchants**: five-minute HyperLogLogs of accounts (the declared APPROXIMATE
-  estimand).
+  time; a device window holding more than the cap serves no distinct-account count. **IPs and
+  merchants**: five-minute HyperLogLogs of accounts (the declared APPROXIMATE estimand).
 * **Authorization outcomes** (ADR-0049 §6): each once, under its namespaced identity, with a
   verdict. One whose transaction the store holds with the same account is verified and joins the
   account's verified outcomes, and its declines, scored by outcome time. One whose transaction is
@@ -51,6 +56,12 @@ late observation never shortens it.
   the margin -- stays pending as served where a complete history verifies it; so does one whose
   transaction arrives after the pending outcome expired, the margin past the later of its outcome
   time and the clock. No released producer does either: DM-1 decides within seconds.
+* A capped profile sees the folded prefix only when nothing unread can hide a lifetime gap between
+  them. Where a late read has folded past the raw history, or a snapshot still holds older raw
+  transactions, it serves an absence where a complete as-served log still has a value.
+* Identity events recorded before ADR-0046 §8 shared one account set. It is never migrated: an
+  account's identity windows are not held while it exists, it is given an expiry within the 25 hours
+  identity events are held, and a read reaching behind what it held stays unheld after it has gone.
 * The script touches keys of several entities, so it cannot run on a Redis Cluster as written.
 
 Redis is authoritative for nothing (ADR-0003): it holds derived state that Phase 3 can rebuild.
@@ -84,6 +95,7 @@ from trace_core.features.observation import (
 from trace_core.features.profile_math import geodesic_medoid, robust_centre
 from trace_core.features.reference import (
     ReadScope,
+    depth_capped_profile,
     lifetime_profile,
     previous_observation,
     window_state,
@@ -96,7 +108,7 @@ from trace_core.features.semantics import (
     HOME_SAMPLE_SIZE,
     LATE_ARRIVAL_MARGIN_S,
     PROFILE_LIFETIME_GAP_S,
-    WINDOWS,
+    SCORE_READ_CAP,
     Aggregation,
     CardinalityStorage,
     CurrentObservation,
@@ -108,6 +120,7 @@ from trace_core.features.semantics import (
     Stream,
     Window,
     WindowedAggregate,
+    reads_observation_content,
 )
 from trace_core.features.state_plan import PLAN
 
@@ -123,6 +136,15 @@ LIMBS: Final = len(str(AMOUNT_MINOR_MAX**2)) // 9 + 1
 digit field overflows only after nine billion increments in one minute."""
 
 _GAP_MS: Final = PROFILE_LIFETIME_GAP_S * 1000
+IDENTITY_RAW_KEYS: Final[dict[Stream, str]] = {
+    Stream.IDENTITY_FAILED_LOGIN: "fl",
+    Stream.IDENTITY_CHANGE: "ic",
+}
+"""Each identity stream's raw set, `<ns>:ie:<account>:<suffix>` (ADR-0046 §8). The account set
+`<ns>:ie:<account>` both streams shared before it is legacy: read as not held, never written."""
+_WRITABLE_STREAMS: Final = frozenset(
+    {Stream.TRANSACTION, Stream.AUTHORIZATION_OUTCOME, *IDENTITY_RAW_KEYS}
+)
 _NON_ACCOUNT_SHAPES: Final = frozenset(
     {
         (Entity.CARD, Aggregation.COUNT, None, None),
@@ -147,18 +169,31 @@ def unsupported_declarations() -> list[str]:
         shape = spec.semantics
         if isinstance(shape, WindowedAggregate):
             if shape.entity is Entity.ACCOUNT:
-                if (
-                    shape.stream is Stream.AUTHORIZATION_OUTCOME
-                    and shape.aggregation is not Aggregation.DECLINED_RATIO
-                ):
-                    problems.append(f"{spec.feature_id}: outcome state answers only the ratio")
-                continue  # raw account history and outcome state answer the rest
+                if shape.stream is Stream.AUTHORIZATION_OUTCOME:
+                    if shape.aggregation is not Aggregation.DECLINED_RATIO:
+                        problems.append(f"{spec.feature_id}: outcome state answers only the ratio")
+                elif shape.stream is Stream.TRANSACTION:
+                    if shape.aggregation is not Aggregation.COUNT and not (
+                        reads_observation_content(shape)
+                    ):
+                        problems.append(
+                            f"{spec.feature_id}: account transactions are served as range counts "
+                            f"or capped content, not {shape.aggregation}"
+                        )
+                elif shape.aggregation is not Aggregation.COUNT:
+                    problems.append(f"{spec.feature_id}: identity streams are range counts only")
+                continue
             key = (shape.entity, shape.aggregation, shape.dimension, shape.storage)
             if key not in _NON_ACCOUNT_SHAPES or shape.stream is not Stream.TRANSACTION:
                 problems.append(f"{spec.feature_id}: no primitive for {key} on {shape.stream}")
             if shape.current_observation is not CurrentObservation.INCLUDED:
                 problems.append(f"{spec.feature_id}: only INCLUDED non-account windows are stored")
         elif isinstance(shape, (PairwiseWithPrevious, ProfileAttribute)):
+            if isinstance(shape, PairwiseWithPrevious) and shape.stream not in (
+                Stream.TRANSACTION,
+                *IDENTITY_RAW_KEYS,
+            ):
+                problems.append(f"{spec.feature_id}: no previous observation on {shape.stream}")
             if shape.entity is not Entity.ACCOUNT:
                 problems.append(
                     f"{spec.feature_id}: only account profiles and previous observations"
@@ -177,20 +212,26 @@ def _windows_of(entity: Entity, aggregation: Aggregation) -> tuple[Window, ...]:
     return tuple(sorted(found, key=lambda w: w.seconds))
 
 
-def _account_lookback_s(streams: frozenset[Stream]) -> int:
-    windows = [
-        spec.semantics.window.seconds
+def _account_windows(stream: Stream) -> tuple[Window, ...]:
+    found = {
+        spec.semantics.window
         for spec in ONLINE_FEATURES
         if isinstance(spec.semantics, WindowedAggregate)
         and spec.semantics.entity is Entity.ACCOUNT
-        and spec.semantics.stream in streams
-    ]
-    lookbacks = [
-        lookback.seconds
-        for (entity, stream), lookback in PLAN.previous.items()
-        if entity is Entity.ACCOUNT and stream in streams
-    ]
-    return max([*windows, *lookbacks], default=0)
+        and spec.semantics.stream is stream
+    }
+    return tuple(sorted(found, key=lambda w: w.seconds))
+
+
+def _excluded(entity: Entity, stream: Stream, window: Window) -> bool:
+    """Whether the released features declare this window without the current observation."""
+    return any(
+        isinstance(spec.semantics, WindowedAggregate)
+        and (spec.semantics.entity, spec.semantics.stream, spec.semantics.window)
+        == (entity, stream, window)
+        and spec.semantics.current_observation is CurrentObservation.EXCLUDED
+        for spec in ONLINE_FEATURES
+    )
 
 
 def _retention_ms(windows: tuple[Window, ...], extra_ms: int = 0) -> int:
@@ -211,6 +252,9 @@ class Layout:
     merchant_distinct_windows: tuple[Window, ...]
     cv_windows: tuple[Window, ...]
     outcome_windows: tuple[Window, ...]
+    account_windows: dict[Stream, tuple[Window, ...]]
+    """Every declared account window on each raw stream, each served by a range count (§8)."""
+    identity_streams: tuple[Stream, ...] = tuple(IDENTITY_RAW_KEYS)
 
     @property
     def card_ms(self) -> int:
@@ -240,6 +284,17 @@ class Layout:
         def ms(windows: tuple[Window, ...]) -> list[int]:
             return [w.seconds * 1000 for w in windows]
 
+        def ranged(stream: Stream) -> list[list[int]]:
+            """`[window ms, 1 when the current observation is excluded]`, per account window."""
+            return [
+                [w.seconds * 1000, int(_excluded(Entity.ACCOUNT, stream, w))]
+                for w in self.account_windows[stream]
+            ]
+
+        def previous_ms(stream: Stream) -> int:
+            lookback = PLAN.previous.get((Entity.ACCOUNT, stream))
+            return 0 if lookback is None else lookback.seconds * 1000
+
         return json.dumps(
             {
                 "raw_tx_ms": self.raw_tx_ms,
@@ -263,6 +318,18 @@ class Layout:
                 "cv_windows": ms(self.cv_windows),
                 "ao_ms": self.outcome_ms,
                 "ao_windows": ms(self.outcome_windows),
+                "cap": SCORE_READ_CAP,
+                "tx_windows": ranged(Stream.TRANSACTION),
+                "tx_prev_ms": previous_ms(Stream.TRANSACTION),
+                "ie_keys": {stream.value: suffix for stream, suffix in IDENTITY_RAW_KEYS.items()},
+                "ie_streams": [
+                    {
+                        "key": IDENTITY_RAW_KEYS[stream],
+                        "windows": ranged(stream),
+                        "prev_ms": previous_ms(stream),
+                    }
+                    for stream in self.identity_streams
+                ],
                 "tx_ns": IdentityNamespace.TRANSACTION.value,
                 "ao_ns": IdentityNamespace.TRANSACTION_AUTHORIZATION.value,
             },
@@ -271,17 +338,20 @@ class Layout:
 
 
 def _layout() -> Layout:
-    identity_streams = frozenset({Stream.IDENTITY_FAILED_LOGIN, Stream.IDENTITY_CHANGE})
+    identity_streams = tuple(IDENTITY_RAW_KEYS)
     return Layout(
-        raw_tx_ms=(_account_lookback_s(frozenset({Stream.TRANSACTION})) + LATE_ARRIVAL_MARGIN_S)
-        * 1000,
-        raw_ie_ms=(_account_lookback_s(identity_streams) + LATE_ARRIVAL_MARGIN_S) * 1000,
+        raw_tx_ms=PLAN.account_raw_ms((Stream.TRANSACTION,)),
+        raw_ie_ms=PLAN.account_raw_ms(identity_streams),
         card_windows=_windows_of(Entity.CARD, Aggregation.COUNT),
         device_windows=_windows_of(Entity.DEVICE, Aggregation.DISTINCT_COUNT),
         ip_windows=_windows_of(Entity.IP, Aggregation.DISTINCT_COUNT),
         merchant_distinct_windows=_windows_of(Entity.MERCHANT, Aggregation.DISTINCT_COUNT),
         cv_windows=_windows_of(Entity.MERCHANT, Aggregation.AMOUNT_CV),
         outcome_windows=_windows_of(Entity.ACCOUNT, Aggregation.DECLINED_RATIO),
+        account_windows={
+            stream: _account_windows(stream) for stream in (Stream.TRANSACTION, *identity_streams)
+        },
+        identity_streams=identity_streams,
     )
 
 
@@ -330,8 +400,13 @@ _READ_LUA: Final = r"""
 local function read(as_of, acct, card, dev, mer, ip, cur, own)
   local reply = {}
   reply[1] = redis.call('GET', key('epoch')) or ''
-  reply[2] = observations(redis.call('ZRANGEBYSCORE', key('tx', acct), '-inf', fmt(as_of)))
-  reply[3] = observations(redis.call('ZRANGEBYSCORE', key('ie', acct), '-inf', fmt(as_of)))
+  local tx = key('tx', acct)
+  -- The most recent `cap` transactions at or before as_of, newest first: the only transaction
+  -- content a read decodes, at any depth (ADR-0046 §8).
+  local newest = redis.call('ZREVRANGEBYSCORE', tx, fmt(as_of), '-inf', 'LIMIT', 0, cfg.cap)
+  reply[2] = observations(newest)
+  -- Identity events still in the account set they shared before §8: not held while it exists.
+  reply[3] = redis.call('ZCOUNT', key('ie', acct), '-inf', '+inf')
   reply[4] = redis.call('HGETALL', key('pf', acct))
   reply[5] = redis.call('HGETALL', key('pfh', acct))
   reply[6] = redis.call('LRANGE', key('pfa', acct, cur), 0, -1)
@@ -347,21 +422,26 @@ local function read(as_of, acct, card, dev, mer, ip, cur, own)
   reply[8] = card_counts
   local dev_counts = {}
   for i, w in ipairs(cfg.dev_windows) do
-    local members = {}
+    local n, distinct = 0, 0
     if present(dev) then
-      members = redis.call('ZRANGEBYSCORE', key('dev', dev), '(' .. fmt(as_of - w), fmt(as_of))
-    end
-    local seen, distinct = {}, 0
-    for _, m in ipairs(members) do
-      -- `<length of account>|<account><identity>`: no separator can collide with an id.
-      local sep = string.find(m, '|', 1, true)
-      local a = string.sub(m, sep + 1, sep + tonumber(string.sub(m, 1, sep - 1)))
-      if not seen[a] then
-        seen[a] = true
-        distinct = distinct + 1
+      local dk = key('dev', dev)
+      n = redis.call('ZCOUNT', dk, '(' .. fmt(as_of - w), fmt(as_of))
+      if n > cfg.cap then
+        distinct = -1  -- capped: the count is exact, the members are not read (ADR-0046 §8)
+      else
+        local seen = {}
+        for _, m in ipairs(redis.call('ZRANGEBYSCORE', dk, '(' .. fmt(as_of - w), fmt(as_of))) do
+          -- `<length of account>|<account><identity>`: no separator can collide with an id.
+          local sep = string.find(m, '|', 1, true)
+          local a = string.sub(m, sep + 1, sep + tonumber(string.sub(m, 1, sep - 1)))
+          if not seen[a] then
+            seen[a] = true
+            distinct = distinct + 1
+          end
+        end
       end
     end
-    dev_counts[i] = {#members, distinct}
+    dev_counts[i] = {n, distinct}
   end
   reply[9] = dev_counts
   local function hll(entity, id, windows)
@@ -417,6 +497,35 @@ local function read(as_of, acct, card, dev, mer, ip, cur, own)
     outcomes[i] = counts
   end
   reply[15] = outcomes
+  -- Exact at any depth (ADR-0046 §8): window counts are range counts, and the previous transaction
+  -- and each identity stream's latest observation are one bounded lookup each.
+  local function range_count(k, w)
+    local upper = (w[2] == 1 and '(' or '') .. fmt(as_of)
+    return redis.call('ZCOUNT', k, '(' .. fmt(as_of - w[1]), upper)
+  end
+  local tx_counts = {}
+  for i, w in ipairs(cfg.tx_windows) do tx_counts[i] = range_count(tx, w) end
+  reply[16] = tx_counts
+  local oldest = redis.call('ZRANGEBYSCORE', tx, '-inf', fmt(as_of), 'WITHSCORES', 'LIMIT', 0, 1)
+  reply[17] = {redis.call('ZCOUNT', tx, '-inf', fmt(as_of)), oldest[1] or '', oldest[2] or ''}
+  local previous = {}
+  if cfg.tx_prev_ms > 0 then
+    previous = observations(redis.call('ZREVRANGEBYSCORE', tx, '(' .. fmt(as_of),
+      '(' .. fmt(as_of - cfg.tx_prev_ms), 'LIMIT', 0, 1))
+  end
+  reply[18] = previous
+  local streams = {}
+  for i, s in ipairs(cfg.ie_streams) do
+    local k = key('ie', acct, s.key)
+    local counts, latest = {}, {}
+    for j, w in ipairs(s.windows) do counts[j] = range_count(k, w) end
+    if s.prev_ms > 0 then
+      latest = redis.call('ZREVRANGEBYSCORE', k, '(' .. fmt(as_of), '(' .. fmt(as_of - s.prev_ms),
+        'WITHSCORES', 'LIMIT', 0, 1)
+    end
+    streams[i] = {counts, latest}
+  end
+  reply[19] = streams
   return reply
 end
 """
@@ -568,7 +677,8 @@ local function record(ev, identity, amount, amount_sq, now, js)
     return 1, js, verdict
   end
   local is_tx = ev.s == 'TRANSACTION'
-  local raw = is_tx and key('tx', acct) or key('ie', acct)
+  -- Identity events: one set per stream (ADR-0046 §8), so a failed-login count reads no changes.
+  local raw = is_tx and key('tx', acct) or key('ie', acct, cfg.ie_keys[ev.s])
   expire_at(observation, ev.ms, clock, cfg.profile_ms)
   redis.call('ZADD', raw, fmt(ev.ms), identity)
   if is_tx then
@@ -616,10 +726,29 @@ local function record(ev, identity, amount, amount_sq, now, js)
   else
     drop(acct, raw, ref - cfg.raw_ie_ms)
   end
+  -- The account set identity events shared before ADR-0046 §8 is never migrated -- moving a deep
+  -- set in one script is the stall §8 removes -- and never written again; reads treat it as not
+  -- held. Everything it held is marked dropped, so a read reaching behind it stays unheld once it
+  -- has gone, and it is given an expiry within the time identity events are held.
+  local legacy = key('ie', acct)
+  local legacy_newest = redis.call('ZREVRANGEBYSCORE', legacy, '+inf', '-inf', 'WITHSCORES',
+    'LIMIT', 0, 1)
+  if #legacy_newest > 0 then
+    local pf = key('pf', acct)
+    local through = tonumber(redis.call('HGET', pf, 'dropped_through_ms') or '')
+    local newest_ms = tonumber(legacy_newest[2])
+    if through == nil or newest_ms > through then
+      redis.call('HSET', pf, 'dropped_through_ms', fmt(newest_ms))
+    end
+    redis.call('PEXPIREAT', legacy, fmt(clock + cfg.raw_ie_ms), 'LT')
+  end
   -- One lifetime for every key of the account, whichever stream wrote last: a profile hash that
   -- outlived its counters would read as an exact prefix with nothing in it.
-  local account_keys = {key('tx', acct), key('ie', acct), key('pf', acct), key('pfh', acct),
-    key('pfl', acct), key('pfc', acct)}
+  local account_keys = {key('tx', acct), key('pf', acct), key('pfh', acct), key('pfl', acct),
+    key('pfc', acct)}
+  for _, suffix in pairs(cfg.ie_keys) do
+    account_keys[#account_keys + 1] = key('ie', acct, suffix)
+  end
   for _, c in ipairs(redis.call('SMEMBERS', key('pfc', acct))) do
     account_keys[#account_keys + 1] = key('pfa', acct, c)
   end
@@ -722,6 +851,9 @@ class RedisOnlineFeatureStore:
         )
 
     def _run(self, mode: str, event: Event) -> Any:
+        if event.stream not in _WRITABLE_STREAMS:
+            # Refused before the script: a stream it has no raw set for would fail part-way.
+            raise ContractError(f"the online store records no {event.stream} observation")
         amount = event.amount_minor
         args = [
             self._ns,
@@ -788,8 +920,8 @@ class RedisOnlineFeatureStore:
     ) -> FeatureContext:
         (
             epoch,
-            tx_raw,
-            ie_raw,
+            newest_transactions,
+            legacy_identity_events,
             pf_flat,
             pfh_flat,
             prefix_amounts,
@@ -802,6 +934,10 @@ class RedisOnlineFeatureStore:
             _position,
             high_watermark,
             outcome_counts,
+            transaction_counts,
+            raw_depth,
+            previous_transaction,
+            identity_streams,
         ) = reply
         read = ReadScope(
             as_of_ms=as_of_ms, currency=currency, current=current, mode=EvaluationMode.AS_SERVED
@@ -832,29 +968,62 @@ class RedisOnlineFeatureStore:
         def trimmed_through(retention_ms: int) -> int | None:
             return None if high_ms is None else high_ms - retention_ms
 
-        transactions = [_decode(_text(item)) for item in tx_raw]
-        identity_events = [_decode(_text(item)) for item in ie_raw]
-        by_stream = {
-            Stream.TRANSACTION: transactions,
-            Stream.IDENTITY_FAILED_LOGIN: [
-                e for e in identity_events if e.stream is Stream.IDENTITY_FAILED_LOGIN
-            ],
-            Stream.IDENTITY_CHANGE: [
-                e for e in identity_events if e.stream is Stream.IDENTITY_CHANGE
-            ],
-        }
+        # The most recent `SCORE_READ_CAP` transactions at or before `as_of` (ADR-0046 §8).
+        transactions = [_decode(_text(item)) for item in newest_transactions]
+        tx = Stream.TRANSACTION
         windows: dict[tuple[Entity, str, Stream, str], WindowState] = {}
+        previous: dict[tuple[Entity, str, Stream], Observation] = {}
         account = ids[Entity.ACCOUNT]
         if account is not None:
-            for stream, observations in by_stream.items():
-                for window in WINDOWS:
-                    if not held(Entity.ACCOUNT, stream, window, missing_through[stream]):
-                        continue
+            for window, count in zip(LAYOUT.account_windows[tx], transaction_counts, strict=True):
+                if not held(Entity.ACCOUNT, tx, window, missing_through[tx]):
+                    continue
+                observed = int(count)
+                state: WindowState | None
+                if observed > SCORE_READ_CAP:
+                    # The count stays exact; the content past the cap is not read.
+                    state = WindowState(count=observed, content_capped=True)
+                else:
                     state = window_state(
-                        observations, read=read, entity=Entity.ACCOUNT, stream=stream, window=window
+                        transactions, read=read, entity=Entity.ACCOUNT, stream=tx, window=window
                     )
-                    if state is not None:
-                        windows[(Entity.ACCOUNT, account, stream, window.label)] = state
+                if state is not None:
+                    windows[(Entity.ACCOUNT, account, tx, window.label)] = dataclasses.replace(
+                        state, count=observed
+                    )
+            # Identity events still in the account set both streams shared before §8 are not in
+            # the per-stream sets, so neither stream is held while that set exists.
+            legacy = int(legacy_identity_events) > 0
+            for stream, (counts, latest) in zip(
+                LAYOUT.identity_streams, identity_streams, strict=True
+            ):
+                through_ms = as_of_ms if legacy else missing_through[stream]
+                for window, count in zip(LAYOUT.account_windows[stream], counts, strict=True):
+                    if held(Entity.ACCOUNT, stream, window, through_ms) and int(count):
+                        windows[(Entity.ACCOUNT, account, stream, window.label)] = WindowState(
+                            count=int(count)
+                        )
+                lookback = PLAN.previous.get((Entity.ACCOUNT, stream))
+                if lookback is None:
+                    continue
+                if legacy:
+                    unheld_ms.append(lookback.seconds * 1000)
+                elif latest:
+                    # The latest held is the latest there was only if nothing later was dropped.
+                    occurred_ms = int(float(_text(latest[1])))
+                    if through_ms is None or occurred_ms > through_ms:
+                        previous[(Entity.ACCOUNT, account, stream)] = Observation(
+                            occurred_at=EventTime(from_millis(occurred_ms))
+                        )
+            tx_lookback = PLAN.previous.get((Entity.ACCOUNT, tx))
+            if tx_lookback is not None and previous_transaction:
+                last = _decode(_text(previous_transaction[0]))
+                observation = previous_observation([last], read, tx_lookback)
+                through_ms = missing_through[tx]
+                if observation is not None and (
+                    through_ms is None or to_millis(observation.occurred_at) > through_ms
+                ):
+                    previous[(Entity.ACCOUNT, account, tx)] = observation
             # The reference's outcome window, counted by the script from verified outcomes,
             # without the scored transaction's own (ADR-0049 §6).
             outcome = Stream.AUTHORIZATION_OUTCOME
@@ -866,7 +1035,6 @@ class RedisOnlineFeatureStore:
                         count=known, declined_count=declined, outcome_known_count=known
                     )
 
-        tx = Stream.TRANSACTION
         card = ids[Entity.CARD]
         if card is not None:
             for window, count in zip(LAYOUT.card_windows, card_counts, strict=True):
@@ -877,8 +1045,10 @@ class RedisOnlineFeatureStore:
             for window, pair in zip(LAYOUT.device_windows, device_counts, strict=True):
                 members, distinct = int(pair[0]), int(pair[1])
                 if held(Entity.DEVICE, tx, window, trimmed_through(LAYOUT.device_ms)) and members:
-                    windows[(Entity.DEVICE, device, tx, window.label)] = WindowState(
-                        count=members, distinct={Dimension.ACCOUNT: distinct}
+                    windows[(Entity.DEVICE, device, tx, window.label)] = (
+                        WindowState(count=members, content_capped=True)
+                        if members > SCORE_READ_CAP
+                        else WindowState(count=members, distinct={Dimension.ACCOUNT: distinct})
                     )
         for entity, entity_windows, counts in (
             (Entity.IP, LAYOUT.ip_windows, ip_counts),
@@ -918,23 +1088,22 @@ class RedisOnlineFeatureStore:
         profiles: dict[tuple[Entity, str], Profile] = {}
         if account is not None:
             prefix = _prefix(scalars, pfh_flat, prefix_amounts, prefix_located)
-            profile = account_profile(transactions, read, prefix)
+            profile: Profile | None
+            if int(raw_depth[0]) > SCORE_READ_CAP:
+                oldest_identity, oldest_score = _text(raw_depth[1]), _text(raw_depth[2])
+                profile = capped_account_profile(
+                    transactions,
+                    read,
+                    prefix,
+                    oldest_raw=(int(float(oldest_score)), oldest_identity)
+                    if oldest_identity
+                    else None,
+                    raw_from_ms=as_of_ms - LAYOUT.raw_tx_ms,
+                )
+            else:
+                profile = account_profile(transactions, read, prefix)
             if profile is not None:
                 profiles[(Entity.ACCOUNT, account)] = profile
-
-        previous: dict[tuple[Entity, str, Stream], Observation] = {}
-        if account is not None:
-            for (entity, stream), lookback in PLAN.previous.items():
-                if entity is not Entity.ACCOUNT:
-                    continue
-                observation = previous_observation(by_stream[stream], read, lookback)
-                through_ms = missing_through[stream]
-                # The latest observation still held is the latest there was only if nothing
-                # later than it can have been folded or dropped.
-                if observation is not None and (
-                    through_ms is None or to_millis(observation.occurred_at) > through_ms
-                ):
-                    previous[(Entity.ACCOUNT, account, stream)] = observation
 
         epoch_text = _text(epoch)
         complete_ms = int(epoch_text) if epoch_text else None
@@ -1030,7 +1199,67 @@ def account_profile(
         lifetime_raw = history
     if prefix.inexact or prefix.run_start_ms is None:
         return None
+    return _combined_profile(prefix, prefix.run_start_ms, lifetime_raw, read)
 
+
+def capped_account_profile(
+    capped: Sequence[Event],
+    read: ReadScope,
+    prefix: ProfilePrefix | None,
+    *,
+    oldest_raw: tuple[int, str] | None,
+    raw_from_ms: int,
+) -> Profile | None:
+    """The profile a capped read serves (ADR-0046 §8): the reference's capped `lifetime_profile`.
+
+    `capped` is the most recent `SCORE_READ_CAP` transactions at or before `as_of`, and `oldest_raw`
+    the oldest raw transaction at or before it. The folded prefix is part of what the read sees only
+    when nothing unread can hide a 30-day gap between them: its run is exact and ends before the raw
+    history, the oldest raw transaction follows its frontier within the gap, and the read's oldest
+    follows that within the gap too. Otherwise the read alone is seen and tenure is absent -- an
+    absence where a complete as-served log may still have a value, never another number.
+    """
+    history = sorted(
+        (e for e in capped if e.occurred_ms < read.as_of_ms and e.identity != read.identity),
+        key=lambda e: e.order_key,
+    )
+    if not history:
+        return Profile(depth_capped=True)
+    if read.as_of_ms - history[-1].occurred_ms >= _GAP_MS:
+        return None
+    start = 0
+    for index in range(len(history) - 1, 0, -1):
+        if history[index].occurred_ms - history[index - 1].occurred_ms >= _GAP_MS:
+            start = index
+            break
+    in_read = history[start:]
+    run_start_ms = None if prefix is None or prefix.inexact else prefix.run_start_ms
+    continues = (
+        start == 0
+        and prefix is not None
+        and run_start_ms is not None
+        and prefix.last_ms < raw_from_ms
+        and oldest_raw is not None
+        and oldest_raw > (prefix.last_ms, prefix.last_id)
+        and oldest_raw[0] - prefix.last_ms < _GAP_MS
+        and in_read[0].occurred_ms - oldest_raw[0] < _GAP_MS
+    )
+    seen: Profile | None
+    if continues and prefix is not None and run_start_ms is not None:
+        seen = _combined_profile(prefix, run_start_ms, in_read, read)
+    else:
+        seen = lifetime_profile(in_read, read)
+    if seen is None:
+        return Profile(depth_capped=True)
+    return depth_capped_profile(
+        seen, in_read=in_read, currency=read.currency, start_in_prefix=continues
+    )
+
+
+def _combined_profile(
+    prefix: ProfilePrefix, run_start_ms: int, lifetime_raw: Sequence[Event], read: ReadScope
+) -> Profile:
+    """The folded prefix's summaries, continued by the raw lifetime that follows it."""
     merchants: Counter[str] = Counter(prefix.merchants)
     merchants.update(e.merchant_id for e in lifetime_raw if e.merchant_id is not None)
     mccs: Counter[str] = Counter(prefix.mccs)
@@ -1048,7 +1277,7 @@ def account_profile(
     ]
     home = geodesic_medoid(located[-HOME_SAMPLE_SIZE:])
     return Profile(
-        first_seen_at=EventTime(from_millis(prefix.run_start_ms)),
+        first_seen_at=EventTime(from_millis(run_start_ms)),
         observation_count=len(sample),
         amount_median_minor=None if centre is None else centre[0],
         amount_mad_minor=None if centre is None else centre[1],
@@ -1190,6 +1419,7 @@ def _text(value: Any) -> str:
 
 __all__ = [
     "BUCKET_TRIM_SWEEP",
+    "IDENTITY_RAW_KEYS",
     "LAYOUT",
     "LIMBS",
     "LIMB_BASE",
@@ -1199,5 +1429,6 @@ __all__ = [
     "ProfilePrefix",
     "RedisOnlineFeatureStore",
     "account_profile",
+    "capped_account_profile",
     "unsupported_declarations",
 ]

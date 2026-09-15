@@ -496,11 +496,28 @@ window, then decoded every observation (`run_id: bench-20260915-071647-score-lat
    - The core pack goes to 1.1.0 with a new digest; decisions already carry the pack digest.
    - It is declared from the cap, not fitted.
    - Existing velocity rules still fire on the exact counts.
+   - *Where it misses.* The profile is capped on the raw 25-hour history, and R019 counts 24 hours. An
+     account with 512 transactions in 24 hours plus more in the 25th hour is capped without R019
+     firing. A fixture pins this boundary, and `state_plan` declares the 25-hour horizon. It is
+     accepted: R019 declares the dominant case, and adding a 25-hour count feature for this edge
+     would be a new served feature.
 5. **Versions and layout migration.**
    - `FEATURE_SET_VERSION` goes to 4.0.0, because served values change for capped accounts.
    - An account's legacy single identity-event set is read as not held (`history_incomplete`) until
      it expires within 25 hours. It is not migrated inside the write script: moving a deep legacy set
      in one atomic script is itself the O(N) stall this section removes.
+   - The first new identity write to such an account sets the legacy set to expire and records its
+     newest event time as dropped-through. Without that marker, a read reaching behind it after
+     expiry would silently undercount instead of reading absent.
+   - While a legacy set exists, other account features with lookbacks of an hour or more on that
+     account also read INCOMPLETE, for at most 25 hours.
+   - *Where the reference and Redis can still differ.* In four cases no fixture covers them, and
+     Redis only ever serves an absence, never a different number:
+     - a late read after a later-dated write folded past `as_of` minus 25 hours;
+     - a scored transaction dated ahead of the wall clock;
+     - a snapshot that still holds older, unfolded transactions;
+     - 512 or more transactions at the exact scored millisecond.
+     Parity (Step 8) expects these.
 6. **Evaluation modes.**
    - *Where the cap applies.* It is an as-served obligation: the reference's AS_SERVED mode and the
      Redis store implement it against shared literal fixtures.

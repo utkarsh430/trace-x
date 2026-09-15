@@ -31,7 +31,7 @@ from __future__ import annotations
 import datetime as dt
 import functools
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Final
 
 from trace_core.domain.enums import AuthorizationOutcome, FeatureSource
@@ -52,6 +52,7 @@ from trace_core.features.semantics import (
     HABITUAL_MIN_VISITS,
     HOME_SAMPLE_SIZE,
     PROFILE_LIFETIME_GAP_S,
+    SCORE_READ_CAP,
     WINDOWS,
     CardinalityStorage,
     CurrentObservation,
@@ -252,12 +253,73 @@ def window_state(
     )
 
 
-def lifetime_profile(transactions: Sequence[Event], read: ReadScope) -> Profile | None:
+@dataclass(frozen=True, slots=True)
+class DepthCap:
+    """What a capped as-served read sees of an account's transactions (ADR-0046 §8)."""
+
+    read: frozenset[str]
+    """The identities of the most recent `SCORE_READ_CAP` transactions at or before `as_of`."""
+    raw_from_ms: int
+    """Transactions dated before this are the folded prefix, which the read sees too."""
+
+    def sees(self, event: Event) -> bool:
+        return event.occurred_ms < self.raw_from_ms or event.identity in self.read
+
+
+def depth_cap(transactions: Sequence[Event], read: ReadScope) -> DepthCap | None:
+    """The cap on an as-served read of an account's transactions, or None when it reads them whole.
+
+    Capped when more than `SCORE_READ_CAP` of the transactions a store holds raw -- dated at or
+    before `as_of`, and no further behind it than the raw history -- are visible. The read then
+    holds the most recent `SCORE_READ_CAP` in the declared order, plus the folded prefix before the
+    raw history, and nothing between them."""
+    from trace_core.features.state_plan import PLAN
+
+    raw_from_ms = read.as_of_ms - PLAN.account_raw_ms((Stream.TRANSACTION,))
+    held = sorted(
+        (e for e in transactions if raw_from_ms <= e.occurred_ms <= read.as_of_ms),
+        key=lambda e: e.order_key,
+    )
+    if len(held) <= SCORE_READ_CAP:
+        return None
+    newest = held[-SCORE_READ_CAP:]
+    return DepthCap(read=frozenset(e.identity for e in newest), raw_from_ms=raw_from_ms)
+
+
+def depth_capped_profile(
+    profile: Profile, *, in_read: Sequence[Event], currency: str, start_in_prefix: bool
+) -> Profile:
+    """Keep what a capped read still answers exactly (ADR-0046 §8).
+
+    `profile` was reduced from what the read saw: the folded prefix and `in_read`, the lifetime's
+    transactions inside the capped read. Its sets hold only members that are certain. The amount
+    sample and the home sample are the declared ones only when the read holds each whole, and
+    first-seen is the lifetime's start only when the prefix holds it."""
+    sample_whole = sum(1 for e in in_read if e.currency == currency) >= AMOUNT_SAMPLE_SIZE
+    home_whole = sum(1 for e in in_read if e.located) >= HOME_SAMPLE_SIZE
+    return replace(
+        profile,
+        first_seen_at=profile.first_seen_at if start_in_prefix else None,
+        observation_count=profile.observation_count if sample_whole else 0,
+        amount_median_minor=profile.amount_median_minor if sample_whole else None,
+        amount_mad_minor=profile.amount_mad_minor if sample_whole else None,
+        home_latitude=profile.home_latitude if home_whole else None,
+        home_longitude=profile.home_longitude if home_whole else None,
+        depth_capped=True,
+    )
+
+
+def lifetime_profile(
+    transactions: Sequence[Event], read: ReadScope, cap: DepthCap | None = None
+) -> Profile | None:
     """The account's lifetime strictly before `as_of`, reduced (ADR-0046 §3).
 
     Strictly before, in both modes: a transaction entering its own baseline would make every
     transaction look normal relative to itself, and excluding the whole millisecond keeps the
     baseline independent of arrival order at a tie.
+
+    With a `cap`, only what a capped as-served read sees is reduced, and only what that still
+    answers exactly is kept (ADR-0046 §8).
     """
     history = sorted(
         (e for e in transactions if e.occurred_ms < read.as_of_ms and e.identity != read.identity),
@@ -271,6 +333,14 @@ def lifetime_profile(transactions: Sequence[Event], read: ReadScope) -> Profile 
             start = index
             break
     lifetime = history[start:]
+    in_read: list[Event] = []
+    start_in_prefix = False
+    if cap is not None:
+        in_read = [e for e in lifetime if e.identity in cap.read]
+        if not in_read:
+            return Profile(depth_capped=True)
+        start_in_prefix = lifetime[0].occurred_ms < cap.raw_from_ms
+        lifetime = [e for e in lifetime if cap.sees(e)]
 
     amounts = [abs(e.amount_minor) for e in lifetime if e.currency == read.currency]
     sample = amounts[-AMOUNT_SAMPLE_SIZE:]
@@ -290,7 +360,7 @@ def lifetime_profile(transactions: Sequence[Event], read: ReadScope) -> Profile 
                 visits[value] = visits.get(value, 0) + 1
         return frozenset(k for k, n in visits.items() if n >= HABITUAL_MIN_VISITS)
 
-    return Profile(
+    profile = Profile(
         first_seen_at=EventTime(from_millis(lifetime[0].occurred_ms)),
         observation_count=len(sample),
         amount_median_minor=None if centre is None else centre[0],
@@ -300,6 +370,11 @@ def lifetime_profile(transactions: Sequence[Event], read: ReadScope) -> Profile 
         known_devices=frozenset(e.device_id for e in lifetime if e.device_id is not None),
         home_latitude=None if home is None else home[0],
         home_longitude=None if home is None else home[1],
+    )
+    if cap is None:
+        return profile
+    return depth_capped_profile(
+        profile, in_read=in_read, currency=read.currency, start_in_prefix=start_in_prefix
     )
 
 
@@ -362,6 +437,14 @@ def build_context(
                     window=window,
                     transactions=known_transactions,
                 )
+                if (
+                    state is not None
+                    and mode is EvaluationMode.AS_SERVED
+                    and (entity, stream) in PLAN.content_reads
+                    and state.count > SCORE_READ_CAP
+                ):
+                    # ADR-0046 §8: the count stays exact; the content past the cap is not read.
+                    state = WindowState(count=state.count, content_capped=True)
                 if state is not None:
                     windows[(entity, entity_id, stream, window.label)] = state
 
@@ -371,7 +454,8 @@ def build_context(
         transactions = [
             e for e in visible if e.stream is Stream.TRANSACTION and e.account_id == account_id
         ]
-        if (profile := lifetime_profile(transactions, read)) is not None:
+        cap = depth_cap(transactions, read) if mode is EvaluationMode.AS_SERVED else None
+        if (profile := lifetime_profile(transactions, read, cap)) is not None:
             profiles[(Entity.ACCOUNT, account_id)] = profile
 
     previous: dict[tuple[Entity, str, Stream], Observation] = {}
@@ -542,10 +626,13 @@ def event_time_complete_context(
 
 __all__ = [
     "HABITUAL_MIN_VISITS",
+    "DepthCap",
     "Event",
     "ReadScope",
     "ReferenceFeatureStore",
     "build_context",
+    "depth_cap",
+    "depth_capped_profile",
     "event_time_complete_context",
     "lifetime_profile",
     "previous_observation",

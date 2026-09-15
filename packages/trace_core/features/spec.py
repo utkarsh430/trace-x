@@ -42,6 +42,7 @@ from trace_core.domain.enums import FeatureSource
 from trace_core.domain.errors import FeatureUnavailableError, NonConformantFeatureSetError
 from trace_core.features.context import (
     INSUFFICIENT_HISTORY,
+    DepthCapped,
     FeatureContext,
     InsufficientHistory,
 )
@@ -52,7 +53,7 @@ from trace_core.features.semantics import (
     WindowedAggregate,
 )
 
-FEATURE_SET_VERSION: Final = "3.0.0"
+FEATURE_SET_VERSION: Final = "4.0.0"
 """Bumped whenever a feature's MEANING changes.
 
 Recorded on every `RiskDecision` and in every run manifest: a latency or quality
@@ -62,6 +63,10 @@ this one, and a version is how a reader can tell.
 
 SERVED_FEATURES_CONFORM: Final = True
 """Whether the online path the gateway runs actually serves `FEATURE_SET_VERSION`.
+
+Feature set 4.0.0 bounds the score-time read (ADR-0046 §8): past `SCORE_READ_CAP`, content features
+and the negative and sample-based profile features are served absent rather than computed. The Redis
+store and the reference's as-served mode implement it against the same literal fixtures.
 
 True again from Stage 2 step 7 unit 2b (ADR-0049 §5, §6): the Redis store serves `declined_ratio_1h`
 from verified authorization outcomes and passes every literal fixture as served, and the gateway
@@ -128,6 +133,9 @@ class FeatureValue:
     distinct counts (ADR-0003, ADR-0034). The robust z-score is exact by declaration since
     ADR-0046. The parity bound for an approximate feature is frozen in plan §4.3, and
     widening it to make a test pass is prohibited (docs/DATA_ENGINEERING.md §4)."""
+    depth_capped: bool = False
+    """Absent because the bounded score-time read did not reach it (ADR-0046 §8): its lookback was
+    not vouched for, and the decision carries `history_depth_capped`. Never set on a value."""
 
     @classmethod
     def of(
@@ -161,12 +169,14 @@ class FeatureValue:
         )
 
     @classmethod
-    def insufficient_history(cls, feature_id: str) -> FeatureValue:
-        """The source supplies the inputs; this entity has too little history."""
+    def insufficient_history(cls, feature_id: str, *, depth_capped: bool = False) -> FeatureValue:
+        """The source supplies the inputs; this entity has too little history, or the bounded
+        score-time read did not reach it (`depth_capped`, ADR-0046 §8)."""
         return cls(
             feature_id=feature_id,
             _value=None,
             state=FeatureState.INSUFFICIENT_HISTORY,
+            depth_capped=depth_capped,
         )
 
     @property
@@ -271,7 +281,9 @@ class FeatureSpec:
             return FeatureValue.unavailable(self.feature_id, missing)
         result = self.compute(transaction, context)
         if isinstance(result, InsufficientHistory):
-            return FeatureValue.insufficient_history(self.feature_id)
+            return FeatureValue.insufficient_history(
+                self.feature_id, depth_capped=isinstance(result, DepthCapped)
+            )
         return FeatureValue.of(
             self.feature_id,
             float(result),

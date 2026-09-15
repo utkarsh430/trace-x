@@ -77,6 +77,22 @@ class InsufficientHistory:
 
 INSUFFICIENT_HISTORY: Final = InsufficientHistory()
 
+
+class DepthCapped(InsufficientHistory):
+    """Sentinel: absent because the bounded score-time read did not reach it (ADR-0046 §8).
+
+    Still an `InsufficientHistory`, so every consumer of absence keeps reading it as absent.
+    Distinct, so the value can say its lookback was not vouched for and the decision can say why.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return "HISTORY_DEPTH_CAPPED"
+
+
+HISTORY_DEPTH_CAPPED: Final = DepthCapped()
+
 MIN_OBSERVATIONS_FOR_ROBUST_Z: Final = 8
 """Below this, a median and MAD describe the sample rather than the account.
 
@@ -123,6 +139,10 @@ class WindowState:
     itself). Read only by `AMOUNT_CV`, and kept apart from the exact fields because the two
     windows differ at both edges -- and because the coefficient of variation must divide
     same-currency sums by a same-currency count, which the all-currency `count` is not."""
+    content_capped: bool = False
+    """The window held more than `SCORE_READ_CAP` observations when an as-served read was made
+    (ADR-0046 §8). `count` stays exact; the sums and exact distinct counts are not carried, and the
+    features over them read as absent."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,6 +181,10 @@ class Profile:
     known_devices: frozenset[str] = frozenset()
     home_latitude: float | None = None
     home_longitude: float | None = None
+    depth_capped: bool = False
+    """Read from a capped as-served read (ADR-0046 §8). The sets hold only what that read and the
+    folded prefix saw, so a member is exact and a non-member is unknown. The amount baseline, home
+    and first-seen are carried only where they are still exact, and are None otherwise."""
 
 
 @dataclass(frozen=True, slots=True)

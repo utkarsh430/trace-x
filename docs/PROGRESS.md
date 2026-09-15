@@ -1117,7 +1117,33 @@ both reports.
   * **Documentation.** DATA_ENGINEERING's Gold tier row and section now describe what was built; they
     had said "authoritative feature values, upsert".
   * **Next for this line:** Step 8 (parity), whose oracle Gold now is.
-* **Step 11 — lake maintenance and resource guards: not started. Its one open decision is taken.**
+* **Step 11 — lake maintenance and resource guards: in progress.**
+  * **Phase A design spike, done** (agent, diagnostic runs on Delta 4.0.1, no run_id).
+    * *What the spike found.*
+      - A floor that cuts data files makes DELETE rewrite them, and Silver's Delta reader then fails
+        at that version, loudly.
+      - `skipChangeCommits` passes a rewrite, but a fresh reader that started after it silently
+        missed rows that were not retired. Rejected.
+      - A delete whose predicate covers whole files commits removes only. With `ignoreDeletes`,
+        running and restarted readers delivered every appended row exactly once, and any file a
+        reader still needed after VACUUM failed loudly.
+      - The floor, kept in Bronze table properties, is readable from the same snapshot as the rows,
+        and it survives log cleanup.
+    * *The recommendation relaxed a loss refusal, so it went to the user.*
+  * **Decided by the user (2026-09-15): Option A.**
+    * Retention deletes remove only whole files entirely below the per-(topic id, partition) floor.
+    * Silver's reader of Bronze sets `ignoreDeletes`, on Bronze sources only. Every other
+      loss-tolerant option and setting stays refused.
+    * *Not chosen:* Silver reading Bronze's change data feed (protocol 1,7, and it reopens Step 6),
+      and no local deletion (contradicts Q8).
+    * *The lead's additions for Phase B:*
+      - an append-only audit table, written after each floor commit and reconciled on re-run
+        (non-authoritative, never assumed atomic with Bronze);
+      - a crash test at every commit boundary, and a floor commit racing a Bronze append;
+      - once a floor exists, Silver resets start at the lowest Bronze version with a live file (an
+        ADR-0053 §7 change);
+      - retention of 30 days of log and 7 days of deleted files, declared per table.
+  * **Phase B:** being implemented by the agent in worktree `phase3-step11-maintenance`.
   * **B6, decided by the user (2026-09-15):** an audited local Bronze retention floor, recorded in
     ADR-0052's open questions and implemented in Step 11.
     * The retirement state is authoritative in the Bronze table or its own commit log, never in a
@@ -1213,8 +1239,35 @@ both reports.
           - `FEATURE_SET_VERSION` 4.0.0;
           - a legacy identity-event set reads as not held until it expires, since migrating it
             inside the write script would be the O(N) stall §8 removes.
-      * **Still to do after integration:**
-        - the lead re-runs the memory model and the score-latency benchmark;
+      * **Implemented and integrated (2026-09-15).**
+        * *Exact at any depth.* Transaction, card and failed-login counts are range counts.
+          Identity events now sit in one sorted set per stream (`ie:<acct>:fl`, `ie:<acct>:ic`).
+          The previous transaction and latest identity change are `LIMIT 1` reads.
+        * *Capped.* Content reads stop at 512. The profile is capped per §8 option A: positive
+          memberships exact; z-score and home exact with 128 same-currency amounts or 20 located
+          points; tenure exact from the prefix; everything else absent. The reference's AS_SERVED
+          mode applies the same cap; EVENT_TIME_COMPLETE and Gold stay uncapped.
+        * *Signal and versions.* A capped read is INSUFFICIENT_HISTORY with INCOMPLETE and
+          `history_depth_capped`, within `tx.scored.v1` as released.
+          `R019_history_depth_capped` (weight 0.5, no floor) is in pack 1.1.0, and
+          `FEATURE_SET_VERSION` is 4.0.0.
+        * *Legacy identity sets* read as not held, and expire with a dropped-through marker.
+        * *Non-vacuity.* 14 new as-served fixtures failed on the old code in both the reference
+          and Redis, plus the legacy fixture in Redis, before the change.
+      * **Evidence in the lead worktree:**
+        - conformance and the affected unit suites passed 413, including the 58 existing mutants;
+        - Redis integration passed 100 under the heavy-suite lock;
+        - Gold's stream suite passed 87 on Temurin 17.0.18, including the new event-time-complete
+          fixtures uncapped.
+        - In the agent's worktree, unit passed 2,189.
+      * **Debt:**
+        - §8 mutants in `test_feature_semantics_mutations.py`, for its off-by-one boundaries and a
+          positive membership through the cap; the fixtures' pre-change failures show they are
+          not vacuous;
+        - four reference-vs-Redis cases where Redis serves only an absence, never a different
+          number (ADR-0046 §8), for parity to expect.
+      * **Still to do:**
+        - the lead re-runs the memory model and the score-latency benchmark on this commit;
         - the Phase 2 load gate re-run measures latency with the cap in place.
       * Step 12 stays in progress until then.
 * **Step 6 — Silver: complete** (ADR-0053, Proposed; `P3.event-time` PASS, 2026-09-15).

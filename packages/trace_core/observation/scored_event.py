@@ -147,7 +147,13 @@ def served_features(
         entry["approximate"] = feature.approximate
         entry["source"] = feature.source.value
         entry["missing_fields"] = sorted(field.value for field in feature.missing_fields)
-        entry["lookback_completeness"] = lookback_completeness(feature_id, context)
+        # A feature the bounded score-time read withheld was not vouched for, whatever the store's
+        # age (ADR-0046 §8); tx.scored.v1's completeness enum already holds INCOMPLETE.
+        entry["lookback_completeness"] = (
+            Completeness.INCOMPLETE.value
+            if feature.depth_capped
+            else lookback_completeness(feature_id, context)
+        )
         entries.append(entry)
     return entries
 

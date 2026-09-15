@@ -209,3 +209,36 @@ def test_a_decision_for_another_transaction_is_refused() -> None:
             producer="trace-gateway@0.1.0",
             trace_id=TRACE_ID,
         )
+
+
+def test_a_feature_the_depth_cap_withheld_is_absent_and_not_vouched_for() -> None:
+    """ADR-0046 §8 inside the released tx.scored.v1. On a store old enough to vouch for every
+    lookback, a content feature past the cap is INSUFFICIENT_HISTORY and INCOMPLETE, the exact count
+    beside it stays COMPLETE, and the decision carries `history_depth_capped`."""
+    from trace_core.features.observation import Event
+    from trace_core.features.semantics import Stream
+
+    store = ReferenceFeatureStore(complete_since=event_time(NOW - dt.timedelta(days=90)))
+    for j in range(512, 0, -1):
+        store.observe(
+            Event(
+                stream=Stream.TRANSACTION,
+                occurred_at=event_time(NOW - dt.timedelta(seconds=100 * j)),
+                account_id="acct_000001",
+                event_id=f"tx_d{j:04d}",
+                currency="GBP",
+                amount_minor=5_000,
+                merchant_country="GB",
+            )
+        )
+    event = _event(_score(store, _request()))
+    encoded = canonical_bytes(event)
+    TxScoredV1.model_validate_json(encoded)
+    _models()["tx.scored.v1"].model_validate_json(encoded)
+    payload = event["payload"]
+    served = {entry["feature_id"]: entry for entry in payload["served_features"]}
+    assert served["account_distinct_countries_24h"]["state"] == "INSUFFICIENT_HISTORY"
+    assert served["account_distinct_countries_24h"]["lookback_completeness"] == "INCOMPLETE"
+    assert served["account_tx_count_24h"]["value"] == 513
+    assert served["account_tx_count_24h"]["lookback_completeness"] == "COMPLETE"
+    assert "history_depth_capped" in payload["decision_summary"]["degraded_reasons"]

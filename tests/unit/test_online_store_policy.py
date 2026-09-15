@@ -130,7 +130,7 @@ def test_writing_scripts_are_refused_whole_before_they_run() -> None:
 
 
 READ_ONLY_COMMANDS = frozenset(
-    {"GET", "MGET", "HGETALL", "LRANGE", "ZCOUNT", "ZRANGEBYSCORE", "ZSCORE"}
+    {"GET", "MGET", "HGETALL", "LRANGE", "ZCOUNT", "ZRANGEBYSCORE", "ZREVRANGEBYSCORE", "ZSCORE"}
 )
 
 
