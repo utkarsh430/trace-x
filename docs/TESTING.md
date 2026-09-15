@@ -124,6 +124,13 @@ out — while stopping gives an immediate refusal, and the timeout path is the o
 attached. That distinction is not academic: the first run of that suite found a degraded request
 taking **21.8 s** against a configured 20 ms timeout (ADR-0035).
 
+`tests/chaos/test_observation_log.py` produces process death rather than a paused dependency. A
+child process composes the production writer, pipeline, Redis store and observation log, and is
+killed with SIGKILL at each point of plan §4.1's loss table, or sheds against a paused broker. The
+test then applies the coverage rule to what the broker, the session ledger and the store recorded.
+The kill points live in the harness, between the calls the gateway makes, never in production
+code.
+
 ---
 
 ## 4. What each layer may and may not mock

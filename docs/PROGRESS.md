@@ -533,7 +533,7 @@ both reports.
     session factory now resolves the root quietly, and `tests/stream/test_session.py`, rerun after the
     fix, 9 passed, 1 warning. `tests/stream/test_delta_capabilities.py` passed in full.
 * **Step 4 — durable observation log (lead): in progress** (ADR-0051, Proposed; `P3.observation-log`
-  IN_PROGRESS). Started 2026-09-14, once the eval-v2 sub-track closed.
+  PASS; the A/B remains). Started 2026-09-14, once the eval-v2 sub-track closed.
   * **Slice 1, fenced producer sessions: implemented.**
     * **Migration 0006, `app.producer_sessions`.** A trigger stamps `started_at`, `heartbeat_at`
       and `closed_at` from PostgreSQL `now()`, whatever a client sends. It refuses any change to
@@ -638,7 +638,7 @@ both reports.
       Kafka is the `streaming` profile. The image is not rebuilt yet; the A/B does that.
     * **Evidence (2026-09-14):**
       * 606 targeted tests passed, none skipped, across 22 suites: unit, contract, conformance, and the
-        PostgreSQL and Redis integration suites. They include `tests/unit/test_observation_log.py`,
+        PostgreSQL and Redis integration suites. They include `tests/unit/test_observation_log_sequencing.py`,
         `tests/unit/test_gateway_observation_log.py` and `tests/unit/test_scored_event.py`.
       * `tests/integration/test_observation_log_kafka.py`, against a throwaway real broker: 2 passed.
         Every number from 1 to `last_seq` arrived across both topics in one session, keyed and stamped
@@ -674,9 +674,43 @@ both reports.
         The committed event arrived keyed and stamped with LogAppendTime before its row was marked, and
         a paused broker left the batch unmarked until a later pass delivered it.
       * `make verify` runs before the commit that records this entry, gated on its exit code.
-  * **Not yet built:**
-    * the chaos tests;
-    * the controlled hot-path A/B.
+  * **Slice 5, the coverage rule and the chaos evidence: implemented; `P3.observation-log` PASS.**
+    * **`trace_core.observation.coverage.assess`** implements ADR-0051 §5 once, for Bronze (Step 5)
+      and for the chaos tests:
+      * a closed session is covered only when every number to `max(seen, last_seq)` is present;
+      * an unclosed session certifies its contiguous prefix, and is otherwise a gap bounded by its
+        last heartbeat plus the heartbeat interval, the delivery timeout and the clock margin;
+      * an observation with an unknown session, or no usable headers, is a gap at its own time.
+    * **`tests/chaos/test_observation_log.py`** produces every loss in plan §4.1's table. A child
+      process (`tests/chaos/observation_log_harness.py`) composes the production writer supervisor on
+      PostgreSQL, the scoring pipeline over the real Redis store and the observation log against a
+      real broker, and kills itself with SIGKILL between the calls the gateway makes: before and after
+      the session opens, after sequencing, after the online write, after produce, after the broker's
+      acknowledgement and before close. A last case sheds for real against a paused broker. The test
+      then reads the log, the ledger and the store's observation counter, and applies the rule.
+    * **What held:**
+      * a killed session is never closed, and its gap ends exactly at its heartbeat bound;
+      * the certified prefix is always in the log, and after an acknowledgement exactly the delivered
+        numbers are certified;
+      * every observation the store recorded is in the log or inside a reported gap;
+      * a shed observation is a missing number (`missing == (3,)`), and that session never closes;
+      * a clean run closes with `last_seq` equal to the observations, with no gap.
+    * **A collection clash, found by `make verify` and fixed:** the chaos suite and the slice-3 unit
+      suite shared the basename `test_observation_log`, which pytest cannot import twice without
+      packages. The unit suite is now `tests/unit/test_observation_log_sequencing.py`.
+    * **A harness bug, found and fixed:** its cleanup unpaused the broker a second time, and `docker
+      unpause` fails on a running container. The shedding behaviour itself held on that run.
+    * **Scope of the evidence.** The kills hit the harness's composition of the production pieces,
+      not the uvicorn gateway process. The gateway's own route order is covered by unit tests with a
+      fake producer. Killing the rebuilt gateway under load belongs with the A/B, which runs that image.
+    * **Evidence (2026-09-15):**
+      * `pytest -m chaos tests/chaos/test_observation_log.py`: 9 passed, against the local PostgreSQL
+        and Redis and a throwaway real broker.
+      * 83 targeted tests passed, none skipped, across 9 suites, including
+        `tests/unit/test_observation_coverage.py` (14), `tests/integration/test_observation_log_kafka.py`
+        and `tests/integration/test_outbox_relay.py`.
+      * `make verify` runs before the commit that records this entry, gated on its exit code.
+  * **Not yet built:** the controlled hot-path A/B (slice 6), which also decides where the relay runs.
 * **Step E — `eval-v2`.** Stages 1, 1b and 1c are complete. Their code is integrated onto this branch.
   * **Integration.** The worktree branch `worktree-agent-aae9faa608636c9c8` was fast-forwarded to the
     phase branch, and the Step E work was committed on top. The phase branch fast-forwards to it.

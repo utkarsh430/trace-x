@@ -25,7 +25,7 @@ from tests.integration.test_kafka_platform import (  # noqa: F401 -- `broker` is
     _watermarks,
     broker,
 )
-from tests.unit.test_observation_log import _scored, _writer
+from tests.unit.test_observation_log_sequencing import _scored, _writer
 
 from trace_core.contracts.envelope import build_event
 from trace_core.contracts.events.identity_events_v1 import IdentityEventV1

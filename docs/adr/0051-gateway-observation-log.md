@@ -106,6 +106,7 @@ other outcome leaves the session unclosed.
 
 ### 5. Coverage rule
 Bronze (Step 5) applies it; it is stated here because the producer must make it computable.
+`trace_core.observation.coverage.assess` implements it once, for Bronze and for the chaos tests.
 - Every integer from 1 to `max(seen, last_seq)` must be present in Bronze for the session.
 - An unclosed session's gap runs from its last Bronze event to its last heartbeat, plus the heartbeat
   interval, the producer's delivery timeout and the broker-to-PostgreSQL clock margin.
@@ -218,9 +219,11 @@ Bronze (Step 5) applies it; it is stated here because the producer must make it 
 - **Slice 4 (implemented):** `trace_core.observation.outbox_relay.OutboxRelay` and migration 0007,
   wired into the gateway as option A, off by default. Tested against PostgreSQL with a fake
   producer, and end to end against a real broker.
-- **Not yet built:**
-  - the chaos tests;
-  - the A/B.
+- **Slice 5 (implemented):** the coverage rule (`trace_core.observation.coverage`) and
+  `tests/chaos/test_observation_log.py`. A child process composing the production writer, pipeline,
+  Redis store and log is killed with SIGKILL at every point of plan §4.1's loss table, or sheds
+  against a paused broker; every loss was a detected gap bounded by the last heartbeat.
+- **Not yet built:** the controlled hot-path A/B, which also decides where the relay runs.
 
 ## Status
 Proposed

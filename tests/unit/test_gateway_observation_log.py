@@ -19,7 +19,7 @@ from httpx import Response
 from services.gateway.app import GatewayState, create_app
 from services.gateway.config import GatewaySettings
 from services.gateway.pipeline import ScoringPipeline
-from tests.unit.test_observation_log import Conn, FakeProducer, _publisher
+from tests.unit.test_observation_log_sequencing import Conn, FakeProducer, _publisher
 
 from trace_core.contracts.events.identity_events_v1 import IdentityEventV1
 from trace_core.contracts.events.tx_scored_v1 import TxScoredV1

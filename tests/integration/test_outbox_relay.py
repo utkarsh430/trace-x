@@ -15,7 +15,7 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
-from tests.unit.test_observation_log import FakeMetadata, FakeProducer, FakeTopic
+from tests.unit.test_observation_log_sequencing import FakeMetadata, FakeProducer, FakeTopic
 
 from trace_core.contracts import authorization
 from trace_core.contracts.publish import DeliveryLedger, EventPublisher, producer_config
