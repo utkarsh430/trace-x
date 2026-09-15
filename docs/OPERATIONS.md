@@ -209,6 +209,20 @@ history coverage claims nothing for the time it runs. This is the default for a 
 **Action:** start the `streaming` profile, apply the topics (`scripts/kafka_topics.py apply
 --environment local`), and set `TRACE_GATEWAY_KAFKA_BOOTSTRAP=kafka:19092` for the gateway.
 
+### Outbox not draining
+**Detect:** `SELECT count(*), min(created_at) FROM app.outbox WHERE published_at IS NULL` growing;
+`outbox_relay_rows_total` with `outcome` `failed` or `refused`; `/readyz` `checks.outbox_relay` is
+`disabled`.
+**Behaviour:** cases and authorization outcomes wait in PostgreSQL, and nothing is lost. A delivery
+failure is retried on the next pass. A row refused for its own content (`last_error` starting
+`refused: `) is never retried, because its content is immutable (migration 0007).
+**Action:**
+- `disabled`: the relay is off by default until the hot-path A/B (ADR-0051 §7). Set
+  `TRACE_GATEWAY_OUTBOX_RELAY=true`, with the broker configured.
+- `failed`: restore the broker; the rows drain by themselves.
+- `refused`: read `last_error`. A refused row is a defect in the writer that produced it, and it
+  stays in the table for that investigation. Never edit or delete it to clear the queue.
+
 ### Kafka topic missing or drifted
 
 **Detect:** `make kafka-topics-verify` exits 1 and names each differing setting, undeclared setting or

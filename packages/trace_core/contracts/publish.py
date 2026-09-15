@@ -702,6 +702,15 @@ class EventPublisher:
             self.producer.poll(0)
             return True
 
+    def flush(self, timeout_s: float) -> DeliveryReport:
+        """Serve delivery reports for up to `timeout_s` and snapshot the ledger, without closing.
+
+        For a long-lived publisher that confirms in batches, as the outbox relay does; `close`
+        stays the one final verdict.
+        """
+        with self._gate:
+            return self.ledger.report(outstanding=self.producer.flush(timeout_s))
+
     def report(self) -> DeliveryReport:
         """A non-raising snapshot; `flush(0)` serves pending reports without waiting."""
         with self._gate:

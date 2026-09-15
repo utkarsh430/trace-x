@@ -645,8 +645,36 @@ both reports.
         with LogAppendTime, and a paused broker refused the close.
       * The ARCHITECTURE §18 Kafka row no longer claims a local WAL the gateway never had.
       * `make verify` runs before the commit that records this entry, gated on its exit code.
+  * **Slice 4, the outbox relay: implemented, off by default until the A/B.**
+    * **`trace_core.observation.outbox_relay.OutboxRelay`.** One pass is one transaction: claim the
+      oldest unpublished batch with `FOR UPDATE SKIP LOCKED`, publish through the relay's own producer,
+      flush, and mark published only the rows the broker confirmed. Delivery reports are counted per
+      topic, so a batch is confirmed as a whole; anything unconfirmed records an attempt and is retried.
+    * **A row that can never be published cannot block the queue.** An invalid or unkeyed event, or a
+      stored key its event contradicts, is marked `refused: ...` and never claimed again. A missing
+      topic, a shed record or an unconfirmed flush is a delivery failure, never a refusal.
+    * **Migration 0007.** A trigger inserts every outbox row unpublished whatever the writer sends,
+      makes what a row relays immutable, stamps `published_at` once from the database clock, and
+      forbids forgetting an attempt. `trace_app`'s UPDATE narrows to the relay's three columns, and it
+      has no DELETE or TRUNCATE. Applied locally.
+    * **Gateway, option A.** `TRACE_GATEWAY_OUTBOX_RELAY` starts the relay on a gateway thread when a
+      broker is configured. It is off by default until the controlled hot-path A/B decides where the
+      relay runs (ADR-0051 §7). `/readyz` reports `checks.outbox_relay`, and
+      `outbox_relay_rows_total{topic, outcome}` counts published, failed and refused rows.
+    * **A stale pin, found and fixed.** `tests/integration/test_groundtruth_isolation.py` pins the
+      migration head on purpose, and still named 0004 through migrations 0005 and 0006: the suite is
+      integration-marked, and `make verify` does not select it. It now names 0007. The isolation
+      denials themselves passed throughout.
+    * **Evidence (2026-09-14):**
+      * 276 targeted tests passed, none skipped, across 16 suites. They include
+        `tests/integration/test_outbox_relay.py` and `tests/integration/test_outbox_guard.py` against
+        PostgreSQL, and `tests/integration/test_groundtruth_isolation.py`, which migrates a fresh
+        database to 0007 and round-trips the downgrade.
+      * `tests/integration/test_outbox_relay_kafka.py`, against a throwaway real broker: 2 passed.
+        The committed event arrived keyed and stamped with LogAppendTime before its row was marked, and
+        a paused broker left the batch unmarked until a later pass delivered it.
+      * `make verify` runs before the commit that records this entry, gated on its exit code.
   * **Not yet built:**
-    * the outbox relay, whose process ADR-0051 leaves to the A/B;
     * the chaos tests;
     * the controlled hot-path A/B.
 * **Step E — `eval-v2`.** Stages 1, 1b and 1c are complete. Their code is integrated onto this branch.

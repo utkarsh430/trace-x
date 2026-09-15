@@ -81,6 +81,8 @@ from trace_core.observability.logging import configure_logging
 from trace_core.observability.metrics import HotPathMetrics, register_online_store_gauges
 from trace_core.observability.telemetry import configure_telemetry, current_trace_id
 from trace_core.observation.log import DELIVERY_TIMEOUT_MS, ObservationLog, Sequenced
+from trace_core.observation.outbox_relay import MESSAGE_TIMEOUT_MS as RELAY_MESSAGE_TIMEOUT_MS
+from trace_core.observation.outbox_relay import OutboxRelay
 from trace_core.observation.scored_event import build_scored_event
 from trace_core.observation.session import WriterSessionError
 from trace_core.observation.supervisor import WriterSupervisor
@@ -154,6 +156,8 @@ class GatewayState:
     observation_log: ObservationLog | None = None
     """The durable observation log (ADR-0051 §3): every write that changes online state is sequenced
     in the writer's session and published. None when no fence is configured."""
+    outbox_relay: OutboxRelay | None = None
+    """The in-process outbox relay (ADR-0051 §7, option A); None unless enabled with a broker."""
 
     def ready(self) -> tuple[bool, dict[str, str]]:
         """Readiness, per ADR-0035.
@@ -202,6 +206,8 @@ class GatewayState:
         if self.observation_log is not None:
             # Reported, never gated on: a broker outage costs history coverage, never a decision.
             checks["observation_log"] = self.observation_log.status
+        # Reported, never gated on: an undrained outbox delays events, it never loses them.
+        checks["outbox_relay"] = "running" if self.outbox_relay is not None else "disabled"
         checks["feature_history"] = self._history_status()
         return healthy, checks
 
@@ -276,6 +282,37 @@ def _observation_publisher(settings: GatewaySettings, client_id: str) -> EventPu
     except Exception as exc:  # a missing client library: scoring continues, nothing is logged
         log.error("observation_log_unavailable", error=type(exc).__name__)
         return None
+
+
+def _outbox_relay(
+    settings: GatewaySettings, pool: Any, client_id: str, metrics: HotPathMetrics
+) -> OutboxRelay | None:
+    """The in-gateway outbox relay (ADR-0051 §7, option A), or None.
+
+    Off unless enabled, and never without a broker: an enabled relay with nowhere to publish would
+    claim rows only to fail them.
+    """
+    if not settings.outbox_relay or pool is None:
+        return None
+    if not settings.kafka_bootstrap_servers:
+        log.warning("outbox_relay_not_started", detail="enabled without a broker; nothing relayed")
+        return None
+    try:
+        publisher = EventPublisher.connect(
+            settings.kafka_bootstrap_servers,
+            client_id=client_id,
+            message_timeout_ms=RELAY_MESSAGE_TIMEOUT_MS,
+        )
+    except Exception as exc:  # a missing client library: the outbox waits, nothing is lost
+        log.error("outbox_relay_unavailable", error=type(exc).__name__)
+        return None
+    return OutboxRelay(
+        pool=pool,
+        publisher=publisher,
+        record=lambda topic, outcome, count: metrics.outbox_relay_rows.add(
+            count, {"topic": topic, "outcome": outcome.value}
+        ),
+    )
 
 
 def build_state(settings: GatewaySettings | None = None) -> GatewayState:
@@ -390,6 +427,7 @@ def build_state(settings: GatewaySettings | None = None) -> GatewayState:
         if writer is not None
         else None
     )
+    outbox_relay = _outbox_relay(resolved, pool, f"{instance_id}-relay", metrics)
     cache_breaker = CircuitBreaker("redis-cache")
     return GatewayState(
         settings=resolved,
@@ -417,6 +455,7 @@ def build_state(settings: GatewaySettings | None = None) -> GatewayState:
         feature_store=feature_store,
         writer=writer,
         observation_log=observation_log,
+        outbox_relay=outbox_relay,
     )
 
 
@@ -452,6 +491,8 @@ def create_app(state: GatewayState | None = None) -> FastAPI:
             _prepare_online_state(resolved.completeness, resolved.feature_store)
         if resolved.observation_log is not None:
             resolved.observation_log.start()
+        if resolved.outbox_relay is not None:
+            resolved.outbox_relay.start()
 
         # Each Redis instance's own memory and eviction counters, as gauges
         # labelled by store. Registered here rather than in `build_state`
@@ -484,6 +525,8 @@ def create_app(state: GatewayState | None = None) -> FastAPI:
             # §4). Without a log nothing was published, so it is left unclosed: a gap, not a claim.
             confirmed = resolved.observation_log is not None and resolved.observation_log.close()
             resolved.writer.stop(confirmed=confirmed)
+        if resolved.outbox_relay is not None:
+            resolved.outbox_relay.stop()
         if resolved.pool is not None:
             resolved.pool.close()
 

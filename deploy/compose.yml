@@ -237,6 +237,9 @@ services:
       # publishes nothing, and leaves every writer session unclosed, so history claims no
       # completeness. With `--profile streaming`, set it to kafka:19092.
       TRACE_GATEWAY_KAFKA_BOOTSTRAP: ${TRACE_GATEWAY_KAFKA_BOOTSTRAP:-}
+      # Drains app.outbox to Kafka on a gateway thread (ADR-0051 §7, option A). Off until the
+      # controlled hot-path A/B shows the relay may share the scoring process.
+      TRACE_GATEWAY_OUTBOX_RELAY: ${TRACE_GATEWAY_OUTBOX_RELAY:-false}
     # Enumerated rather than `env_file: ../.env` on purpose. .env also holds the
     # superuser password, the eval role that CAN read ground truth, and any
     # Kaggle/OpenAI key the developer has added; least privilege (CLAUDE.md §9)

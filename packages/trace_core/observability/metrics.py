@@ -74,6 +74,9 @@ AUTHORIZATION_OUTCOME_TOTAL: Final = "authorization_outcome_total"
 RULE_PACK_RELOAD_FAILED_TOTAL: Final = "rule_pack_reload_failed_total"
 WRITER_REFUSED_TOTAL: Final = "writer_refused_total"
 """Requests refused because this instance is not the online store's fenced writer (ADR-0051)."""
+OUTBOX_RELAY_ROWS_TOTAL: Final = "outbox_relay_rows_total"
+"""Outbox rows the relay published, failed to deliver (retried) or refused (never retried), by
+topic and outcome (ADR-0051 §7)."""
 OBSERVATION_LOG_TOTAL: Final = "observation_log_total"
 """Sequenced observations handed to the log's producer, or lost from the log, by topic and
 outcome (ADR-0051 §3). Any outcome but `handed_over` leaves the session unclosable."""
@@ -115,6 +118,7 @@ HOT_PATH_METRICS: Final[frozenset[str]] = frozenset(
         AUTHORIZATION_OUTCOME_TOTAL,
         WRITER_REFUSED_TOTAL,
         OBSERVATION_LOG_TOTAL,
+        OUTBOX_RELAY_ROWS_TOTAL,
         ONLINE_STORE_EVICTED_KEYS,
         ONLINE_STORE_MEMORY_BYTES,
     }
@@ -149,6 +153,7 @@ class HotPathMetrics:
         "feature_unavailable",
         "latency",
         "observation_log",
+        "outbox_relay_rows",
         "rate_limited",
         "reload_failed",
         "replays",
@@ -226,6 +231,12 @@ class HotPathMetrics:
             description=(
                 "Sequenced observations handed to the log's producer, or lost from the log, by "
                 "topic and outcome."
+            ),
+        )
+        self.outbox_relay_rows: Counter = meter.create_counter(
+            OUTBOX_RELAY_ROWS_TOTAL,
+            description=(
+                "Outbox rows published, failed to deliver or refused, by topic and outcome."
             ),
         )
         self.writer_refused: Counter = meter.create_counter(

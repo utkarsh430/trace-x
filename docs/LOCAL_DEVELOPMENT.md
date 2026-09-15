@@ -204,6 +204,7 @@ without a `--result`.
 | Gateway is healthy but `/readyz` returns 503 | Migrations have not run, so the `trace_app` role does not exist | `make migrate`. Health is liveness; readiness needs the database |
 | `/readyz` 503 with `writer_session: lock held elsewhere` | Another gateway process (a second `uvicorn`, a stale container) holds the online store's writer fence | Stop the other process cleanly. One gateway writes online state at a time (ADR-0051) |
 | `/readyz` shows `observation_log: not configured` | `TRACE_GATEWAY_KAFKA_BOOTSTRAP` is empty, the default, because Kafka is the `streaming` profile | Scoring works either way. To publish the observation log, start `--profile streaming`, apply the topics, and set `TRACE_GATEWAY_KAFKA_BOOTSTRAP=kafka:19092` |
+| `/readyz` shows `outbox_relay: disabled` | `TRACE_GATEWAY_OUTBOX_RELAY` is `false`, the default until the hot-path A/B | Cases and authorization outcomes wait in `app.outbox`. To relay them, set it to `true` with the broker configured |
 | Gateway logs `connection refused` for port 5442 or 6389 | The container inherited the **host** ports from `.env` | Inside the compose network Postgres is `postgres:5432` and Redis is `redis:6379`; `deploy/compose.yml` sets those explicitly |
 | Code changes have no effect on the running gateway | The image is built, not mounted | `docker compose -f deploy/compose.yml --env-file .env --profile core up -d --build gateway` |
 | Integration tests skipped | Docker not running | Start Docker; the skip message names the reason |

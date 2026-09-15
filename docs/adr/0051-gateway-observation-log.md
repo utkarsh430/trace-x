@@ -141,6 +141,23 @@ Bronze (Step 5) applies it; it is stated here because the producer must make it 
   - The deciding test is Step 4's controlled hot-path A/B. A is kept only if the scoring-core p99
     and achieved throughput stay within the no-relay control's run-to-run noise. Otherwise B.
     ADR-0049 is updated to match.
+- **Settled while implementing (slice 4):**
+  - One pass is one transaction: claim the oldest unpublished batch, publish, flush, and mark
+    published only the rows the broker confirmed. Delivery reports are counted per topic, so a
+    batch is confirmed as a whole.
+  - A row whose own content cannot be published (an invalid event, an unkeyed one, or a stored
+    key its event contradicts) is marked `refused: ...` and never claimed again, so it cannot
+    block the queue. Migration 0007 makes a row's content immutable, which is what makes the
+    refusal final.
+  - A delivery failure is never a refusal: a missing topic, a shed record or an unconfirmed flush
+    records an attempt and is retried.
+  - Migration 0007 also inserts every row unpublished whatever the writer sends, stamps
+    `published_at` once from the database clock, and narrows `trace_app`'s UPDATE to the
+    relay's three columns.
+  - The relay has its own producer, with a 5 s delivery timeout and a 10 s flush, so every pass
+    reaches a verdict.
+  - Option A is wired into the gateway behind `TRACE_GATEWAY_OUTBOX_RELAY`, off by default
+    until the A/B. Option B is built only if the A/B rules A out.
 
 ## Alternatives Considered
 | Alternative | Why rejected |
@@ -198,8 +215,10 @@ Bronze (Step 5) applies it; it is stated here because the producer must make it 
     confirmed flush of every assigned number;
   - identity events that feed a stream are sequenced and published on `identity.events.v1`;
   - the gateway image gains `confluent-kafka`, and only it, from the `stream` extra.
+- **Slice 4 (implemented):** `trace_core.observation.outbox_relay.OutboxRelay` and migration 0007,
+  wired into the gateway as option A, off by default. Tested against PostgreSQL with a fake
+  producer, and end to end against a real broker.
 - **Not yet built:**
-  - the outbox relay;
   - the chaos tests;
   - the A/B.
 

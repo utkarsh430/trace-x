@@ -263,3 +263,16 @@ def test_a_failed_delivery_leaves_the_session_unclosed() -> None:
         assert _score(client).status_code == 200
     assert _seqs(producer) == [(TX_SCORED_V1, 1)]
     assert fence.closed == {}
+
+
+def test_the_outbox_relay_is_off_unless_enabled_and_never_starts_without_a_broker() -> None:
+    from services.gateway.app import _outbox_relay
+
+    metrics = HotPathMetrics()
+    default = GatewaySettings.from_environment({})
+    assert default.outbox_relay is False
+    assert _outbox_relay(default, object(), "gw-relay", metrics) is None
+    enabled = GatewaySettings.from_environment({"TRACE_GATEWAY_OUTBOX_RELAY": "true"})
+    assert enabled.outbox_relay is True
+    assert _outbox_relay(enabled, object(), "gw-relay", metrics) is None, "no broker, no relay"
+    assert _outbox_relay(enabled, None, "gw-relay", metrics) is None, "no system of record"
