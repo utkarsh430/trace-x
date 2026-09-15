@@ -43,7 +43,7 @@ in every run manifest; changing one invalidates prior benchmark comparability an
 |---|---|---|---|
 | **Bronze** | Raw event plus envelope, untransformed | append | Nothing dropped, nothing altered. The replayable record of what actually arrived |
 | **Silver** | Validated, typed, exactly deduplicated by each topic's identity, `trust_tier` carried | MERGE on the identity | One row per real event. Late events kept and tagged, never lost. Every Bronze row accounted for (ADR-0053) |
-| **Gold** | Event-time windowed aggregates, entity profiles, training features | upsert | Authoritative feature values. Reconciles the Redis online store |
+| **Gold** | Event-time-complete point-in-time contexts per scored transaction, and primitive state shaped like the online store's (ADR-0055) | batch build: one MERGE per table from pinned Silver versions | Exact to the declared semantics in event-time-complete mode (three-way conformance). The oracle for parity (Step 8) and the source for Redis reconstruction (Step 9) |
 
 **Bronze is never rewritten.** A parsing bug is fixed by reprocessing Bronze into Silver, not by editing
 Bronze — that is the entire point of keeping it.
@@ -70,9 +70,26 @@ Bronze — that is the entire point of keeping it.
 - **Conservation.** Every Bronze row a Silver checkpoint consumed is a canonical row, a recorded
   duplicate or a quarantine row (`python -m services.stream.silver conservation`).
 
-### Gold aggregates
-Event-time windowed velocity (1m/5m/1h/24h), amount statistics per account, distinct-entity counts,
-merchant risk aggregates, and entity profiles for the graph sync job.
+### Gold (ADR-0055)
+- **What a build reads.** `silver.tx_scored_v1`, `silver.identity_events_v1` and
+  `silver.tx_authorization_v1`, each at one pinned Delta version. Every transaction the gateway
+  accepted counts, including those the online store failed to record. `silver.tx_raw_v1` is not a
+  source: reading it as well would count a replayed transaction twice.
+- **What it writes.**
+  - Primitive state, shaped by the online store's plan: `gold.observations`, `gold.minute_buckets`
+    and `gold.distinct_buckets`.
+  - Point-in-time contexts: `gold.tx_windows`, `gold.tx_profiles` and `gold.tx_previous`.
+  - Build records: `gold.builds`, append-only, with each build's lag behind the Silver commits it
+    covers.
+- **Contexts, not finished values.** Gold stores what a feature context holds, and the shared feature
+  definitions evaluate it, so there is one meaning across the reference, Redis and Gold. Gold claims
+  no completeness itself.
+- **How a build is replayed.** Its plan is recorded in the `gold_build` checkpoint before any table is
+  touched, so a crashed build replays with the same pinned versions, and each table's MERGE is
+  idempotent.
+- **Cost.** Every build is a full rebuild, a recorded Negative consequence. Freshness is measured in
+  Step 13.
+- **Later phases, not built:** training features and graph-sync profiles.
 
 ---
 

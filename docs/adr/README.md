@@ -66,6 +66,7 @@ been thought through.
 | [0052](0052-bronze-ingest-topology.md) | Bronze ingest topology and its no-skip guards: a table and query per topic, the raw row, topic-id and conservation checks | 3 | Proposed |
 | [0053](0053-silver-canonical-events.md) | Silver: validated, exactly deduplicated, late-tagged canonical events, with quarantine and Bronze-to-Silver conservation | 3 | Proposed |
 | [0054](0054-online-store-memory-step1b-layout.md) | Online-store memory re-measured through the store for the Step 1b layout; the configured limit stays until the load gate re-runs | 3 | Proposed |
+| [0055](0055-gold-batch-build.md) | Gold is a batch build of primitive-shaped state and event-time-complete point-in-time context from Silver | 3 | Proposed |
 
 ## Notes on status
 

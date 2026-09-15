@@ -1069,6 +1069,54 @@ both reports.
     * CI PostgreSQL for the live coverage tests is a Phase 3 exit item (Kafka and Spark tests in CI,
       nothing skipped);
     * B6, the retention floor, is decided before Step 11.
+* **Step 7 — Gold (batch): complete** (ADR-0055, Proposed; three-way conformance, 2026-09-15).
+  * **What was built:**
+    * `trace_core.stream.gold_plan`: the pure plan, and rows back into a `FeatureContext`.
+    * `gold_features`: Spark SQL with no Python UDFs, never calling the reference.
+    * `gold`: declarations, the build, `check_gold`.
+    * `services/stream/gold.py`: `build` and `check`.
+  * **Sources.** Each build reads `silver.tx_scored_v1`, `silver.identity_events_v1` and
+    `silver.tx_authorization_v1` at pinned Delta versions. Every transaction the gateway accepted
+    counts, including those the store failed to record. `silver.tx_raw_v1` is excluded, since a
+    replayed transaction would count twice.
+  * **Tables.**
+    * *Primitive state:* `gold.observations`, `gold.minute_buckets` and `gold.distinct_buckets`.
+    * *Point-in-time contexts:* `gold.tx_windows`, `gold.tx_profiles` and `gold.tx_previous`.
+    * *Build records:* `gold.builds`, append-only, each with its lag behind the Silver commits it
+      pins.
+  * **Contexts, not values.** Gold stores contexts, and the shared feature definitions evaluate
+    them. It claims no completeness.
+  * **Replay safety.** A build records its plan in the `gold_build` checkpoint before touching any
+    table, so `decide_start` judges it as it judges a streaming batch, and each table is one
+    idempotent MERGE.
+  * **The oracle held.** Gold passes `EventTimeCompleteConformanceSuite` unmodified, on a real JVM.
+    * *Batching.* One build serves every fixture. Logs are id-prefixed per fixture, and four logs
+      rebuilt alone must give identical rows.
+    * *Guard.* It fails unless every fixture read a Gold context.
+    * *Mutation check.* The agent planted five one-line defects in the SQL, and each was caught by a
+      feature expectation.
+  * **Evidence in the lead worktree.** Gold stream tests and the worker-interpreter test passed 86 on
+    Temurin 17.0.18 and Delta 4.0.1, none skipped. Unit tests: `test_gold_plan` passed 17 and
+    `test_stream_gold_service` 4; the control plane passed with the ADR-0055 index row.
+  * **Found while building, fixed:** a BIGINT array index where Spark needs INT, an element-nullability
+    cast ANSI mode refuses, and an empty `NOT ()` in the MERGE of an all-key table.
+  * **Not tested yet, recorded:**
+    - two concurrent builds;
+    - the CLI against a real session (only fakes);
+    - Kafka→Bronze→Silver→Gold end to end (fixtures write Silver rows directly);
+    - freshness, which belongs to Step 13.
+    - Every build is a full rebuild (ADR-0055 Negative).
+  * **For later steps:**
+    * *Step 9.* A gateway identity event's Silver identity (its envelope `event_id`) differs from the
+      online store's observation id (`idev_…`, carried in `correlation_id`). Both derive from the
+      same token, so values agree, but hydration must key on `correlation_id`.
+    * *A risk.* The JVM's trigonometry is not bit-equal to Python's. Distances agree within the float
+      tolerance, but an exact half-metre tie could choose a different home point.
+    * *Naming debt.* Gold contexts report `ONLINE_ONLY`, as the reference's event-time-complete
+      context does, though they are offline.
+  * **Documentation.** DATA_ENGINEERING's Gold tier row and section now describe what was built; they
+    had said "authoritative feature values, upsert".
+  * **Next for this line:** Step 8 (parity), whose oracle Gold now is.
 * **Step 11 — lake maintenance and resource guards: not started. Its one open decision is taken.**
   * **B6, decided by the user (2026-09-15):** an audited local Bronze retention floor, recorded in
     ADR-0052's open questions and implemented in Step 11.
