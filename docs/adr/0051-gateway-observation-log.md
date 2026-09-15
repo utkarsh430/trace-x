@@ -246,6 +246,9 @@ Bronze (Step 5) applies it; it is stated here because the producer must make it 
   `tests/chaos/test_observation_log.py`. A child process composing the production writer, pipeline,
   Redis store and log is killed with SIGKILL at every point of plan §4.1's loss table, or sheds
   against a paused broker; every loss was a detected gap bounded by the last heartbeat.
+  - A critic review (2026-09-15) then found the rule wrong in two cases, which the chaos checks
+    could not catch: a loss after the ledger snapshot, and a loss before a buffered record's
+    arrival. Both were reproduced, and fixes are in progress (docs/PROGRESS.md).
 - **Not yet built:** the controlled hot-path A/B, which also decides where the relay runs.
 
 ## Status

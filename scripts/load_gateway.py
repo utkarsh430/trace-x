@@ -989,14 +989,25 @@ class LoadTestRunRecord:
     def write(self, directory: Path | None = None) -> Path:
         target = (directory or MANIFEST_DIR) / f"{self.run_id}.json"
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(json.dumps(asdict(self), indent=2, sort_keys=True) + "\n")
+        try:
+            with target.open("x") as handle:
+                handle.write(json.dumps(asdict(self), indent=2, sort_keys=True) + "\n")
+        except FileExistsError as exc:
+            raise LoadHarnessError(
+                f"{target} already exists; a run record is never overwritten, because a replaced "
+                f"record is evidence lost without a trace"
+            ) from exc
         return target
 
 
 def new_run_id(started: dt.datetime) -> str:
-    """Date-prefixed so a listing is chronological, commit-suffixed so two runs
-    of the same day on different commits are distinguishable."""
-    return f"load-{started:%Y%m%d}-gateway-{git_commit_sha()[:8]}"
+    """Timestamp-prefixed, so a listing is chronological and two runs on one commit never share an
+    id; commit-suffixed, so runs on different commits are distinguishable.
+
+    It was date-prefixed only. An experiment's second arm then took the first arm's id on the same
+    commit and day, and its record silently replaced the first -- found when the observation-log
+    A/B's second run left one record where there should have been two."""
+    return f"load-{started:%Y%m%d-%H%M%S}-gateway-{git_commit_sha()[:8]}"
 
 
 # ------------------------------------------------------------- the report ---

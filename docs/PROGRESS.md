@@ -533,7 +533,7 @@ both reports.
     session factory now resolves the root quietly, and `tests/stream/test_session.py`, rerun after the
     fix, 9 passed, 1 warning. `tests/stream/test_delta_capabilities.py` passed in full.
 * **Step 4 — durable observation log (lead): in progress** (ADR-0051, Proposed; `P3.observation-log`
-  PASS; the A/B remains). Started 2026-09-14, once the eval-v2 sub-track closed.
+  IN_PROGRESS, reverted from PASS after a critic review). Started 2026-09-14, once the eval-v2 sub-track closed.
   * **Slice 1, fenced producer sessions: implemented.**
     * **Migration 0006, `app.producer_sessions`.** A trigger stamps `started_at`, `heartbeat_at`
       and `closed_at` from PostgreSQL `now()`, whatever a client sends. It refuses any change to
@@ -674,7 +674,8 @@ both reports.
         The committed event arrived keyed and stamped with LogAppendTime before its row was marked, and
         a paused broker left the batch unmarked until a later pass delivered it.
       * `make verify` runs before the commit that records this entry, gated on its exit code.
-  * **Slice 5, the coverage rule and the chaos evidence: implemented; `P3.observation-log` PASS.**
+  * **Slice 5, the coverage rule and the chaos evidence: implemented; `P3.observation-log` PASS, later
+    reverted (see the critic review below).**
     * **`trace_core.observation.coverage.assess`** implements ADR-0051 §5 once, for Bronze (Step 5)
       and for the chaos tests:
       * a closed session is covered only when every number to `max(seen, last_seq)` is present;
@@ -710,7 +711,45 @@ both reports.
         `tests/unit/test_observation_coverage.py` (14), `tests/integration/test_observation_log_kafka.py`
         and `tests/integration/test_outbox_relay.py`.
       * `make verify` runs before the commit that records this entry, gated on its exit code.
-  * **Not yet built:** the controlled hot-path A/B (slice 6), which also decides where the relay runs.
+  * **Critic review of slices 1-5 (2026-09-15): `P3.observation-log` reverted to IN_PROGRESS.**
+    An independent read-only critic agent reviewed the five commits. The lead confirmed its main
+    findings by reproduction before acting on them.
+    * **Category A, both in the coverage rule, both confirmed.**
+      * *A1:* `assess` has no notion of how far the log was read or when the ledger was read. A live
+        session read before a later loss produced a gap that ends before it starts, and a session
+        opened after the ledger snapshot whose records were all lost produced no gap at all.
+      * *A2:* a gap started at the previous record's arrival time. A record can wait in the producer
+        buffer, so that time can be later than the lost write: a write shed at 2 s sat outside the
+        reported 34-37 s gap.
+    * **Category B.**
+      * *B1:* the chaos checks could not fail. Every unclosed session always has a gap, so "no
+        invisible loss" held trivially, and nothing checked that a loss's time lies inside a gap.
+      * *B2, confirmed:* between sequencing and the online write the gateway waits on PostgreSQL
+        (`reconcile`) with no bound. `POSTGRES_TIMEOUT_S` is applied nowhere and the pool has no
+        timeout, so a store write could land past the writer's lease.
+      * *B3, confirmed:* a retryable failure mid-batch makes the relay re-publish the rows already
+        handed over, on every pass.
+      * *B4:* authorization outcomes change online state but sit outside session coverage. ADR-0051
+        does this by design, while plan §4.1 point 1 calls any unsequenced online write a defect.
+        This needs a user decision.
+    * **Category C:** the unclosed-session bound should use the writer's lease and margin, not the
+      heartbeat interval; a sequence above `last_seq` in a closed session is accepted silently; relay
+      refusals depend on the relay's own contract version; migration 0007's docstring overclaims.
+    * **What the critic checked and found sound:** every early return (replay, 429, 409, clock skew,
+      writer refusal) comes before sequencing and any store write; close accounting only ever errs
+      towards no claim; the heartbeat's lock check and the grace arithmetic; the contract, including
+      no evaluation-only data in events.
+    * **Disposition.** A fix agent in its own worktree is fixing A1, A2, B1, B2, B3, C1, C2 and C4,
+      with property tests and strengthened chaos evidence. `P3.observation-log` returns to PASS only
+      on that evidence.
+  * **The A/B's first attempt was voided by a harness defect (2026-09-15).** Run ids were date plus
+    commit, so the second arm (`log-on`) took the first arm's id and its record silently replaced run
+    1's (`log-off`). The driver stopped at run 2 rather than continue. Run 1's raw k6 summary and run
+    2's record are kept outside the repository as diagnostic history, never published. Run ids are now
+    unique per run, and a record is never overwritten. Because arm order is part of the method, and
+    the critic fixes change the hot path, the A/B reruns in full after those fixes land.
+  * **Not yet built:** the critic fixes, then the controlled hot-path A/B (slice 6), which also decides
+    where the relay runs.
 * **Step E — `eval-v2`.** Stages 1, 1b and 1c are complete. Their code is integrated onto this branch.
   * **Integration.** The worktree branch `worktree-agent-aae9faa608636c9c8` was fast-forwarded to the
     phase branch, and the Step E work was committed on top. The phase branch fast-forwards to it.
