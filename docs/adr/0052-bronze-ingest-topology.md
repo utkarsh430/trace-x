@@ -111,10 +111,26 @@ implementation found it needed.
 - The initial-offsets file format is a Spark internal, pinned by an integration test.
 
 ## Open questions
-- **Step 11 retention (critic finding B6).** Bounded local lake retention needs DELETE, which means
-  lifting `delta.appendOnly`. Every row deleted inside a consumed range would then count as missing,
-  for good. Before Step 11 starts, decide a declared, audited retention floor per partition that
-  conservation respects.
+- **Step 11 retention (critic finding B6): decided by the user on 2026-09-15; implemented in Step 11,
+  not before.** Q8 bounds local lake retention, and Bronze conservation would otherwise count every
+  deleted row as lost. The decision is an audited local Bronze retention floor.
+  - **Where the authority lives.** The retirement state must be atomically coupled to the Bronze
+    table itself, or derivable from it. Delta's atomicity is per table, so a Bronze delete and a row
+    written to a separate audit table are never one commit, and the design must not assume they are.
+    The smallest Delta-native form is preferred: a same-table retention marker, or metadata on the
+    Bronze delete commit itself, so the Bronze table and its commit log are authoritative.
+  - **Required semantics:**
+    - local development only; the production Bronze contract stays append-only;
+    - one floor per (topic id, partition);
+    - only rows strictly below the committed retirement floor may be deleted;
+    - conservation treats offsets below that floor as RETIRED, never as LOST;
+    - the maintenance command refuses to advance a floor past any required consumer or checkpoint
+      position, and never deletes data still needed for replay or recovery;
+    - a crash at any point must leave conservation neither believing deleted rows still exist nor
+      treating unretired rows as retired;
+    - maintenance is idempotent;
+    - every floor advancement leaves an auditable record;
+    - no generalised retention framework.
 
 ## Implementation status
 - Implemented by the Spark agent, integrated by the lead:
@@ -137,8 +153,9 @@ implementation found it needed.
   - **B4, fixed.** Rows carry `kafka_topic_id`, and duplicates are counted per topic id.
   - **B5, fixed.** The envelope producer and writer stamp are extracted in Spark. No value is parsed
     on the driver, so hostile nesting cannot raise there.
-  - **B6, open.** Step 11's bounded retention needs a declared retention floor that conservation
-    respects (see the open questions).
+  - **B6, decided (2026-09-15), implemented in Step 11.** Step 11's bounded retention needs an audited
+    local retention floor that conservation respects; the user's decision and its required semantics
+    are in the open questions.
   - **C, addressed.**
     - The integration oracle keeps a null header value.
     - A coverage case now spreads records over every partition.

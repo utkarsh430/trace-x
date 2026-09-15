@@ -28,7 +28,9 @@ before one is launched.
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+import shutil
+import sys
+from collections.abc import Mapping, MutableMapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
@@ -127,6 +129,49 @@ def refuse_classpath_bypasses(environ: Mapping[str, str] | None = None) -> None:
         )
 
 
+def pin_worker_python(
+    environ: MutableMapping[str, str] | None = None, *, executable: str | None = None
+) -> None:
+    """Make Spark's Python workers run the driver's own interpreter, or refuse.
+
+    PySpark starts its Python workers with `PYSPARK_PYTHON`, or with the first `python3` on PATH
+    when that is unset, never with the driver's interpreter (`pyspark/core/context.py`). With
+    several virtual environments on one machine, the workers then import another checkout's
+    installed `trace_core`: a UDF runs different admission, digest or timing rules than the driver,
+    and a module added since fails outright. Observed in Step 6: Silver's admission UDF raised
+    `ModuleNotFoundError: No module named 'trace_core.stream.silver_rules'` because the workers ran
+    the main checkout's environment. So an unset `PYSPARK_PYTHON` is set to the driver's
+    interpreter, and a value naming another environment is refused, as is a `PYSPARK_DRIVER_PYTHON`
+    naming another environment.
+
+    Environments are compared by the interpreter's directory, without resolving symlinks: every
+    virtual environment's `python` links to the same base interpreter, so resolving would make two
+    different environments look identical.
+    """
+    env = os.environ if environ is None else environ
+    driver = Path(executable or sys.executable).absolute()
+    problems: list[str] = []
+    for name in ("PYSPARK_PYTHON", "PYSPARK_DRIVER_PYTHON"):
+        value = env.get(name, "").strip()
+        if not value:
+            continue
+        located = value if os.sep in value else shutil.which(value, path=env.get("PATH"))
+        candidate = Path(located or value).absolute()
+        if candidate.parent != driver.parent:
+            problems.append(
+                f"{name}={value!r} is not in the driver's environment ({driver.parent})"
+            )
+    if problems:
+        raise ToolchainMismatchError(
+            "refusing to start Spark with Python workers from another environment: "
+            + "; ".join(problems)
+            + ". Unset them; the session factory pins the workers to the driver's interpreter, so "
+            "they run the same code."
+        )
+    if not env.get("PYSPARK_PYTHON", "").strip():
+        env["PYSPARK_PYTHON"] = str(driver)
+
+
 def require_toolchain(environ: Mapping[str, str] | None = None) -> None:
     """Raise `ToolchainMismatchError` listing every failed check, or return."""
     failures = [f for f in toolchain.inspect_toolchain(environ) if not f.ok]
@@ -158,6 +203,7 @@ def build_session(
             f"extra_conf may not set {clashes}: they are part of the toolchain contract"
         )
     refuse_classpath_bypasses()
+    pin_worker_python()
     require_toolchain()
 
     from pyspark.sql import SparkSession

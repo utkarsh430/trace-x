@@ -60,12 +60,24 @@ def is_backfill(headers: Iterable[tuple[str, bytes | None]]) -> bool:
     return any(key == REPLAY_MODE_HEADER and value == BACKFILL_MODE for key, value in headers)
 
 
-def is_late(*, logged_at: dt.datetime, occurred_at: dt.datetime, backfill: bool) -> bool | None:
-    """True when arrival delay is strictly greater than 600 s; None for a backfill record."""
-    delay = arrival_delay(logged_at=logged_at, occurred_at=occurred_at)
+def is_late_ms(delay_ms: int, *, backfill: bool) -> bool | None:
+    """Late when the arrival delay, in the whole milliseconds Silver stores, exceeds 600,000;
+    None for a backfill record.
+
+    Judged at millisecond precision, LogAppendTime's own, so a stored `is_late` and its stored
+    `arrival_delay_ms` never disagree. Before this, a sub-millisecond `occurred_at` could make a
+    600.0005 s delay late while storing 600,000 ms (critic finding C2). The threshold is unchanged,
+    so this is still timing semantics v1.
+    """
     if backfill:
         return None
-    return delay > LATE_AFTER
+    return delay_ms > LATE_AFTER // _MS
+
+
+def is_late(*, logged_at: dt.datetime, occurred_at: dt.datetime, backfill: bool) -> bool | None:
+    """True when arrival delay, in whole milliseconds, is strictly greater than 600,000 ms."""
+    delay_ms = arrival_delay_ms(logged_at=logged_at, occurred_at=occurred_at)
+    return is_late_ms(delay_ms, backfill=backfill)
 
 
 def future_skewed(
@@ -96,4 +108,5 @@ __all__ = [
     "future_skewed",
     "is_backfill",
     "is_late",
+    "is_late_ms",
 ]

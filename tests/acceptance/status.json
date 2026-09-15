@@ -243,13 +243,14 @@
     {
       "id": "P3.event-time",
       "phase": "3",
-      "name": "Watermarks, dedup, late-event routing, out-of-order correctness",
-      "status": "NOT_STARTED",
+      "name": "Duplicates (including retries with new envelope ids), out-of-order and late events handled exactly; future skew quarantined",
+      "status": "PASS",
       "evidence": {
-        "command": "pytest -m integration tests/integration/test_event_time.py",
-        "verified_at": null,
-        "result": null
-      }
+        "command": "pytest tests/unit/test_silver_rules.py tests/unit/test_silver_conservation.py tests/unit/test_stream_timing.py tests/unit/test_stream_silver_service.py; pytest -m stream tests/stream/test_silver_tables.py tests/stream/test_session_worker_python.py; pytest -m integration tests/integration/test_silver_kafka.py",
+        "verified_at": "2026-09-15",
+        "result": "unit 48 passed; stream 69 passed on Temurin 17.0.18 and Delta 4.0.1, none skipped, including tests/stream/test_silver_tables.py 12 (two concurrent-write tests) and tests/stream/test_session_worker_python.py 1; integration 22 passed against a real broker and PostgreSQL, none skipped (Silver 1, Bronze 8, Kafka platform 11, worker relay 2)"
+      },
+      "notes": "Step 6 (ADR-0053, Proposed, amended after critic review). Silver admits each Bronze record with the producers' strict generated models, quarantines what it cannot admit with a reason, and holds one canonical row per declared identity (in-batch pick, MERGE, post-write uniqueness assertion). Producer retries with new envelope ids are identical duplicates. tx.scored.v1 keeps the RECORDED delivery under one total order, whatever the micro-batch boundaries. Lateness is stored (timing semantics v1, judged on stored milliseconds); a backfill is null. Future skew is quarantined. silver.late_events is a MERGE projection partitioned by silver_topic, after unpartitioned concurrent MERGEs failed 7 of 16 two-topic batches. Conservation accounts every Bronze row and cross-checks duplicates and late_events. Known limits: ADR-0053 section 7."
     },
     {
       "id": "P3.checkpoint-resume",

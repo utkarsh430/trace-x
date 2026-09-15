@@ -28,7 +28,7 @@ import shutil
 import signal
 import subprocess
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any, Final
 
 from trace_core.domain.errors import ContractError, LakeContractError, TraceXError
@@ -100,6 +100,60 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _verdict(handles: Sequence[Any], *, failure_event: str = "bronze_query_failed") -> int | None:
+    """EXIT_QUERY_FAILED once any query has failed; EXIT_OK once every query has stopped without
+    failing; None while any is still running.
+
+    Liveness is read before failure. Spark records a query's failure before it marks the query
+    terminated (`StreamExecution.runStream` sets `streamDeathCause` in its catch and `TERMINATED`
+    in its finally), so a query already seen stopped has recorded any failure it had. Read the
+    other way round, a query that failed between the two reads looked like a clean stop and the
+    job exited 0 (critic finding B2).
+    """
+    stopped = all(not handle.query.isActive for handle in handles)
+    for handle in handles:
+        failure = handle.query.exception()
+        if failure is not None:
+            _log.error(failure_event, topic=handle.spec.topic, error=str(failure)[:2000])
+            return EXIT_QUERY_FAILED
+    return EXIT_OK if stopped else None
+
+
+def _supervise(
+    streams: Any,
+    handles: Sequence[Any],
+    *,
+    stop_requested: Callable[[], bool],
+    progress: Callable[[Any], object],
+    query_failure: type[BaseException],
+    failure_event: str = "bronze_query_failed",
+) -> int:
+    """Keep the queries running until every one stops, one fails, or a stop is requested.
+
+    A requested stop stops every query first and judges them after, so a failure that races the
+    stop is still reported.
+    """
+    try:
+        while True:
+            for handle in handles:
+                progress(handle)
+            if stop_requested():
+                for handle in handles:
+                    if handle.query.isActive:
+                        handle.query.stop()
+            verdict = _verdict(handles, failure_event=failure_event)
+            if verdict is not None:
+                return verdict
+            # A failed query rethrows here; it is recorded on its query and judged above.
+            with contextlib.suppress(query_failure):
+                streams.awaitAnyTermination(5)
+            streams.resetTerminated()
+    finally:
+        for handle in handles:
+            if handle.query.isActive:
+                handle.query.stop()
+
+
 def _run(spark: Any, lake: LakeConfig, args: argparse.Namespace) -> int:
     from pyspark.errors import StreamingQueryException
 
@@ -137,26 +191,13 @@ def _run(spark: Any, lake: LakeConfig, args: argparse.Namespace) -> int:
 
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
-    try:
-        while True:
-            for handle in handles:
-                record_progress(handle, seen[handle.spec.topic])
-                failure = handle.query.exception()
-                if failure is not None:
-                    _log.error(
-                        "bronze_query_failed", topic=handle.spec.topic, error=str(failure)[:2000]
-                    )
-                    return EXIT_QUERY_FAILED
-            if all(not h.query.isActive for h in handles) or stopping["requested"]:
-                return EXIT_OK
-            # A failed query rethrows here; it is recorded on its query and reported above.
-            with contextlib.suppress(StreamingQueryException):
-                spark.streams.awaitAnyTermination(5)
-            spark.streams.resetTerminated()
-    finally:
-        for handle in handles:
-            if handle.query.isActive:
-                handle.query.stop()
+    return _supervise(
+        spark.streams,
+        handles,
+        stop_requested=lambda: stopping["requested"],
+        progress=lambda handle: record_progress(handle, seen[handle.spec.topic]),
+        query_failure=StreamingQueryException,
+    )
 
 
 def _conservation(spark: Any, lake: LakeConfig, args: argparse.Namespace) -> int:

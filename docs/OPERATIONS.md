@@ -265,6 +265,32 @@ is the right answer, `reset_checkpoint` publishes a new checkpoint version with 
 deletes nothing; a Kafka source may never restart from `latest`. A drifted table is an operator's
 decision: rows written while it drifted may violate its declaration.
 
+### Silver stopped, or not conserved
+
+**Detect:** `python -m services.stream.silver run` exits 3 and logs `silver_query_failed` with the
+topic, or `python -m services.stream.silver conservation` exits 1. A rise in one quarantine reason
+shows up in `silver.quarantine`.
+
+**Behaviour:** Silver never admits a second row for an identity and never drops a record.
+- A uniqueness assertion that fails after a commit stops the job rather than let a reader see a
+  duplicate.
+- A record Silver cannot admit is quarantined with its raw bytes and a reason (ADR-0053 §2).
+
+**Action:**
+- **Uniqueness or conservation failure.** This is a defect, not an operating state. Keep the
+  checkpoint and the tables as they are; the conservation report names the Bronze coordinates that
+  are missing, double-counted or dangling.
+- **`identity_conflict`.** Two deliveries share an identity with different content; the detail carries
+  both digests. Fix the producer. Never delete the canonical row to admit the other.
+- **`invalid_event` after a producer release.** The producer emits what the released contract forbids,
+  such as a new enum value (a breaking change, `docs/EVENT_CONTRACTS.md` §4). Fix the producer, then
+  reprocess with `reset_checkpoint`.
+  - The new checkpoint version re-reads Bronze from version 0, and records duplicates and quarantine
+    rows again under that version; filter by it.
+  - It fails loudly if Bronze no longer retains that log.
+- **`future_skew`.** A producer's clock or its `occurred_at` is wrong.
+- **`not_log_append_time`.** The topic's timestamp type drifted from `deploy/kafka/topics.yaml`.
+
 ### Neo4j unavailable
 **Detect:** health probe.
 **Behaviour:** `GraphStore` falls back to `PostgresGraphStore`; graph evidence carries reduced

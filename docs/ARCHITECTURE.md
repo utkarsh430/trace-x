@@ -206,12 +206,18 @@ blocker. Schemas, roles and grants are created **only** by Alembic
 
 Event-time semantics, explicitly implemented:
 
-- `withWatermark("occurred_at", "10 minutes")` on every stateful stage.
-- Deduplication via `dropDuplicatesWithinWatermark(["event_id"])`.
-- Late data beyond the watermark is routed to a `late_events` Delta table and counted — **never
-  silently dropped**.
+- **No watermark bounds Silver's deduplication** (ADR-0053; timing semantics v1 has no dedup
+  pre-filter). A stateful stage added later declares its own watermark, and may drop only rows it has
+  proven duplicate.
+- **Exact deduplication** by each topic's declared identity: deterministic within the micro-batch, a
+  MERGE on the identity, then a post-write uniqueness assertion. For `tx.scored.v1`, a preference
+  order keeps the recorded delivery rather than a retry that arrived first.
+- **Lateness is stored, not inferred:** `is_late` when arrival delay (LogAppendTime − `occurred_at`)
+  exceeds 600 s. A late event stays canonical, and `silver.late_events` holds exactly the late
+  canonical rows — **never silently dropped**.
 - All aggregation is event-time windowed. Processing time is never used for business logic.
-- Checkpoints per query under `_checkpoints/{query}/`; `availableNow` trigger for batch replay.
+- Checkpoints per query and version under `_checkpoints/<query>/v<N>/` (ADR-0048); `availableNow`
+  trigger for batch replay.
 - Stateful operations use `flatMapGroupsWithState` with explicit TTL.
 - **Data layout is deliberately undecided in code** — it is table DDL configured per ADR-0015, chosen
   by benchmark, and permitted to differ between local OSS Delta and Databricks.

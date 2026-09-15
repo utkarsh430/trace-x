@@ -1069,6 +1069,22 @@ both reports.
     * CI PostgreSQL for the live coverage tests is a Phase 3 exit item (Kafka and Spark tests in CI,
       nothing skipped);
     * B6, the retention floor, is decided before Step 11.
+* **Step 11 — lake maintenance and resource guards: not started. Its one open decision is taken.**
+  * **B6, decided by the user (2026-09-15):** an audited local Bronze retention floor, recorded in
+    ADR-0052's open questions and implemented in Step 11.
+    * The retirement state is authoritative in the Bronze table or its own commit log, never in a
+      separate audit table assumed to commit atomically with the delete.
+    * The floor is per (topic id, partition), local-only; production Bronze stays append-only.
+    * Offsets below the floor are RETIRED, not LOST.
+    * The floor never passes a consumer or checkpoint position, and never retires data replay or
+      recovery still needs.
+    * Crash-safe at any point, idempotent, and audited on every advance.
+    * No generalised retention framework.
+  * **Already in place for `P3.resource-bounds`:**
+    * loss-tolerant reader options and session settings are refused;
+    * a restart the source log can no longer serve is refused;
+    * table properties are allow-listed.
+    * VACUUM's floor is each table's declared `delta.deletedFileRetentionDuration` (ADR-0048 (f)).
 * **Step 12 — memory model correction (lead): in progress** (ADR-0054, Proposed).
   * **Memory, measured through the store itself**
     (`run_id: bench-20260915-054159-memory-model-5ee55136`, from clean commit `5ee5513`):
@@ -1087,7 +1103,7 @@ both reports.
       record is clean.
   * **Still to run:** score latency by account depth, the other Step 12 measurement, on a quiet
     machine after the Silver suites.
-* **Step 6 — Silver: in progress** (ADR-0053, Proposed; `P3.event-time`).
+* **Step 6 — Silver: complete** (ADR-0053, Proposed; `P3.event-time` PASS, 2026-09-15).
   * **Design (ADR-0053):**
     * **Tables:** one canonical Silver table per released topic, plus shared `silver.late_events`
       and `silver.quarantine`.
@@ -1103,8 +1119,130 @@ both reports.
   * **Lead, first:** `trace_core.stream.timing` holds timing semantics v1 as versioned constants and
     pure functions, with unit tests pinning each value at its boundary. It settles where the §4.3
     constants live.
-  * **Next:** the Spark agent builds the declarations, transforms, sink, service and conservation check
-    in its own worktree. The lead integrates after a critic review.
+  * **The Spark agent's build (2026-09-15), in its own worktree:**
+    * `silver_rules`, `silver` and `silver_conservation`, the `services/stream/silver.py` CLI, unit,
+      stream and integration tests. Integrated into the lead worktree unchanged.
+    * On the integrated tree: 32 unit tests, 4 stream tests on real Delta and the Kafka integration
+      test passed, the last two after the defect below was fixed.
+  * **A toolchain defect found during integration, and fixed.**
+    * *What happened.* The stream and integration suites failed with `ModuleNotFoundError: No module
+      named 'trace_core.stream.silver_rules'` inside Spark's Python workers, although the driver
+      imported it.
+    * *The cause.* PySpark starts its Python workers with `PYSPARK_PYTHON`, or with the first
+      `python3` on PATH when that is unset, never with the driver's interpreter. On this machine PATH
+      named the main checkout's virtual environment, so the workers ran the main checkout's
+      `trace_core`. Where a module exists in both checkouts, a worker can silently run different
+      admission, digest or timing rules than the driver while the tests pass.
+    * *Scope.* Silver's admission UDF is the first code that ships Python functions to Spark workers.
+      A search found none in Bronze, its conservation and coverage, or the stream services, so the
+      Step 5 evidence ran this branch's code. CI runs pytest and the workers from the same
+      setup-python interpreter, and each image has one interpreter, so neither was affected.
+    * *The fix.* `trace_core.stream.session.pin_worker_python`, called by `build_session`, sets an
+      unset `PYSPARK_PYTHON` to the driver's interpreter. It refuses a `PYSPARK_PYTHON` or
+      `PYSPARK_DRIVER_PYTHON` naming another environment. Environments are compared by the
+      interpreter's directory, never through symlinks, which all lead to the same base interpreter.
+    * *Tests.* `tests/unit/test_stream_worker_python.py` covers the rule without a JVM, and
+      `tests/stream/test_session_worker_python.py` proves on a real JVM that a worker imports the
+      driver's own `trace_core`: 41 unit tests with the toolchain suite, and the stream test, passed.
+  * **The critic's review of Silver (2026-09-15)** found one Category A defect and three Category B
+    defects.
+    * **A1: a gateway retry could become the canonical scored transaction.**
+      * *The defect.* A retry republishes `tx.scored.v1` with `observe_outcome = REDELIVERY` and
+        new scoring fields, so its content differed and it was quarantined as an identity conflict.
+        When the retry arrived first, it stayed canonical and the recorded delivery was quarantined.
+      * *Why it matters.* As-served replay (Steps 8, 9) follows the recorded delivery's store
+        position, and a redelivery carries the counter at the retry.
+      * *Decided by the lead* within ADR-0053, still Proposed, and §4.3's store-counter order:
+        - a preference order: RECORDED first, then store epoch and position, then arrival;
+        - a digest over the transaction's own content;
+        - the replaced row recorded as `superseded`.
+      * *A premise corrected.* More than one RECORDED delivery can exist (a store restart, an
+        expired identity key), so the order is total and the canonical row cannot depend on
+        micro-batch boundaries.
+    * **B1: a checkpoint reset re-appended `late_events`,** and the uniqueness assertion then stopped
+      the query. `late_events` becomes a MERGE projection of the committed canonical rows.
+    * **B2: the run command could exit 0 after a query failed.** It read a query's failure before
+      its liveness, so a query failing between the two reads looked like a clean stop.
+      * *The same race was in the Bronze CLI* (`services/stream/bronze.py`), fixed by the lead.
+      * *Spark's own order.* Spark 4.0.1's bytecode shows `runStream` records the failure before its
+        finally block marks the query terminated. So `_verdict` reads liveness first, and a
+        requested stop stops every query before judging them.
+      * *Evidence.* 4 new unit tests, including the race itself: `tests/unit/test_stream_bronze_service.py`
+        6 passed.
+    * **B3: an integer beyond 64 bits was stored as null.** It is now quarantined as `unrepresentable`.
+    * **Category C fixes:**
+      - C1: attacker-chosen field names are kept out of quarantine `detail`;
+      - C2: `is_late` is judged on the stored milliseconds (`timing.is_late_ms`, lead, with a
+        boundary test: `test_stream_timing.py` and `test_silver_rules.py` 23 passed);
+      - C3: Python and Spark classify a repeated coordinate the same way;
+      - C4: a replay test that depends on `replayed`;
+      - C5: all six topics run on Spark;
+      - C6: conservation's cross-table checks;
+      - C7: a negative source version is refused;
+      - C8: stale docs.
+    * **Recorded as limits, not fixed** (ADR-0053 §7): a partly consumed Bronze version fails
+      conservation closed (B4); starting from Bronze version 0 needs its log (C9); concurrent
+      writes to the shared tables are untested; `publish._models` is private (C10).
+    * **The critic's verdict on the agent's deviations:**
+      - accepted: `silver.duplicates`, `replayed`, `not_log_append_time`, and the digest's exclusions;
+      - accepted after a change: `late_events` as an append, now a MERGE projection.
+  * **The fixes, delivered and integrated (2026-09-15).**
+    * The Spark agent implemented A1, B1 to B3 and C1 to C7. Each fix has its own test.
+    * *In the agent's worktree:* 59 unit tests, 11 stream tests on real Delta and the Kafka
+      integration test passed, with none skipped.
+    * *In the lead worktree:* the files are integrated. Lint, format and types are clean, and 166 unit
+      tests passed, covering Silver, timing, both stream services, the toolchain, Bronze
+      conservation and checkpoints.
+    * *A1 checked against the gateway:* a redelivery carries the same store position as its
+      RECORDED delivery, so it always sorts after it.
+    * *The lead's review found no defect* in the digest, the order key and its SQL mirror, the
+      supersede MERGE, the replay-safe commit order, detail sanitising, or conservation's
+      cross-table checks.
+    * *Docs:* the lead amended ADR-0053 and aligned DATA_ENGINEERING §2, ARCHITECTURE §6 and
+      SECURITY §9 with it; they still described watermark dedup and `.dlq` topics. It also added the
+      OPERATIONS playbook "Silver stopped, or not conserved". `P3.event-time`'s command now names the
+      Silver suites.
+  * **Open before the commit: concurrent writes to `silver.late_events`.**
+    * B1's fix made `late_events` a MERGE into one unpartitioned table, run by every topic's query
+      on every batch.
+    * For an unpartitioned table, Delta's conflict check has no partition predicate to separate
+      the writers, and `OpenedCheckpoint.merge` does not retry. So `silver run`'s concurrent
+      queries may stop on a write conflict.
+    * The lead and the agent raised the risk independently. No test runs two topics at once.
+    * *Reproduced on the unchanged code (2026-09-15).* 7 of 16 sink batches of two topics, released
+      together by a barrier, failed with `io.delta.exceptions.ConcurrentAppendException`
+      (`DELTA_CONCURRENT_APPEND`: "Files were added to the root of the table by a concurrent update").
+      * Every conflicting commit was the other topic's `late_events` MERGE.
+      * No `duplicates` or `quarantine` append conflicted.
+      * The six-query test passed that run, because its batches happened not to overlap. The
+        barrier test is the deterministic reproduction.
+    * *Fixed.* `silver.late_events` is partitioned by `silver_topic` in every environment
+      (`LATE_EVENTS_LAYOUT`, `packages/trace_core/stream/silver.py`). The MERGE keeps its literal
+      topic predicate. ADR-0053 §1 records the partition as a correctness requirement that the
+      Step 14 layout benchmark may not remove.
+      * Both concurrency tests and a declaration test are in `tests/stream/test_silver_tables.py`.
+      * Integrated into the lead worktree; lint and types clean, and 40 Silver unit tests passed.
+      * After the fix, 7 conflicts became none: the barrier test passes, and each topic ends with
+        exactly its rows in `late_events`, `duplicates` and `quarantine`.
+  * **Exit evidence, run in the lead worktree under the heavy-suite lock (2026-09-15):**
+    * *Unit:* the `P3.event-time` command's unit part passed 48. The full unit and contract suites
+      passed.
+    * *Stream:* `pytest tests/stream -m stream` passed 69 on Temurin 17.0.18 and Delta 4.0.1, none
+      skipped. That covers Silver tables 12 (both concurrency tests), the worker-interpreter test 1,
+      Bronze 5, session 9 and Delta capabilities 42.
+    * *Integration:* passed 22 against a real broker and PostgreSQL, none skipped. That covers
+      Silver 1, Bronze 8, the Kafka platform 11 and the worker relay 2.
+    * *A first attempt proved nothing, and is not counted.* The lead's script ran outside `make`, so
+      `java` was the machine's Java 25 and `.env` was not loaded. Every JVM test skipped with its
+      reason, the stream collection guard failed as designed, and the relay test skipped for want of
+      a password. The rerun exported `JAVA_HOME` for Temurin 17 and loaded `.env`. The briefs for
+      Steps 7, 10, 11 and 13 now state that setup.
+    * `make verify` is green before the commit.
+  * **Recorded, not fixed** (ADR-0053 §7):
+    - a partly consumed Bronze version fails conservation closed;
+    - a Silver reset needs Bronze's log from version 0;
+    - there is one writer per canonical table;
+    - `publish._models` is private.
 * **Step E — `eval-v2`.** Stages 1, 1b and 1c are complete. Their code is integrated onto this branch.
   * **Integration.** The worktree branch `worktree-agent-aae9faa608636c9c8` was fast-forwarded to the
     phase branch, and the Step E work was committed on top. The phase branch fast-forwards to it.

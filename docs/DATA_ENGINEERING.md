@@ -42,21 +42,33 @@ in every run manifest; changing one invalidates prior benchmark comparability an
 | Tier | Content | Write mode | Guarantees |
 |---|---|---|---|
 | **Bronze** | Raw event plus envelope, untransformed | append | Nothing dropped, nothing altered. The replayable record of what actually arrived |
-| **Silver** | Deduplicated, typed, validated, `trust_tier` carried | append | Event-time correct. Late events kept and tagged, never lost |
+| **Silver** | Validated, typed, exactly deduplicated by each topic's identity, `trust_tier` carried | MERGE on the identity | One row per real event. Late events kept and tagged, never lost. Every Bronze row accounted for (ADR-0053) |
 | **Gold** | Event-time windowed aggregates, entity profiles, training features | upsert | Authoritative feature values. Reconciles the Redis online store |
 
 **Bronze is never rewritten.** A parsing bug is fixed by reprocessing Bronze into Silver, not by editing
 Bronze — that is the entire point of keeping it.
 
-### Silver transformations
-- Validate against the event JSON Schema; failures route to `<topic>.dlq` with the full envelope.
-- `dropDuplicatesWithinWatermark(["event_id"])` — exactly-once semantics within the watermark.
-- Type coercion to `CanonicalTransaction`, with `field_coverage` propagated from the source adapter.
+### Silver transformations (ADR-0053)
+- **Validation.** Each Bronze value is validated with the topic's generated contract model, the one
+  producers validate with (strict, `extra="forbid"`). A record Silver cannot admit goes to
+  `silver.quarantine` with its raw bytes and a reason: `null_value`, `not_log_append_time`,
+  `invalid_event`, `unrepresentable`, `future_skew` or `identity_conflict`. Nothing goes to a
+  `.dlq` topic.
+- **Exact deduplication**, by each topic's declared identity. It is deterministic within the
+  micro-batch, then a MERGE on the identity, then a uniqueness assertion; no watermark bounds it.
+  - A delivery with the same content is recorded in `silver.duplicates`.
+  - One with different content is an identity conflict.
+  - `tx.scored.v1` keeps the recorded delivery, not a retry that happened to arrive first.
 - `trust_tier` stamped and thereafter immutable. **No PII tokenization is performed or claimed:** every
   current source carries synthetic or already-anonymised identities, and tokenizing them would break joins
   with the online store's keys. An explicit tokenization and privacy design is required before any source
   containing real PII is admitted (`docs/PHASE3_PLAN.md` §3, Q9).
-- Late-arrival tagging: events beyond the watermark go to `late_events` **and are counted**.
+- **Lateness is a stored fact** (timing semantics v1, `trace_core.stream.timing`).
+  - `arrival_delay_ms` is LogAppendTime − `occurred_at`.
+  - `is_late` is true when that exceeds 600,000 ms, and null for a backfill replay.
+  - A late event stays canonical; `silver.late_events` holds exactly the canonical rows that are late.
+- **Conservation.** Every Bronze row a Silver checkpoint consumed is a canonical row, a recorded
+  duplicate or a quarantine row (`python -m services.stream.silver conservation`).
 
 ### Gold aggregates
 Event-time windowed velocity (1m/5m/1h/24h), amount statistics per account, distinct-entity counts,
@@ -71,10 +83,10 @@ only to measure lag.** Confusing them silently corrupts every windowed aggregate
 
 | Concern | Implementation |
 |---|---|
-| Watermark | `withWatermark("occurred_at", "10 minutes")` on every stateful stage |
+| Watermark | None in Silver, whose deduplication is bounded by the table, not a watermark (ADR-0053). A stateful streaming stage declares its own when one is added |
 | Deduplication | By each topic's declared identity (`deploy/kafka/topics.yaml`): deterministically within each micro-batch, then an insert-only MERGE through the query's checkpoint. Both are needed: Delta inserts every duplicate a MERGE source carries (ADR-0048) |
 | Out-of-order | Normal and expected. All aggregation is event-time windowed |
-| Late data | Beyond the watermark → `late_events` Delta table + counter. **Never silently dropped** |
+| Late data | Arrival delay over 600 s (timing semantics v1) → `is_late` on the canonical row, which `silver.late_events` also holds. **Never dropped** |
 | Stateful ops | `flatMapGroupsWithState` with explicit TTL for session and velocity state |
 | Checkpoints | `<lake root>/_checkpoints/<query>/v<N>/`, beside the tiers: each version owns its Delta app id and is the only way its query writes (ADR-0048) |
 | Replay | `availableNow` trigger for bounded batch reprocessing from any offset |

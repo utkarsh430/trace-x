@@ -53,6 +53,18 @@ def test_late_is_strictly_more_than_600_seconds_of_arrival_delay() -> None:
     assert timing.arrival_delay_ms(logged_at=T + MS, occurred_at=occurred) == 600_001
 
 
+def test_lateness_is_judged_at_the_stored_millisecond_so_the_two_facts_never_disagree() -> None:
+    """Critic finding C2: 600.0005 s of delay is 600,000 stored milliseconds, which is not late."""
+    occurred = T + dt.timedelta(microseconds=500)
+    logged = T + dt.timedelta(seconds=600, milliseconds=1)
+    delay_ms = timing.arrival_delay_ms(logged_at=logged, occurred_at=occurred)
+    assert delay_ms == 600_000
+    assert timing.is_late(logged_at=logged, occurred_at=occurred, backfill=False) is False
+    assert timing.is_late_ms(delay_ms, backfill=False) is False
+    assert timing.is_late_ms(600_001, backfill=False) is True
+    assert timing.is_late_ms(600_001, backfill=True) is None
+
+
 def test_a_backfill_record_is_never_late_or_on_time() -> None:
     old = T - dt.timedelta(days=30)
     assert timing.is_late(logged_at=T, occurred_at=old, backfill=True) is None
