@@ -570,17 +570,22 @@ it, and destroys it. Budget alarm, mandatory cost tags, and a scheduled teardown
 
 ## 16. Databricks environment (Phase 12)
 
-Asset Bundles (`databricks.yml`) for jobs and clusters as code. **The Spark code is identical to
-local** — notebooks are thin entrypoints calling `trace_core.stream.*`. That is the guard against
-"works on Databricks, unrunnable locally."
+Asset Bundles (`databricks.yml`) for jobs and clusters as code, applied once in ADR-0025's funded window.
+**The Spark code is identical to local**: jobs are thin entrypoints over `trace_core.stream.*`. That is
+the guard against "works on Databricks, unrunnable locally."
 
-Jobs: `bronze_ingest` (continuous), `silver_transform`, `gold_features`, `graph_sync`,
-`training_pipeline`, `drift_monitor`, `external_validation` (Track B).
+- **Jobs:** `bronze_ingest` (one query per topic), `silver_transform` (one query per topic) and
+  `gold_build` (batch). Redis reconstruction arrives with Phase 3 Step 9. `graph_sync`,
+  `training_pipeline`, `drift_monitor` and `external_validation` come in later phases.
+- **Unity Catalog:** `tracex.{bronze,silver,gold,ml,external}`, with the same identifiers as local, and
+  `groundtruth` in a **separately-granted** catalog mirroring the local Postgres isolation.
+- **Unchanged conventions:** declarations, checkpoints and loss refusals, and Silver's correctness
+  partition.
+- **Not carried over:** local-only retention (Q8, Step 11), and managed-property allowances.
+- **Table layout is re-decided for Databricks** (ADR-0015) rather than inheriting the local choice:
+  liquid clustering, with `CLUSTER BY AUTO` and predictive optimization where the runtime supports it.
 
-Unity Catalog `tracex.{bronze,silver,gold,ml,external}`, with `groundtruth` in a **separately-granted**
-catalog mirroring the local Postgres isolation. **Table layout is re-decided for Databricks**
-(ADR-0015) — liquid clustering, with `CLUSTER BY AUTO` + predictive optimization where the runtime
-supports it — rather than inheriting the local choice.
+Details and open Phase 12 decisions: `docs/DATA_ENGINEERING.md` §8.
 
 ---
 

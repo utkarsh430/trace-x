@@ -265,15 +265,56 @@ Nothing in the streaming code hardcodes a layout.
 
 ---
 
-## 8. Databricks parity
+## 8. Databricks strategy (documented in Phase 3, deployed in Phase 12)
 
-The Spark code is **identical** to local. Notebooks are thin entrypoints calling `trace_core.stream.*` —
-this is the guard against "works on Databricks, unrunnable locally", which would defeat the local-first
-requirement and make the pipeline untestable in CI.
+Nothing is deployed in Phase 3. ADR-0025 governs the one funded Phase 12 window: complete Terraform and
+Databricks Asset Bundles, applied once, then destroyed. This section records how what Phase 3 built maps
+onto Databricks, so that window adds deployment, not redesign. Decisions that need a Databricks runtime to
+settle stay open here and get their own ADRs in Phase 12.
 
-Jobs: `bronze_ingest` (continuous), `silver_transform`, `gold_features`, `graph_sync`,
-`training_pipeline`, `drift_monitor`, `external_validation` (Track B).
+**The Spark code is identical to local.** Jobs are thin entrypoints over `trace_core.stream.*`, the same
+modules `services/stream/*` call. That is the guard against "works on Databricks, unrunnable locally",
+which would defeat the local-first requirement and make the pipeline untestable in CI.
 
-Unity Catalog: `tracex.{bronze,silver,gold,ml,external}`, with `groundtruth` in a **separately-granted**
-catalog mirroring the local Postgres isolation (ADR-0004). Table layout is re-decided per ADR-0015
-rather than inherited.
+### What maps directly
+- **Jobs**, named as the local pipelines (snake_case, ADR-0048 U9):
+  - `bronze_ingest`: one continuous query per released topic;
+  - `silver_transform`: one query per topic, `silver_transform_<topic_name>`;
+  - `gold_build`: a batch build over pinned Silver versions (ADR-0055).
+  - The Redis reconstruction job arrives with Step 9.
+  - Planned for later phases: `graph_sync`, `training_pipeline`, `drift_monitor`, `external_validation`
+    (Track B).
+- **Tables**, with the same identifiers as local, under Unity Catalog `tracex.<tier>.<table>`:
+  - `tracex.bronze.<topic_name>`;
+  - `tracex.silver.<topic_name>`, `tracex.silver.duplicates`, `tracex.silver.late_events` and
+    `tracex.silver.quarantine`;
+  - `tracex.gold.*` (ADR-0055);
+  - `groundtruth` in a separately granted catalog, mirroring the local PostgreSQL isolation (ADR-0004).
+- **Declarations and checkpoints.** The ADR-0048 conventions are unchanged:
+  - every table is created from its declaration before a query writes it, and written only through
+    `OpenedCheckpoint`;
+  - checkpoints live per query and version (`_checkpoints/<query>/v<N>/`) on the job's storage
+    location.
+- **Loss refusals are identical.** `failOnDataLoss=true`, and every loss-tolerant reader option and
+  session setting is refused.
+- **Correctness-bearing layout travels as is.** `silver.late_events` is partitioned by `silver_topic`
+  because concurrent topic queries must not conflict (ADR-0053 §1), whatever the layout benchmark
+  decides.
+- **Dependencies outside the lake.** The observation-log coverage rule needs the `producer_sessions`
+  table (PostgreSQL, RDS on AWS) and Bronze. Kafka is MSK.
+
+### What does not travel, or is decided in Phase 12
+- **Local-only retention.** Step 11's audited retention floor, and Silver's `ignoreDeletes` allowance on
+  Bronze sources, are local-development overrides (Q8). Production Bronze stays append-only, the
+  production retention contract (`docs/EVENT_CONTRACTS.md`) is unchanged, and no Databricks job enables
+  the retention path.
+- **Table layout** is re-decided per environment (ADR-0015). Candidates are liquid clustering, and
+  `CLUSTER BY AUTO` with predictive optimization where the runtime supports it. The local benchmark
+  result is not inherited.
+- **Table protocol and managed properties.** Locally, tables use the minimum Delta protocol with an
+  allow-list of properties (ADR-0048 (k)). A Databricks runtime may set managed properties or defaults,
+  such as deletion vectors or row tracking, which the drift check refuses until they are explicitly
+  allowed. Phase 12 decides each allowance with evidence.
+- **Runtime version.** The local pins are Spark 4.0.1, Delta 4.0.1, Scala 2.13 and Java 17
+  (ADR-0018). Phase 12 selects a Databricks runtime matching them, and records any difference as a
+  manifest-diff note, as CLAUDE.md §5 requires.
