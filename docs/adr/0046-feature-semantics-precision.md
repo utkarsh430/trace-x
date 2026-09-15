@@ -456,8 +456,23 @@ window, then decoded every observation (`run_id: bench-20260915-071647-score-lat
    - It covers the features that need observation content: `account_amount_sum_1h`,
      `account_distinct_merchants_1h`, `account_distinct_mcc_5m`, `account_distinct_devices_24h`,
      `account_distinct_countries_24h` and `device_distinct_accounts_24h`.
-   - Already bounded, and unchanged: HyperLogLog distinct counts, the merchant CV's minute counters,
-     and the folded profile.
+   - Already bounded, and unchanged: HyperLogLog distinct counts and the merchant CV's minute
+     counters.
+   - **The account profile reads the same capped raw set.** It is the folded prefix plus the raw
+     25-hour lifetime. Found in implementation: an uncapped profile keeps the read O(N), and a
+     profile built from a capped read is wrong rather than absent. When the raw read is capped:
+     - *Positive memberships stay exact.* A device seen in the capped read or the prefix is known;
+       a merchant or category with three or more visits there is habitual. More history can only
+       confirm them.
+     - *The robust z-score and the home point stay exact* when the capped read holds at least 128
+       same-currency amounts, or at least 20 located points, after the lifetime's start. Those are
+       all they read, and the most recent ones are inside the capped read. Otherwise they are
+       absent.
+     - *Tenure* is exact when the prefix holds the lifetime's start. Otherwise it is absent.
+     - *Negative memberships are absent.* That covers an unknown device, and a merchant or category
+       under three visits.
+     - An absent profile feature reads `INSUFFICIENT_HISTORY` and `INCOMPLETE` with
+       `history_depth_capped`, as in point 3.
    - The read takes the most recent 512 at or before `as_of`, by `(occurred_ms, identity)`.
    - The value is fixed now, from the recorded curve: at depth 512 the script took 2.6 ms and a
      whole score p99 20.2 ms (`run_id: bench-20260915-071647-score-latency-86fabdbf`), well inside
@@ -472,12 +487,21 @@ window, then decoded every observation (`run_id: bench-20260915-071647-score-lat
      enums already hold these values, and degraded reasons are free strings. No `.v2` is needed.
    - *Counts.* Stay AVAILABLE and exact.
 4. **Depth is a declared risk signal.**
+   - Weight 0.5 with no band floor, declared by analogy with the sustained-volume rule R006 (0.5, no
+     floor). Alone it scores MEDIUM, which opens no investigation, and it adds to any rule that
+     fires. A band floor is the policy lever if depth alone should escalate. Weights live in the
+     rule pack.
    - Rule `R019_history_depth_capped`: `account_tx_count_24h >= 513`, the exact count at which the
      24-hour content read is capped.
    - The core pack goes to 1.1.0 with a new digest; decisions already carry the pack digest.
    - It is declared from the cap, not fitted.
    - Existing velocity rules still fire on the exact counts.
-5. **Evaluation modes.**
+5. **Versions and layout migration.**
+   - `FEATURE_SET_VERSION` goes to 4.0.0, because served values change for capped accounts.
+   - An account's legacy single identity-event set is read as not held (`history_incomplete`) until
+     it expires within 25 hours. It is not migrated inside the write script: moving a deep legacy set
+     in one atomic script is itself the O(N) stall this section removes.
+6. **Evaluation modes.**
    - *Where the cap applies.* It is an as-served obligation: the reference's AS_SERVED mode and the
      Redis store implement it against shared literal fixtures.
    - *Where it doesn't.* Event-time-complete reads (the reference's EVENT_TIME_COMPLETE mode, Gold)
@@ -532,7 +556,11 @@ window, then decoded every observation (`run_id: bench-20260915-071647-score-lat
 
 **Negative.**
 
-- An account above the score-time read cap (§8) loses its content features (amount sums and distinct counts) while it stays above; its counts stay exact and R019 declares the condition.
+- An account above the score-time read cap (§8) loses its content features while it stays above:
+  amount sums, distinct counts, and the profile's negative memberships and uncovered tenure,
+  z-score and home. Its counts stay exact, and R019 declares the condition. Rules that read those
+  features (R008, R009, R015 to R018) may abstain on such an account. Before §8, a deep account's
+  score timed out and every feature was absent.
 - Served values change, so `FEATURE_SET_VERSION` moves to `2.0.0`.
 - Each velocity rule now fires one transaction earlier than it did in Phase 2 at the same threshold. For
   example, `account_tx_count_1m ≥ 5` fires on the fifth transaction in a minute rather than the sixth.

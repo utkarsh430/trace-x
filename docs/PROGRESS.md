@@ -1144,6 +1144,27 @@ both reports.
         * *Where it applies.* As-served only; event-time-complete reads and Gold stay exact.
       * **Implementation assigned** to an agent in worktree `phase3-step12-depth-cap` (base
         3898a19): the reference, the Redis store, the gateway, R019 and the literal fixtures.
+      * **A gap in §8 found before any code (2026-09-15), and closed by the lead.**
+        * *The gap.* §8 called the account profile "already bounded". It is not: the profile is
+          the folded prefix plus the whole raw 25-hour lifetime.
+        * *Why it mattered.* The agent's probe (600 transactions, the oldest 88 on another device
+          and merchant) showed a capped read would make a known device read unknown and a habitual
+          merchant non-habitual. R008, R009 and R017 would then fire falsely.
+        * *Decided (§8, amended), within the user's cap-read decision.* The profile reads the same
+          capped set:
+          - positive memberships stay exact;
+          - the z-score and home stay exact when the capped read holds 128 same-currency amounts
+            or 20 located points;
+          - tenure is exact when the prefix holds the lifetime's start;
+          - everything else is absent with `history_depth_capped`.
+        * *The declared cost.* On a deep account, R008, R009 and R015 to R018 may abstain. Before
+          §8, such an account's score timed out with every feature absent.
+        * *Also decided:*
+          - R019 weight 0.5 with no band floor, by analogy with R006; a floor is the policy lever
+            if depth alone should escalate;
+          - `FEATURE_SET_VERSION` 4.0.0;
+          - a legacy identity-event set reads as not held until it expires, since migrating it
+            inside the write script would be the O(N) stall §8 removes.
       * **Still to do after integration:**
         - the lead re-runs the memory model and the score-latency benchmark;
         - the Phase 2 load gate re-run measures latency with the cap in place.
