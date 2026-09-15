@@ -2,7 +2,7 @@
 
 > Written by `benchmarks/features/score_latency.py`, never by hand. Every figure
 > comes
-> from the run recorded as `run_id: bench-20260915-071647-score-latency-86fabdbf`, which `make check-claims`
+> from the run recorded as `run_id: bench-20260915-094759-score-latency-870f7e94`, which `make check-claims`
 > resolves.
 
 One account, one throwaway `redis:7-alpine` (Redis 7.4.11), nothing else
@@ -11,12 +11,12 @@ Depth is the transactions the account holds in its raw window before the timed
 scores.
 Wall time covers the script and the client's decoding and reductions.
 
-## Per-score cost — `run_id: bench-20260915-071647-score-latency-86fabdbf`
+## Per-score cost — `run_id: bench-20260915-094759-score-latency-870f7e94`
 
 | depth | scores | p50 (ms) | p95 (ms) | p99 (ms) | max (ms) | Redis script (µs/call) |
 |---|---|---|---|---|---|---|
-| 1 | 200 | 3.584 | 6.584 | 6.946 | 7.267 | 381 |
-| 64 | 200 | 5.060 | 8.193 | 10.147 | 14.413 | 814 |
-| 512 | 200 | 14.388 | 17.405 | 20.154 | 25.265 | 2,626 |
-| 2,048 | 200 | 42.969 | 50.322 | 54.767 | 70.555 | 6,883 |
-| 8,192 | 200 | 171.462 | 183.323 | 190.322 | 195.141 | 32,754 |
+| 1 | 200 | 3.734 | 6.562 | 9.184 | 11.742 | 505 |
+| 64 | 200 | 5.402 | 7.977 | 8.921 | 12.929 | 979 |
+| 512 | 200 | 9.249 | 11.371 | 14.419 | 14.913 | 1,350 |
+| 2,048 | 200 | 10.104 | 14.610 | 20.421 | 29.499 | 1,945 |
+| 8,192 | 200 | 12.249 | 13.425 | 16.683 | 19.144 | 2,916 |

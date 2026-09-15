@@ -1266,9 +1266,22 @@ both reports.
           not vacuous;
         - four reference-vs-Redis cases where Redis serves only an absence, never a different
           number (ADR-0046 §8), for parity to expect.
+      * **Score latency re-measured with the cap** on clean commit 870f7e9, a quiet machine
+        (`run_id: bench-20260915-094759-score-latency-870f7e94`), against the run before the cap
+        (`run_id: bench-20260915-071647-score-latency-86fabdbf`).
+        * *Depth 8,192:* the script's time per call fell from 32.8 ms to 2.9 ms, and a whole score's
+          p99 from 190.3 ms to 16.7 ms.
+        * *Depth 2,048:* 6.9 ms to 1.9 ms per call, and p99 54.8 ms to 20.4 ms.
+        * *The shape.* The cost stops growing past the cap. The script is now well inside the
+          gateway's 20 ms Redis timeout at every measured depth, so a deep account no longer scores
+          rules-only, and no longer stalls other accounts' calls.
+      * **A memory-model re-run was discarded, not published.** It ran in the same job straight
+        after the latency benchmark, which had already written its report, so the worktree was
+        dirty and the record said so. The record is set aside in the session scratchpad. The model
+        is re-run on a clean commit next.
       * **Still to do:**
-        - the lead re-runs the memory model and the score-latency benchmark on this commit;
-        - the Phase 2 load gate re-run measures latency with the cap in place.
+        - the memory model on a clean commit, since identity events now use one set per stream;
+        - the Phase 2 load gate re-run, measuring latency with the cap in place.
       * Step 12 stays in progress until then.
 * **Step 6 — Silver: complete** (ADR-0053, Proposed; `P3.event-time` PASS, 2026-09-15).
   * **Design (ADR-0053):**
