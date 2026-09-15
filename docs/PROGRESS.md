@@ -1130,12 +1130,24 @@ both reports.
       * Policy treats a capped read as a risk signal, not a blind spot.
       * *Not chosen:* pre-aggregating windows in the Lua script, a per-account admission cap, and
         leaving it as a known limit.
-      * *Next:*
-        - the lead designs the cap as an ADR-0046 amendment: its value fixed before the load gate is
-          re-measured, the features it covers, the flag, policy's treatment, and what parity and Gold
-          do with a capped read;
-        - the reference, the Redis store and Gold then implement it against shared fixtures.
-      * Step 12 stays in progress until the cap is implemented and re-measured.
+      * **Designed by the lead: ADR-0046 §8, "Bounded score-time reads"** (Proposed).
+        * *Exact at any depth.* Counts come from range counts. Identity events move to one sorted
+          set per stream, so `failed_logins_1h` stays exact and R012 is not blinded during
+          credential stuffing. The outcome counts behind `declined_ratio_1h` are exact, and the
+          previous transaction and latest identity change are `LIMIT 1` reads.
+        * *Capped.* Content is read up to `SCORE_READ_CAP = 512` per raw set, a value fixed from
+          the recorded curve before any re-measurement, and only for the six content features.
+          A capped window reads absent and INCOMPLETE, within `tx.scored.v1` as released, and the
+          decision carries `history_depth_capped`.
+        * *Declared risk signal.* `R019_history_depth_capped` fires on `account_tx_count_24h >=
+          513`. Scoring is noisy-OR over fired rules, so no other decision moves.
+        * *Where it applies.* As-served only; event-time-complete reads and Gold stay exact.
+      * **Implementation assigned** to an agent in worktree `phase3-step12-depth-cap` (base
+        3898a19): the reference, the Redis store, the gateway, R019 and the literal fixtures.
+      * **Still to do after integration:**
+        - the lead re-runs the memory model and the score-latency benchmark;
+        - the Phase 2 load gate re-run measures latency with the cap in place.
+      * Step 12 stays in progress until then.
 * **Step 6 — Silver: complete** (ADR-0053, Proposed; `P3.event-time` PASS, 2026-09-15).
   * **Design (ADR-0053):**
     * **Tables:** one canonical Silver table per released topic, plus shared `silver.late_events`

@@ -429,6 +429,69 @@ and R002 keep Phase 2's treatment of earlier outcomes, and `P3.semantics-hardeni
 **Decided (U7, 2026-09-14): option A**, designed in ADR-0049. Until ADR-0049 is implemented, the
 treatment above stands.
 
+### 8. Bounded score-time reads (Step 12; user decision 2026-09-15)
+
+**Why.** The score-time read fetched an account's whole 25-hour raw set, and a device's members per
+window, then decoded every observation (`run_id: bench-20260915-071647-score-latency-86fabdbf`).
+- **The cost.** It grows about linearly with depth. At depth 8,192 the script alone outruns the
+  gateway's 20 ms Redis timeout, so the account's scores go rules-only, blind to its features.
+- **Who controls depth.** An adversary does: the rate limiter is per token.
+- **The shared cost.** Redis runs scripts on one thread, so a long script also delays other accounts'
+  calls.
+- **The decision.** The user chose to cap the read and make depth a declared risk signal.
+
+**Decision.**
+1. **Counts and last observations stay exact at any depth.**
+   - *Counts.* A window count is a sorted-set range count on `occurred_ms`, O(log N): `(as_of - W,
+     as_of]` when the current observation is included, `(as_of - W, as_of)` when excluded. This
+     covers `account_tx_count_*`, `card_tx_count_5m` and `failed_logins_1h`.
+   - *Outcomes.* The outcome counts behind `declined_ratio_1h` are range counts too.
+   - *A layout change this needs.* Identity events move from one account set to one set per
+     identity stream, so failed logins can be counted without reading identity changes. A capped
+     failed-login count would blind R012 during credential stuffing, the attack that makes it deep.
+   - *Last observations.* The previous transaction and the latest identity change are bounded
+     reverse ranges with `LIMIT 1`.
+   - Nothing that is a count becomes a lower bound.
+2. **Content is read up to a declared cap, `SCORE_READ_CAP = 512` observations per raw set.**
+   - It covers the features that need observation content: `account_amount_sum_1h`,
+     `account_distinct_merchants_1h`, `account_distinct_mcc_5m`, `account_distinct_devices_24h`,
+     `account_distinct_countries_24h` and `device_distinct_accounts_24h`.
+   - Already bounded, and unchanged: HyperLogLog distinct counts, the merchant CV's minute counters,
+     and the folded profile.
+   - The read takes the most recent 512 at or before `as_of`, by `(occurred_ms, identity)`.
+   - The value is fixed now, from the recorded curve: at depth 512 the script took 2.6 ms and a
+     whole score p99 20.2 ms (`run_id: bench-20260915-071647-score-latency-86fabdbf`), well inside
+     the 20 ms timeout and the 100 ms budget.
+   - It is not tuned after the load gate re-runs; changing it needs a new decision.
+3. **A capped window is absent, not a lower bound**, consistent with §5's rule for unheld history.
+   - *When a window counts as capped.* The set holds more than the cap inside the window's lookback,
+     which the exact count shows.
+   - *Its content features.* They read `INSUFFICIENT_HISTORY` with `lookback_completeness =
+     INCOMPLETE`, and the decision carries the degraded reason `history_depth_capped`.
+   - *Contract.* Both are within the released `tx.scored.v1` contract: the state and completeness
+     enums already hold these values, and degraded reasons are free strings. No `.v2` is needed.
+   - *Counts.* Stay AVAILABLE and exact.
+4. **Depth is a declared risk signal.**
+   - Rule `R019_history_depth_capped`: `account_tx_count_24h >= 513`, the exact count at which the
+     24-hour content read is capped.
+   - The core pack goes to 1.1.0 with a new digest; decisions already carry the pack digest.
+   - It is declared from the cap, not fitted.
+   - Existing velocity rules still fire on the exact counts.
+5. **Evaluation modes.**
+   - *Where the cap applies.* It is an as-served obligation: the reference's AS_SERVED mode and the
+     Redis store implement it against shared literal fixtures.
+   - *Where it doesn't.* Event-time-complete reads (the reference's EVENT_TIME_COMPLETE mode, Gold)
+     are uncapped and exact.
+   - *Parity (Step 8).* A capped as-served value is compared as absent, and arrival-skew
+     comparisons exclude capped windows and record their count.
+
+**Fixtures** (literal, shared by the reference's as-served mode and the Redis store):
+- A window at exactly 512 observations: not capped, every feature exact.
+- At 513: counts exact, content absent and INCOMPLETE, reason present, R019 fires.
+- A device with more than 512 members in 24 hours: its distinct-accounts count is absent.
+- Idempotent redelivery at the cap boundary.
+- A current observation excluded or included at the boundary millisecond.
+
 ## Alternatives Considered
 
 | Alternative | Why rejected |
@@ -452,6 +515,8 @@ treatment above stands.
 | One identity namespace across all streams | A failed-login event could share a transaction's id and swallow it; plan §3 Q2 declares identities per topic |
 | Take an identity event's id from `X-Request-Id` | A caller-chosen correlation header: two distinct events sent under one would count once |
 | A zero MAD scores every departure +50 | A lower amount on a constant-amount account would read as a high-value anomaly |
+| Pre-aggregating account windows inside the score script (§8) | Exact at any depth, but a new store layout whose idempotency and order-independence must be re-proved, with a re-run memory model and load gate; the user chose the bounded read |
+| A per-account admission cap at the gateway (§8) | Bounds depth, but refuses legitimate high-volume accounts: a product decision the user did not take |
 
 ## Consequences
 
@@ -467,6 +532,7 @@ treatment above stands.
 
 **Negative.**
 
+- An account above the score-time read cap (§8) loses its content features (amount sums and distinct counts) while it stays above; its counts stay exact and R019 declares the condition.
 - Served values change, so `FEATURE_SET_VERSION` moves to `2.0.0`.
 - Each velocity rule now fires one transaction earlier than it did in Phase 2 at the same threshold. For
   example, `account_tx_count_1m ≥ 5` fires on the fifth transaction in a minute rather than the sixth.
