@@ -33,7 +33,9 @@ named; an empty list is refused.
 
 **Reset is explicit and versioned.** `reset_checkpoint` publishes `v<N+1>` with a new app id,
 the start position of every source, and a record of what it supersedes and why. Nothing is
-deleted. A Kafka source may not start at `latest` (`docs/PHASE3_PLAN.md` §4.1 point 8).
+deleted. A Kafka source may not start at `latest` (`docs/PHASE3_PLAN.md` §4.1 point 8), nor at an
+explicit offset above where the superseded version stopped consuming it: the offsets in between
+would be read by no version, silently.
 
 `decide_start` is a pure function of recorded facts, unit-tested without a JVM; the functions
 that take a `SparkSession` read those facts from live tables.
@@ -156,6 +158,24 @@ class KafkaSourceStart:
                 raise CheckpointRefusedError(
                     f"{self.topic}: explicit starting offsets must name exactly this topic"
                 )
+            partitions = offsets[self.topic]
+            if not isinstance(partitions, dict) or not partitions:
+                raise CheckpointRefusedError(
+                    f"{self.topic}: explicit starting offsets must map partitions to offsets"
+                )
+            for partition, offset in partitions.items():
+                # Spark spells latest -1 and earliest -2. Latest skips whatever was published
+                # before the query started, which §4.1 point 8 forbids as surely as the word.
+                if (
+                    not isinstance(offset, int)
+                    or isinstance(offset, bool)
+                    or offset == -1
+                    or offset < -2
+                ):
+                    raise CheckpointRefusedError(
+                        f"{self.topic}[{partition}]: starting offset {offset!r} is not an offset "
+                        f"or earliest (-2); -1 means latest and is refused"
+                    )
 
     @property
     def key(self) -> str:
@@ -726,6 +746,118 @@ def committed_source_offsets(directory: Path) -> tuple[str | None, ...]:
     return tuple(None if line.strip() in ("", "-") else line.strip() for line in lines[2:])
 
 
+# -------------------------------------------------------------- Kafka offsets ---
+
+INITIAL_OFFSETS_PARTS: Final = ("sources", "0", "0")
+"""Where Spark's Kafka source records the offsets a checkpoint began at (its only source is 0)."""
+
+
+def _topic_offsets(data: Any, topic: str, source: Path) -> dict[int, int]:
+    if not isinstance(data, dict) or set(data) != {topic} or not isinstance(data[topic], dict):
+        raise CheckpointRefusedError(
+            f"{source}: expected offsets of exactly {topic!r}, got {data!r}"
+        )
+    offsets: dict[int, int] = {}
+    for partition, offset in data[topic].items():
+        if not (isinstance(partition, str) and partition.isdigit()):
+            raise CheckpointRefusedError(f"{source}: {partition!r} is not a partition number")
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            raise CheckpointRefusedError(f"{source}: partition {partition} offset {offset!r}")
+        offsets[int(partition)] = offset
+    return offsets
+
+
+def parse_initial_offsets(raw: bytes, topic: str, *, source: Path) -> dict[int, int]:
+    """Spark's Kafka initial-offsets record: an optional NUL byte, `v1`, a newline, offsets JSON.
+
+    The NUL is written for compatibility with Spark 2.1.0 (SPARK-19517)."""
+    body = raw[1:] if raw[:1] == b"\x00" else raw
+    try:
+        version, _, text = body.decode("utf-8").partition("\n")
+        if version.strip() != "v1" or not text.strip():
+            raise ValueError(f"unexpected header {version!r}")
+        data = json.loads(text)
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise CheckpointRefusedError(f"unreadable Kafka initial offsets {source}: {exc}") from exc
+    return _topic_offsets(data, topic, source)
+
+
+def parse_batch_offsets(text: str, topic: str, *, source: Path) -> dict[int, int]:
+    """Spark's offset log for one batch of a one-source query: `v1`, metadata JSON, offsets JSON."""
+    lines = text.splitlines()
+    if len(lines) != 3 or lines[0] != "v1":
+        raise CheckpointRefusedError(
+            f"unrecognised offset log {source}: expected 'v1', metadata and one source's offsets"
+        )
+    try:
+        data = json.loads(lines[2])
+    except ValueError as exc:
+        raise CheckpointRefusedError(f"unreadable offsets in {source}: {exc}") from exc
+    return _topic_offsets(data, topic, source)
+
+
+def read_initial_offsets(directory: Path, topic: str) -> dict[int, int] | None:
+    path = directory.joinpath(*INITIAL_OFFSETS_PARTS)
+    return parse_initial_offsets(path.read_bytes(), topic, source=path) if path.is_file() else None
+
+
+def read_batch_offsets(directory: Path, batch: int, topic: str) -> dict[int, int]:
+    path = directory / "offsets" / str(batch)
+    if not path.is_file():
+        raise CheckpointRefusedError(f"{path} does not exist: batch {batch} was never planned")
+    return parse_batch_offsets(path.read_text(encoding="utf-8"), topic, source=path)
+
+
+def kafka_consumed_end(
+    directory: Path, topic: str, *, written_batch: int | None
+) -> dict[int, int] | None:
+    """Per partition, the offset up to which a one-source Kafka checkpoint version consumed `topic`.
+
+    The end of its latest done batch: the later of Spark's last commit and `written_batch`, the
+    batch its target recorded, when Spark planned it. Before any, where it began reading. None
+    when it recorded neither, so nothing was consumed."""
+    progress = SparkProgress.read(directory)
+    done = [] if progress.last_committed is None else [progress.last_committed]
+    if written_batch is not None and written_batch in progress.planned:
+        done.append(written_batch)
+    if done:
+        return read_batch_offsets(directory, max(done), topic)
+    return read_initial_offsets(directory, topic)
+
+
+def _kafka_skips(
+    directory: Path,
+    superseded: CheckpointIdentity,
+    targets: Sequence[TargetEvidence],
+    sources: Sequence[SourceEvidence],
+) -> list[str]:
+    """What an explicit Kafka start would leave unread by every version: offsets between where the
+    superseded version stopped consuming and a start above it. `earliest` (or -2) begins where
+    the broker says, which only the broker knows; Bronze conservation judges it once read."""
+    recorded = [
+        t.transactions[superseded.app_id] for t in targets if superseded.app_id in t.transactions
+    ]
+    written = max(recorded) if recorded else None
+    skips: list[str] = []
+    for source in sources:
+        start = source.start
+        if not isinstance(start, KafkaSourceStart) or start.start == "earliest":
+            continue
+        ends = kafka_consumed_end(directory, start.topic, written_batch=written)
+        if ends is None:
+            continue
+        requested = json.loads(start.start)[start.topic]
+        for partition, offset in sorted((int(p), int(o)) for p, o in requested.items()):
+            end = ends.get(partition)
+            if end is not None and offset > end:
+                skips.append(
+                    f"{start.topic}[{partition}] would start at {offset}, above {end}, where "
+                    f"v{superseded.version} stopped consuming: offsets [{end}, {offset}) would be "
+                    f"read by no checkpoint version."
+                )
+    return skips
+
+
 # -------------------------------------------------------------------- writing ---
 
 
@@ -1087,6 +1219,19 @@ def _reset(
             f"refusing to reset {query!r}: v{previous_version} has conflicting app ids "
             f"{previous_ids}; decide which checkpoint is authoritative first"
         )
+    if state.identity is not None and state.identity.version == previous_version:
+        skips = _kafka_skips(
+            query_directory(lake, query) / f"v{previous_version}", state.identity, targets, sources
+        )
+        if skips:
+            raise CheckpointRefusedError(
+                f"refusing to reset {query!r}: "
+                + " ".join(skips)
+                + f" Start each partition at or below where v{previous_version} stopped, to "
+                f"continue. If those offsets are gone from the broker, the loss is real: reset at "
+                f"earliest, and Bronze conservation reports the skipped offsets for as long as the "
+                f"table exists."
+            )
     moment = _utc(now)
     version = previous_version + 1
     identity = CheckpointIdentity(
@@ -1144,6 +1289,7 @@ def reset_checkpoint(
 __all__ = [
     "DEFAULT_HISTORY_LIMIT",
     "IDENTITY_FILENAME",
+    "INITIAL_OFFSETS_PARTS",
     "TXN_APP_ID_CONF",
     "TXN_VERSION_CONF",
     "CheckpointIdentity",
@@ -1161,8 +1307,13 @@ __all__ = [
     "TargetRecord",
     "committed_source_offsets",
     "decide_start",
+    "kafka_consumed_end",
     "open_checkpoint",
+    "parse_batch_offsets",
+    "parse_initial_offsets",
     "query_directory",
+    "read_batch_offsets",
+    "read_initial_offsets",
     "read_source_evidence",
     "read_state",
     "read_target_evidence",

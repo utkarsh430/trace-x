@@ -95,9 +95,14 @@ def test_a_paused_broker_fails_the_batch_unmarked_and_a_later_pass_delivers_it(
         result = paused_relay.run_once()
     finally:
         _docker("unpause", outbox_topic.name)
-    assert (result.published, result.failed) == (0, 3)
+    # The first row may fail to hand over, or all three may be handed over and never confirmed:
+    # that depends on what the producer already knew of the topic. Either way nothing is marked,
+    # and every claimed row is accounted for, with an attempt on each row tried and none deferred.
+    assert (result.claimed, result.published, result.refused) == (3, 0, 0), result
+    assert result.failed >= 1 and result.failed + result.deferred == 3, result
     rows = _rows(pool)
-    assert all(rows[i][0] is None and rows[i][1] == 1 for i in ids), "unmarked, one attempt each"
+    assert all(rows[i][0] is None for i in ids), "unmarked"
+    assert sorted(rows[i][1] for i in ids) == [0] * result.deferred + [1] * result.failed
     start = _watermarks(outbox_topic, TX_AUTHORIZATION_V1)
     healthy = _relay(
         outbox_topic, pool, client_id="it-outbox-relay-after", message_timeout_ms=MESSAGE_TIMEOUT_MS

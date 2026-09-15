@@ -6,8 +6,15 @@ One pass works in one transaction:
 2. **Publish** each row's event through the one producer factory, without blocking.
 3. **Flush**, then mark published exactly the rows the broker confirmed. That is every handed-over
    row, or none: delivery reports are counted per topic, so the batch is confirmed as a whole.
-4. **Record** an attempt and the error on every row that was not published. Delivery is at least
-   once, and consumers deduplicate on each topic's declared identity (PHASE3_PLAN §3 Q2).
+4. **Record** an attempt and the error on every row that was handed over or attempted and not
+   published. Delivery is at least once, and consumers deduplicate on each topic's declared identity
+   (PHASE3_PLAN §3 Q2).
+
+**A retryable failure stops the pass, not its confirmation.** Handing over stops at the first row
+the producer could not take (a missing topic, a shed record, a closed producer), so no later row
+overtakes it. The rows handed over before it are still flushed, confirmed and marked: the producer
+delivers them either way, and leaving them unmarked would publish them again on every pass. The
+failed row records the attempt; the rows after it were not attempted, and stay as they were.
 
 **A row that can never be published does not block the queue.** A row whose event fails its
 contract, or whose stored partition key differs from the key its event names, is refused. It is
@@ -34,6 +41,7 @@ from trace_core.domain.errors import (
     UnreleasedTopicError,
 )
 from trace_core.observability.logging import get_logger
+from trace_core.observation import outbox_watermark
 
 log = get_logger(__name__)
 
@@ -65,12 +73,14 @@ class RowOutcome(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class RelayPass:
-    """What one pass did."""
+    """What one pass did. Every claimed row is exactly one of the four outcomes."""
 
     claimed: int
     published: int
     failed: int
     refused: int
+    deferred: int
+    """Claimed after a row the producer could not take: not attempted, left for a later pass."""
 
 
 class OutboxRelay:
@@ -100,10 +110,12 @@ class OutboxRelay:
         with self._pool.connection() as conn, conn.transaction():
             rows = conn.execute(CLAIM_SQL, (self._batch_size,)).fetchall()
             if not rows:
-                return RelayPass(claimed=0, published=0, failed=0, refused=0)
+                # Nothing unpublished to claim: the watermark still moves with time (ADR-0051 §5).
+                outbox_watermark.advance(conn)
+                return RelayPass(claimed=0, published=0, failed=0, refused=0, deferred=0)
             refused: dict[int, str] = {}
             handed: list[tuple[int, str]] = []
-            failure: str | None = None
+            failure: tuple[int, str] | None = None
             before = self._publisher.report()
             for outbox_id, topic, stored_key, payload in rows:
                 verdict = self._hand_over(int(outbox_id), str(topic), str(stored_key), payload)
@@ -112,15 +124,14 @@ class OutboxRelay:
                 elif verdict.startswith(REFUSED_PREFIX):
                     refused[int(outbox_id)] = verdict
                 else:
-                    failure = verdict
+                    failure = (int(outbox_id), verdict)
                     break
-            confirmed = self._confirm(before, handed) if handed and failure is None else False
+            # Confirmed even after a failure: the handed-over rows are delivered regardless.
+            confirmed = self._confirm(before, handed) if handed else False
             published_ids = [outbox_id for outbox_id, _ in handed] if confirmed else []
-            failed_ids = [
-                int(row[0])
-                for row in rows
-                if int(row[0]) not in refused and int(row[0]) not in published_ids
-            ]
+            unconfirmed_ids = [] if confirmed else [outbox_id for outbox_id, _ in handed]
+            failed_ids = [*unconfirmed_ids, *([failure[0]] if failure is not None else [])]
+            deferred = len(rows) - len(handed) - len(refused) - (failure is not None)
             if published_ids:
                 conn.execute(
                     "UPDATE app.outbox SET published_at = now() WHERE outbox_id = ANY(%s)",
@@ -128,15 +139,20 @@ class OutboxRelay:
                 )
             for outbox_id, error in refused.items():
                 self._mark_failed(conn, [outbox_id], error)
-            if failed_ids:
-                reason = failure or "delivery unconfirmed at flush"
-                self._mark_failed(conn, failed_ids, reason)
+            if unconfirmed_ids:
+                self._mark_failed(conn, unconfirmed_ids, "delivery unconfirmed at flush")
+            if failure is not None:
+                self._mark_failed(conn, [failure[0]], failure[1])
+            # In the transaction that marks: the authorization delivery watermark moves only as far
+            # as the marks now vouch, never past an unconfirmed, refused or uncommitted row.
+            outbox_watermark.advance(conn)
         self._count(rows, published_ids, failed_ids, refused)
         return RelayPass(
             claimed=len(rows),
             published=len(published_ids),
             failed=len(failed_ids),
             refused=len(refused),
+            deferred=deferred,
         )
 
     def _hand_over(self, outbox_id: int, topic: str, stored_key: str, payload: Any) -> str | None:
@@ -212,7 +228,7 @@ class OutboxRelay:
                 result = self.run_once()
             except Exception as exc:  # PostgreSQL unreachable: retried after the idle interval
                 log.warning("outbox_relay_pass_failed", error=type(exc).__name__)
-                result = RelayPass(claimed=0, published=0, failed=0, refused=0)
+                result = RelayPass(claimed=0, published=0, failed=0, refused=0, deferred=0)
             busy = result.claimed == self._batch_size and result.failed == 0
             if not busy and self._stop.wait(self._idle_interval_s):
                 return

@@ -10,10 +10,16 @@ after the broker confirmed the delivery; a failed attempt records `attempts` and
 Nothing else about a row may change once it is committed:
 - `topic`, `partition_key`, `idempotency_key`, `payload` and `created_at` are immutable, so the
   event the transaction committed is the event relayed;
-- a row is inserted unpublished, with no attempts and no error, whatever a client sends, so no
-  writer can mark an event published that was never relayed;
+- a row is inserted unpublished, with no attempts and no error, whatever a client sends, so an
+  insert cannot pre-mark its own event published;
 - `published_at` is stamped once from the database clock and never cleared or moved;
 - `attempts` never decreases.
+
+**What this does not guarantee.** Only the insert is forced unpublished. The relay must set
+`published_at`, so `trace_app` holds UPDATE on it, and any `trace_app` connection can mark an
+unpublished row published without relaying it. The trigger then only stamps the time. That a row
+marked published was delivered rests on the relay being the only code that sets it (ADR-0051 §7),
+not on the database.
 
 `trace_app` keeps INSERT, because the gateway writes rows in its own transactions. Its table-wide
 UPDATE narrows to the relay's three columns. `SELECT ... FOR UPDATE` needs UPDATE on at least one

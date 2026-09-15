@@ -109,14 +109,39 @@ other outcome leaves the session unclosed.
 
 ### 5. Coverage rule
 Bronze (Step 5) applies it; it is stated here because the producer must make it computable.
-`trace_core.observation.coverage.assess` implements it once, for Bronze and for the chaos tests.
-- Every integer from 1 to `max(seen, last_seq)` must be present in Bronze for the session.
-- An unclosed session's gap runs from its last Bronze event to its last heartbeat, plus the heartbeat
-  interval, the producer's delivery timeout and the broker-to-PostgreSQL clock margin.
-- A session id in Bronze with no session row is a gap.
-- A gateway record without session headers is a gap.
-- A live session certifies only its contiguous prefix below Bronze's high-water mark.
-- Arrival-time gaps map to event time conservatively (§4.1 point 6).
+`trace_core.observation.coverage.assess` implements it once, for Bronze and for the chaos tests. Its
+module docstring is the full statement. The rule was revised on 2026-09-15 after the critic review:
+the first version bounded gaps by arrival times and ignored when the ledger and the log were read.
+- **The guarantee.** Every lost write made before `Coverage.through` lies inside a reported gap of
+  its own session. A lost write is one recorded online and absent from the log. Nothing at or after
+  `through` is vouched for. `through` is the earlier of the log's read-through time and the ledger
+  read, less the clock margin.
+- **Premises.**
+  - One serial writer per session. The gateway handles one observation at a time on its event loop,
+    and stamps the record's envelope `ingested_at` before producing it.
+  - The writer writes only within `lease_s` of a committed heartbeat, plus `takeover_margin_s` (§2).
+  - Session times come from PostgreSQL, within the clock margin.
+  - The ledger read carries its own database time.
+  - The log is read through a stated high-water mark.
+  - Write times are bounded by the writer's stamps, never by arrival times. A buffered or in-flight
+    record can arrive after the write it would otherwise bound.
+- **Per session.**
+  - A run of missing numbers is a gap from the latest stamp below it to the earliest stamp above
+    it, and no later than the close.
+  - A closed session is covered only when every number up to `last_seq` is present. A number above
+    `last_seq` is an anomaly, and the session is then judged as unclosed.
+  - An unclosed session certifies its contiguous prefix, and its tail is open. The tail is bounded
+    only when the ledger was read after the lease could have run out, that is after
+    `heartbeat_at + lease + takeover margin + 2 x clock margin`. It then ends at
+    `heartbeat_at + lease + takeover margin + clock margin`.
+- **Outside the ledger.**
+  - A session id the ledger does not hold is an open gap.
+  - A record without usable session headers, or without a usable stamp, is a gap at its own times.
+  - Stamps that no serial writer could produce are anomalies.
+- **Bronze** supplies each record's stamp and a high-water mark: over every partition the
+  checkpoints read, the earliest of the newest arrivals. The mark is strict, so rows at or past it
+  are left out. When there is no mark, gaps are still reported but nothing is vouched for.
+- Gaps are in write time. Mapping them to event time stays conservative (§4.1 point 6).
 - **Authorization outcomes: the outbox delivery watermark (user decision, 2026-09-15).**
   - `delivered_through` is the time before which every `tx.authorization.v1` outbox row has a
     confirmed Kafka delivery. It is stored per topic (migration 0008), moves only forward, never
@@ -129,9 +154,10 @@ Bronze (Step 5) applies it; it is stated here because the producer must make it 
   - It reads which rows are marked, never how many records Kafka holds, so at-least-once
     duplicates cannot move it.
   - **Feature history is COMPLETE over a horizon only when both paths vouch**
-    (`trace_core.observation.history_completeness.assess_history`): no observation-coverage gap
-    intersects it, the log was assessed through its end, and the watermark clears its end by the
-    clock margin. Any unresolved gap on either path keeps it INCOMPLETE.
+    (`trace_core.observation.history_completeness.assess_history`). Observation coverage must
+    vouch for the horizon: it ends before `through`, no gap overlaps it, and there is no anomaly.
+    The watermark must clear the horizon's end by the clock margin. Any unresolved gap on either
+    path keeps it INCOMPLETE.
 
 ### 6. `tx.scored.v1`
 - **Key:** `account_id`. **Dedup identity:** `payload.transaction_id`.
@@ -266,7 +292,13 @@ Bronze (Step 5) applies it; it is stated here because the producer must make it 
   against a paused broker; every loss was a detected gap bounded by the last heartbeat.
   - A critic review (2026-09-15) then found the rule wrong in two cases, which the chaos checks
     could not catch: a loss after the ledger snapshot, and a loss before a buffered record's
-    arrival. Both were reproduced, and fixes are in progress (docs/PROGRESS.md).
+    arrival. Both were reproduced and fixed, with three changes (docs/PROGRESS.md):
+    - the rule stated in §5;
+    - property tests over generated histories;
+    - chaos checks that put each lost write's recorded time inside a gap.
+- **Authorization-outcome delivery watermark (implemented):** migration 0008,
+  `outbox_watermark.advance` in the relay's marking transaction, and `assess_history`, with unit,
+  integration and chaos tests.
 - **Not yet built:** the controlled hot-path A/B, which also decides where the relay runs.
 
 ## Status

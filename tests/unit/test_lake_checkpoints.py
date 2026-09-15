@@ -419,6 +419,72 @@ def test_reset_refusals(tmp_path: Path) -> None:
     assert not lake.checkpoints_root.exists()
 
 
+BRONZE_QUERY = "bronze_ingest_tx_raw_v1"
+
+
+def bronze_v1(root: Path) -> tuple[LakeConfig, OpenedCheckpoint]:
+    """A Bronze checkpoint v1 that began at 0 on two partitions, committed batches 0 and 1 (ending
+    at 20 and 7) and planned batch 2 (ending at 26), which Spark never recorded as done."""
+    lake = LakeConfig.at(root)
+    earliest = SourceEvidence(KafkaSourceStart("tx.raw.v1", "earliest"), None)
+    v1 = checkpoints._open(
+        lake, BRONZE_QUERY, [target()], [earliest], git_sha=SHA, dirty_worktree=False, now=NOW
+    )
+    offsets = {
+        0: '{"tx.raw.v1":{"0":12,"1":7}}',
+        1: '{"tx.raw.v1":{"0":20,"1":7}}',
+        2: '{"tx.raw.v1":{"0":26,"1":7}}',
+    }
+    spark_checkpoint(v1.directory, offsets, [0, 1], None)
+    (v1.directory / "sources" / "0").mkdir(parents=True)
+    (v1.directory / "sources" / "0" / "0").write_bytes(b'\x00v1\n{"tx.raw.v1":{"0":0,"1":0}}')
+    return lake, v1
+
+
+def reset_kafka(lake: LakeConfig, start: str, *targets: TargetEvidence) -> CheckpointIdentity:
+    source = SourceEvidence(KafkaSourceStart("tx.raw.v1", start), None)
+    return checkpoints._reset(
+        lake,
+        BRONZE_QUERY,
+        list(targets) or [target()],
+        [source],
+        reason="Kafka data loss stopped the query",
+        now=NOW,
+    )
+
+
+def test_a_reset_may_not_start_a_kafka_source_above_where_the_superseded_version_stopped(
+    tmp_path: Path,
+) -> None:
+    """Critic findings A1 and C3, at the reset. Offsets between where v1 stopped and an explicit
+    start above it would be read by no checkpoint version, silently. Continuing, re-reading (the
+    duplicates conservation reports) and `earliest` (judged by conservation once it has run, since
+    only the broker knows where earliest is) are not refused here."""
+    lake, _ = bronze_v1(tmp_path / "skip")
+    with pytest.raises(
+        CheckpointRefusedError, match=r"tx\.raw\.v1\[0\] would start at 25, above 20"
+    ):
+        reset_kafka(lake, '{"tx.raw.v1":{"0":25,"1":7}}')
+    with pytest.raises(CheckpointRefusedError, match=r"tx\.raw\.v1\[1\] would start at 8, above 7"):
+        reset_kafka(lake, '{"tx.raw.v1":{"0":-2,"1":8}}')
+    assert [p.name for p in (lake.checkpoints_root / BRONZE_QUERY).iterdir()] == ["v1"]
+
+    for name, start in (
+        ("continue", '{"tx.raw.v1":{"0":20,"1":7}}'),
+        ("re-read", '{"tx.raw.v1":{"0":-2,"1":3}}'),
+        ("earliest", "earliest"),
+    ):
+        control, _ = bronze_v1(tmp_path / name)
+        assert reset_kafka(control, start).version == 2, name
+
+    # The table recorded batch 2 before Spark did: v1 consumed partition 0 through 26.
+    lake, v1 = bronze_v1(tmp_path / "written")
+    written = target((v1.identity.app_id, 2))
+    with pytest.raises(CheckpointRefusedError, match=r"would start at 27, above 26"):
+        reset_kafka(lake, '{"tx.raw.v1":{"0":27,"1":7}}', written)
+    assert reset_kafka(lake, '{"tx.raw.v1":{"0":26,"1":7}}', written).version == 2
+
+
 def test_publication_is_exclusive_and_leaves_no_staging_behind(tmp_path: Path) -> None:
     lake = LakeConfig.at(tmp_path)
     directory = checkpoints.query_directory(lake, QUERY)

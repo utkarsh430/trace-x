@@ -55,6 +55,8 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--instance-id", required=True)
     parser.add_argument("--interval-s", type=float, default=0.5)
     parser.add_argument("--shed-container", default="")
+    parser.add_argument("--pause-after-seq", type=int, action="append", default=[])
+    parser.add_argument("--pause-s", type=float, default=0.0)
     return parser.parse_args(argv)
 
 
@@ -156,6 +158,15 @@ def main(argv: list[str]) -> int:
                 }
             )
             outcome = pipeline.score(request, now=now)
+            # Printed once the store write has returned, before any kill point: every write the
+            # test may find missing from the log is on record with a time at or after it happened,
+            # and before the next observation's stamp.
+            written = {
+                "seq": sequenced.seq,
+                "at": dt.datetime.now(dt.UTC).isoformat(),
+                "position": outcome.observe_position,
+            }
+            print(json.dumps({"written": written}), flush=True)
             _die_if(args, "after_online_write", index)
             event = build_scored_event(
                 canonical=outcome.canonical,
@@ -170,6 +181,8 @@ def main(argv: list[str]) -> int:
             )
             outcomes.append(observation_log.publish(sequenced, TX_SCORED_V1, event).value)
             _die_if(args, "after_produce", index)
+            if sequenced.seq in args.pause_after_seq:
+                time.sleep(args.pause_s)  # handed over: the record is delivered while this waits
             if args.kill_at == "after_ack" and index == args.kill_on:
                 report = publisher.flush(30.0)
                 print(json.dumps({"flushed_outstanding": report.outstanding}), flush=True)

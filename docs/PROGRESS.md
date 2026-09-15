@@ -739,16 +739,80 @@ both reports.
       writer refusal) comes before sequencing and any store write; close accounting only ever errs
       towards no claim; the heartbeat's lock check and the grace arithmetic; the contract, including
       no evaluation-only data in events.
-    * **Disposition.** A fix agent in its own worktree is fixing A1, A2, B1, B2, B3, C1, C2 and C4,
-      with property tests and strengthened chaos evidence. `P3.observation-log` returns to PASS only
-      on that evidence.
+    * **Disposition: A1, A2, B1, B2, B3, C1, C2 and C4 fixed; C3 open (2026-09-15).** The fix agent
+      stopped part-way on an API error. The lead integrated its partial diff by hand, reviewed it,
+      and finished the work.
+      * **A1 and A2, the rule** (ADR-0051 §5 states the revision and its premises):
+        * `assess` now takes the ledger read's database time and the log's read-through time;
+        * gaps are bounded by the writer's own stamps (the envelope `ingested_at`), never by
+          arrival times;
+        * nothing written at or after `Coverage.through` is vouched for. `through` is the earlier of
+          the two reads, less the clock margin;
+        * a gap may be open;
+        * stamps that no serial writer could produce are anomalies.
+      * **C1 and C2.** An unclosed session's tail is bounded by the writer's lease and takeover
+        margin, and only when the ledger was read after both could have run out. A number above
+        `last_seq` is an anomaly.
+      * **B1, the chaos checks.**
+        * The harness records the time of each online write. The test now asserts that every lost
+          write before `through` lies inside a gap of its own session, and that the log never vouches
+          for it. It no longer passes just because some gap exists.
+        * A new case reads the ledger mid-run, before a loss, and checks both directions: the later
+          loss is not vouched for, and earlier logged writes are.
+        * `tests/unit/test_observation_coverage_properties.py` uses hypothesis to generate
+          serial-writer histories with losses, delays, heartbeats and snapshot times. It holds the
+          rule to the same invariants.
+      * **B2.**
+        * The gateway pool (`_postgres_pool`) bounds acquiring a connection and each statement by
+          `POSTGRES_TIMEOUT_S`.
+        * The writer is re-checked immediately before every store write: scoring, identity events and
+          authorization outcomes.
+        * A lost fence writes nothing and answers 503. A sequenced number stays unpublished. An
+          authorization outcome stays recorded durably, and completeness is withdrawn.
+      * **B3.** Rows handed over before a retryable failure are still confirmed and marked. Rows after
+        the failed one are not attempted: they count as `deferred` in the pass result and carry no
+        attempt.
+      * **C4.** Migration 0007's docstring no longer overclaims.
+      * **C3, open.** Relay refusals still depend on the relay's own contract version.
+    * **Two test expectations were wrong under the revised rule. The tests were corrected, not the
+      rule.**
+      * An unclosed session that lost a number has a run gap and a separate tail. The harness rotates
+        accounts over partitions, so a kill can drop an earlier record while a later one on another
+        partition arrives. The old "exactly one gap" held only because the old rule merged the two.
+        The mid-flight `before_close` case failed in both full runs until this was corrected, and
+        passed when run alone.
+      * The mid-run ledger case at first paused before the produce step, so the record it relied on
+        was still unsent. The pause now follows the hand-over.
+    * **Two gaps found during integration, and fixed.**
+      * The Kafka relay suite caught a regression from the B3 change. A paused-broker pass reported
+        `failed=1` for three claimed rows, because the rows after the failed one were counted
+        nowhere. `RelayPass.deferred` now accounts for them, and every claimed row has exactly one
+        outcome.
+      * B2 had no test of its own. `tests/unit/test_gateway_writer_recheck.py` makes the completeness
+        reconcile outlast the lease, and asserts that nothing reaches the store on any of the three
+        routes. Those tests were mutation-checked: with `ready` forced true, all three fail.
+        `tests/integration/test_gateway_postgres_pool.py` proves that PostgreSQL cancels a stuck
+        statement after 2 s and that an exhausted pool gives up after 2 s.
+    * **Evidence (2026-09-15):**
+      * `pytest -m chaos tests/chaos/test_observation_log.py`: 10 passed, in two consecutive runs;
+      * `pytest -m chaos tests/chaos/test_outbox_watermark.py`: 1 passed;
+      * 185 unit tests passed across the gateway, observation, coverage, property, history and
+        writer re-check suites;
+      * against PostgreSQL, 21 passed:
+        * `tests/integration/test_outbox_relay.py`, `test_outbox_relay_watermark.py` and
+          `test_outbox_delivery_watermark.py`: 19;
+        * `test_gateway_postgres_pool.py`: 2;
+      * against a throwaway real broker, `test_outbox_relay_kafka.py` and
+        `test_observation_log_kafka.py`: 4 passed;
+      * `tests/integration/test_gateway_concurrency.py` skipped loudly: it needs the deployed gateway,
+        which the A/B rebuilds and runs.
   * **The A/B's first attempt was voided by a harness defect (2026-09-15).** Run ids were date plus
     commit, so the second arm (`log-on`) took the first arm's id and its record silently replaced run
     1's (`log-off`). The driver stopped at run 2 rather than continue. Run 1's raw k6 summary and run
     2's record are kept outside the repository as diagnostic history, never published. Run ids are now
     unique per run, and a record is never overwritten. Because arm order is part of the method, and
     the critic fixes change the hot path, the A/B reruns in full after those fixes land.
-  * **The authorization-outcome delivery watermark (user decision, Option 1, 2026-09-15): in progress.**
+  * **The authorization-outcome delivery watermark (user decision, Option 1, 2026-09-15): implemented.**
     Authorization outcomes change online state outside session coverage (critic finding B4). The user
     chose an outbox delivery watermark over a second gateway sequencing path.
     * **Implemented:**
@@ -757,19 +821,94 @@ both reports.
       * `trace_core.observation.outbox_watermark.advance`, which runs inside a transaction and never
         passes an unpublished, refused or still-uncommitted authorization row. It reads marks, never
         record counts, so duplicates cannot move it;
-      * `trace_core.observation.history_completeness.assess_history`: COMPLETE only when no
-        observation gap intersects the horizon, the log was assessed through its end, and the
-        watermark clears it.
-    * **Evidence (2026-09-15):** `tests/unit/test_history_completeness.py` and
-      `tests/integration/test_outbox_delivery_watermark.py` against PostgreSQL, 16 passed. They include
-      a row written by a still-open transaction that a naive bound would have passed, and the
-      watermark holding at it.
-    * **Waiting on the critic fixes to `outbox_relay.py`:** the relay advancing the watermark in its
-      marking transaction, the relay-level tests (a partial batch stops at the first unconfirmed row),
-      and a chaos test in which a confirmed batch loses its marking commit, is re-delivered as
-      duplicates, and history stays INCOMPLETE until the rows are marked.
-  * **Not yet built:** the critic fixes and the watermark's relay wiring, then the controlled hot-path
-    A/B (slice 6), which also decides where the relay runs.
+      * `trace_core.observation.history_completeness.assess_history`: COMPLETE only when both hold:
+        * observation coverage vouches for the horizon: it ends before `Coverage.through`, no gap
+          overlaps it, and there is no anomaly;
+        * the watermark clears the horizon's end by the clock margin;
+      * the relay advances the watermark in the transaction that marks rows, on every pass, an empty
+        one included.
+    * **Evidence (2026-09-15):**
+      * `tests/unit/test_history_completeness.py` and
+        `tests/integration/test_outbox_delivery_watermark.py`, against PostgreSQL, passed. They include
+        a row written by a still-open transaction, which a naive bound would have passed; the
+        watermark holds at it.
+      * `tests/integration/test_outbox_relay_watermark.py`, against PostgreSQL:
+        * the watermark advances only after a confirmed pass;
+        * a partial batch stops at the first unconfirmed row;
+        * extra Kafka records never move it;
+        * a restarted relay continues from it;
+        * a refused row keeps later horizons incomplete;
+        * a row confirmed before a mid-batch failure is never delivered again, and the row after the
+          failure is deferred, with no attempt.
+      * `tests/chaos/test_outbox_watermark.py`, against a throwaway broker and PostgreSQL, 1 passed:
+        * a pass has its backend terminated after the broker confirmed its three rows, so they stay
+          unmarked;
+        * the watermark stays at or before the oldest of them;
+        * history over them is INCOMPLETE, although Kafka holds the records;
+        * a fresh relay re-delivers them as duplicates, each transaction id at least twice;
+        * history becomes COMPLETE only after the marks, and after a later pass carries the watermark
+          past the horizon and the clock margin.
+      * The first chaos draft expected COMPLETE straight after the marking pass. That cannot happen:
+        no pass moves the watermark past its own start, and COMPLETE needs it past the horizon by the
+        margin. The test was corrected, not the rule.
+  * **`P3.observation-log`.** The evidence above is what its revert required. It returns to PASS in
+    the commit that records this, after `make verify` and an independent critic's re-review of these
+    fixes.
+  * **Not yet built:** the controlled hot-path A/B (slice 6), rerun in full on the fixed tree. It
+    also decides where the relay runs.
+* **Step 5 — Bronze ingest (Spark agent, integrated by the lead): implemented, before exit evidence**
+  (ADR-0052, Proposed; `P3.kafka-ingest` IN_PROGRESS).
+  * **What exists:**
+    * `trace_core.stream.bronze`: one append-only Delta table and one Structured Streaming query per
+      released topic.
+      * Rows hold the key, value and headers exactly as delivered, plus `kafka_topic_id` from the
+        checkpoint's topic-id sidecar.
+      * `failOnDataLoss` is on, and queries start at `earliest`; `-1` (latest) is refused.
+      * The topic id is checked before and after every append.
+    * `trace_core.stream.bronze_conservation.check_conservation` compares every checkpoint version's
+      consumed ranges with the rows, per topic id and partition. It reports missing, duplicate,
+      out-of-range, and skipped-between-versions offsets.
+    * `trace_core.stream.bronze_coverage` is the one place Bronze meets the coverage rule. It
+      supplies each record's writer stamp and session headers, and a strict high-water mark, and
+      reads the ledger after the mark.
+    * `services/stream/bronze.py` provides `run`, `conservation` and `coverage` commands.
+  * **Critic review (2026-09-15).** The lead reproduced both Category A findings before fixing
+    them.
+    * **A1:** conservation judged only the current checkpoint version. Offsets trimmed before Bronze
+      read them, followed by a reset at earliest, left a hole that read as conserved. Now:
+      * every version is judged;
+      * the skip is counted and is permanent;
+      * a reset with an explicit start above the superseded end is refused.
+    * **A2:** the coverage high-water mark left out partitions that were never read. It is now
+      withheld when a covered checkpoint reports a problem or records no partition.
+    * **B1-B5:**
+      * the mark is strict, because broker timestamps have millisecond precision;
+      * commits are read before the snapshot, and planned batches after it;
+      * the topic id is checked per batch;
+      * duplicates are counted per topic id;
+      * envelope fields are extracted in Spark, so no value is parsed on the driver. A stream test
+        proves that a value nested 100,000 deep and one that is not UTF-8 both read as null.
+    * **Open:**
+      * B6: a declared retention floor, needed before Step 11's bounded retention;
+      * CI PostgreSQL for the live coverage tests, which skip loudly in `test-stream` today.
+  * **Moved to the revised coverage rule (Step 4):**
+    * `written_at` comes from the envelope's `ingested_at`;
+    * the lease and takeover margin default to the gateway `WriterSupervisor`'s;
+    * without a mark, nothing is vouched for;
+    * `coverage` exits 0 only when there is no gap and a mark exists.
+  * **Evidence (2026-09-15):**
+    * 157 Bronze unit tests passed (coverage adapter, conservation, registry, checkpoints, service);
+    * `pytest -m stream tests/stream/test_bronze_tables.py`: 5 passed, on real Delta 4.0.1 and
+      Temurin 17;
+    * `tests/integration/test_bronze_kafka.py`, against a throwaway real broker: 8 passed. It covers:
+      * byte-for-byte delivery, including a null-valued header;
+      * a restart with no loss and no duplicates;
+      * poison values;
+      * trimmed offsets: a refused skip, and a reset at earliest reported as skipped `[20, 25)`;
+      * a recreated topic, refused;
+      * a topic recreated under a running query: the query stops, and nothing of the new topic lands;
+      * the two coverage cases: the exact gaps, and vouching before the mark once every partition has
+        arrived.
 * **Step E — `eval-v2`.** Stages 1, 1b and 1c are complete. Their code is integrated onto this branch.
   * **Integration.** The worktree branch `worktree-agent-aae9faa608636c9c8` was fast-forwarded to the
     phase branch, and the Step E work was committed on top. The phase branch fast-forwards to it.

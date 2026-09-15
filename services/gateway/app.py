@@ -40,6 +40,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import ValidationError
 
 from services.gateway.config import (
+    POSTGRES_TIMEOUT_S,
     REDIS_MAX_CONNECTIONS,
     REDIS_TIMEOUT_S,
     SERVICE_NAME,
@@ -315,6 +316,39 @@ def _outbox_relay(
     )
 
 
+POOL_STATEMENT_TIMEOUT_MS: Final = round(POSTGRES_TIMEOUT_S * 1000)
+POOL_CONNECT_TIMEOUT_S: Final = 2
+"""libpq's connect timeout, in whole seconds (2 is its minimum). The pool's workers open connections
+off the request path; the acquire timeout bounds what a request waits."""
+
+
+def _postgres_pool(pool_class: Any, settings: GatewaySettings) -> Any:
+    """The gateway's pool, with every wait a request can make on it bounded by POSTGRES_TIMEOUT_S.
+
+    Requests run serially on the event loop (ADR-0039), so an unbounded wait stalls every request
+    and lets a fenced write land past its lease (ADR-0051 §2):
+    - **acquiring** a connection waits at most POSTGRES_TIMEOUT_S, not psycopg_pool's 30 s default;
+    - **each statement** is cancelled by the server after POSTGRES_TIMEOUT_S. Triage's writes, the
+      authorization record, the hole ledger, readiness and the in-process relay share this pool,
+      and their statements measure in milliseconds (triage: 2.596 ms p99 under load, see
+      `config.POSTGRES_TIMEOUT_S`). So the bound only ends a statement that is stuck, on a lock or
+      a stalled server, and the caller fails as ADR-0035 specifies.
+    A silent network is not bounded by either: that needs socket timeouts, as the writer's own
+    connection has.
+    """
+    return pool_class(
+        settings.postgres_dsn,
+        min_size=settings.pool_min_size,
+        max_size=settings.pool_max_size,
+        open=False,
+        timeout=POSTGRES_TIMEOUT_S,
+        kwargs={
+            "connect_timeout": POOL_CONNECT_TIMEOUT_S,
+            "options": f"-c statement_timeout={POOL_STATEMENT_TIMEOUT_MS}",
+        },
+    )
+
+
 def build_state(settings: GatewaySettings | None = None) -> GatewayState:
     """Resolve dependencies. Raises if the gateway cannot serve correctly.
 
@@ -380,12 +414,7 @@ def build_state(settings: GatewaySettings | None = None) -> GatewayState:
     try:
         from psycopg_pool import ConnectionPool
 
-        pool = ConnectionPool(
-            resolved.postgres_dsn,
-            min_size=resolved.pool_min_size,
-            max_size=resolved.pool_max_size,
-            open=False,
-        )
+        pool = _postgres_pool(ConnectionPool, resolved)
         triage = PostgresTriageStore(pool)
         authorizations = PostgresAuthorizationStore(pool)
     except ModuleNotFoundError:  # pragma: no cover - the db extra is required
@@ -440,6 +469,7 @@ def build_state(settings: GatewaySettings | None = None) -> GatewayState:
             producer_version=SERVICE_VERSION,
             breaker=breaker,
             completeness=completeness,
+            writer=writer,
         ),
         metrics=metrics,
         limiter=limiter,
@@ -894,6 +924,12 @@ def _register_routes(app: FastAPI) -> None:
                 return _writer_refusal(request, surface="transaction")
         try:
             outcome = state.pipeline.score(body, extra_degraded=tuple(degraded_reasons))
+        except WriterSessionError:
+            # The fence was lost while the pipeline waited before its store write (ADR-0051 §2):
+            # nothing was written, so nothing is answered, and the number stays unpublished.
+            if observation_log is not None and sequenced is not None:
+                observation_log.unpublished(sequenced, TX_SCORED_V1)
+            return _writer_refusal(request, surface="transaction")
         except BaseException:
             if observation_log is not None and sequenced is not None:
                 observation_log.unpublished(sequenced, TX_SCORED_V1)
@@ -1001,7 +1037,8 @@ def _register_routes(app: FastAPI) -> None:
         body: AuthorizationOutcomeRequest,
         token: Annotated[ServiceToken, Depends(_authenticate)],
     ) -> Any:
-        # Sync: `_record_authorization` writes PostgreSQL, bounded by POSTGRES_TIMEOUT_S. See
+        # Sync: `_record_authorization` writes PostgreSQL, bounded by POSTGRES_TIMEOUT_S (the pool's
+        # acquire and statement timeouts, `_postgres_pool`). See
         # `score_transaction`. The token authenticates; identity is the transaction id (ADR-0049
         # §4).
         del token
@@ -1106,6 +1143,11 @@ def _ingest(
         guard = state.pipeline.completeness
         if guard is not None:
             guard.reconcile()
+        if not _still_the_writer(state):
+            # The reconcile above may have waited on PostgreSQL past the lease: nothing is written.
+            if observation_log is not None and sequenced is not None:
+                observation_log.unpublished(sequenced, IDENTITY_EVENTS_V1)
+            return _writer_refusal(request, surface="identity")
         try:
             state.pipeline.feature_store.observe(event)
         except FeatureWriteFailedError:
@@ -1154,7 +1196,10 @@ def _record_authorization(request: Request, body: AuthorizationOutcomeRequest) -
 
     - then a recorded or duplicate delivery is applied online (ADR-0049 §6): one naming another
       account than the transaction the store holds is refused with 409 and never reaches a feature;
-      a store failure is still 202, because the durable record has the outcome.
+      a store failure is still 202, because the durable record has the outcome;
+    - a fence lost between the readiness check and the online apply (ADR-0051 §2): the outcome is
+      recorded durably, not applied, and completeness is withdrawn as for a failed apply; 503, so
+      the retry reaches a ready writer, which finds a DUPLICATE and applies it.
 
     Both times are compared and published at millisecond precision, the precision of the event.
     """
@@ -1207,11 +1252,19 @@ def _record_authorization(request: Request, body: AuthorizationOutcomeRequest) -
         log.warning("authorization_record_failed", error=type(exc).__name__)
         return _authorization_unavailable(request)
     log.info("authorization_outcome_delivered", delivery=receipt.delivery.value)
-    applied = (
-        None
-        if receipt.delivery is Delivery.CONFLICT
-        else _apply_authorization(state, body, decided_ms)
-    )
+    try:
+        applied = (
+            None
+            if receipt.delivery is Delivery.CONFLICT
+            else _apply_authorization(state, body, decided_ms)
+        )
+    except WriterSessionError:
+        # Recorded durably, not applied online, completeness withdrawn. A 503, not a 202: the
+        # retry is a DUPLICATE on the system of record, and a ready writer then applies it.
+        state.metrics.authorization_outcomes.add(
+            1, {"delivery": receipt.delivery.value, "verification": _NOT_APPLIED}
+        )
+        return _writer_refusal(request, surface="authorization")
     state.metrics.authorization_outcomes.add(
         1,
         {
@@ -1263,6 +1316,14 @@ def _apply_authorization(
     guard = state.pipeline.completeness
     if guard is not None:
         guard.reconcile()
+    if not _still_the_writer(state):
+        # The outcome is durable and will not reach the store from this process: withdrawn as a
+        # failed apply is (ADR-0049 §4). No distinct hole reason exists (migration 0004's CHECK);
+        # the write was not attempted, which is what BREAKER_OPEN records.
+        log.warning("authorization_apply_refused", reason="not_the_writer")
+        if guard is not None:
+            guard.observation_unrecorded(HoleReason.BREAKER_OPEN)
+        raise WriterSessionError("the writer fence was lost before the online apply")
     try:
         receipt = store.observe(observation)
     except FeatureWriteFailedError:
@@ -1287,10 +1348,20 @@ def _not_the_writer(request: Request, *, surface: str) -> JSONResponse | None:
     refused; so are identity events a released feature reads, and authorization outcomes. Events
     that change no online state are not.
     """
-    writer = _gateway(request).writer
-    if writer is None or writer.ready:
+    if _still_the_writer(_gateway(request)):
         return None
     return _writer_refusal(request, surface=surface)
+
+
+def _still_the_writer(state: GatewayState) -> bool:
+    """Whether this process may write the online store now: an attribute read, no I/O.
+
+    Read at the route's entry, and again immediately before every store write, after anything that
+    can wait on PostgreSQL, so the write lands within the lease plus the takeover margin (ADR-0051
+    §2). True when no fence is configured.
+    """
+    writer = state.writer
+    return writer is None or bool(writer.ready)
 
 
 def _writer_refusal(request: Request, *, surface: str) -> JSONResponse:

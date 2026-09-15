@@ -49,6 +49,7 @@ from trace_core.features.definitions import ONLINE_FEATURES
 from trace_core.features.observation import transaction_observation
 from trace_core.features.state_plan import PLAN
 from trace_core.observability.logging import get_logger
+from trace_core.observation.session import WriterSessionError
 from trace_core.repositories.circuit_breaker import CircuitBreaker
 from trace_core.rules.engine import Evaluation, evaluate_pack
 from trace_core.rules.pack import CompiledPack
@@ -159,6 +160,12 @@ class ScoringPipeline:
     a paused Redis made a single scored request take 21.8 s (ADR-0035)."""
     completeness: CompletenessGuard | None = None
     """Withdraws the store's completeness after any unrecorded observation (ADR-0046 §5)."""
+    writer: Any | None = None
+    """The online store's writer fence (`WriterSupervisor`), or None when writes are not fenced.
+
+    Its `ready` is read again immediately before the store write, after everything that can wait
+    on PostgreSQL, so the write lands within the lease plus the takeover margin (ADR-0051 §2). A
+    lost fence raises `WriterSessionError` and writes nothing."""
 
     # -- canonical mapping ---------------------------------------------------
 
@@ -241,6 +248,9 @@ class ScoringPipeline:
         began = time.perf_counter()
         if guard is not None:
             guard.reconcile()
+        if self.writer is not None and not self.writer.ready:
+            # The reconcile above may have waited on PostgreSQL past the lease: nothing is written.
+            raise WriterSessionError("the writer fence was lost before the store write")
         reason: str | None = None
         position: int | None = None
         epoch: int | None = None
