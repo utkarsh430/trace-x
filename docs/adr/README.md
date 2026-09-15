@@ -64,6 +64,7 @@ been thought through.
 | [0050](0050-scenario-identity-and-nuisance-parameters.md) | A scenario's identity is its mechanism, relationships, signature and tests; everything else is a nuisance parameter (refines ADR-0030 for eval-v2) | 3 | Proposed |
 | [0051](0051-gateway-observation-log.md) | The gateway's durable observation log: fenced producer sessions, contiguous sequences and detectable gaps | 3 | Proposed |
 | [0052](0052-bronze-ingest-topology.md) | Bronze ingest topology and its no-skip guards: a table and query per topic, the raw row, topic-id and conservation checks | 3 | Proposed |
+| [0053](0053-silver-canonical-events.md) | Silver: validated, exactly deduplicated, late-tagged canonical events, with quarantine and Bronze-to-Silver conservation | 3 | Proposed |
 
 ## Notes on status
 

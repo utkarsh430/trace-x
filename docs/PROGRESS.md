@@ -978,7 +978,14 @@ both reports.
       * The compose profile tests: 25 passed.
   * **Step 4: complete. `P3.observation-log` is PASS** on its acceptance command,
     `pytest -m chaos tests/chaos/test_observation_log.py`, which passed 10 twice on the fixed tree.
-    The critic re-review's Category A defect is fixed, and the A/B is decided.
+    The critic re-review's Category A defect is fixed, and the A/B is decided. Committed as `65857d4`.
+  * **One unexplained verify failure (2026-09-15).**
+    * A `make verify` run failed in `test-fast`. The gate keeps only its last five lines, which held
+      a warning, so the failing test was not captured.
+    * A full `test-fast` run then passed, and so did ten loops of this session's timing-sensitive
+      suites.
+    * The next `make verify` passed, and `65857d4` was committed on it.
+    * The failure is recorded, not explained.
 * **Step 5 — Bronze ingest (Spark agent, integrated by the lead): implemented, before exit evidence**
   (ADR-0052, Proposed; `P3.kafka-ingest` IN_PROGRESS).
   * **What exists:**
@@ -1032,6 +1039,24 @@ both reports.
       * a topic recreated under a running query: the query stops, and nothing of the new topic lands;
       * the two coverage cases: the exact gaps, and vouching before the mark once every partition has
         arrived.
+* **Step 6 — Silver: in progress** (ADR-0053, Proposed; `P3.event-time`).
+  * **Design (ADR-0053):**
+    * **Tables:** one canonical Silver table per released topic, plus shared `silver.late_events`
+      and `silver.quarantine`.
+    * **Validation:** with the same strict generated contract models producers use. A value outside a
+      released enum is quarantined, which settles Step 2's open question.
+    * **Future skew:** quarantined, as §4.3 declares.
+    * **Exact dedup** by each topic's declared identity. A deterministic pick within each batch comes
+      first, then an insert-only MERGE, then a post-write uniqueness assertion. A same-identity record
+      with different content is quarantined as a conflict.
+    * **Late events** stay in Silver and are copied to `late_events`.
+    * **Conservation:** every Bronze row becomes exactly one canonical row, a counted duplicate or a
+      quarantine row.
+  * **Lead, first:** `trace_core.stream.timing` holds timing semantics v1 as versioned constants and
+    pure functions, with unit tests pinning each value at its boundary. It settles where the §4.3
+    constants live.
+  * **Next:** the Spark agent builds the declarations, transforms, sink, service and conservation check
+    in its own worktree. The lead integrates after a critic review.
 * **Step E — `eval-v2`.** Stages 1, 1b and 1c are complete. Their code is integrated onto this branch.
   * **Integration.** The worktree branch `worktree-agent-aae9faa608636c9c8` was fast-forwarded to the
     phase branch, and the Step E work was committed on top. The phase branch fast-forwards to it.
