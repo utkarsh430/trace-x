@@ -163,9 +163,12 @@ class ScoringPipeline:
     writer: Any | None = None
     """The online store's writer fence (`WriterSupervisor`), or None when writes are not fenced.
 
-    Its `ready` is read again immediately before the store write, after everything that can wait
-    on PostgreSQL, so the write lands within the lease plus the takeover margin (ADR-0051 §2). A
-    lost fence raises `WriterSessionError` and writes nothing."""
+    `ready_as(session_id)` is read again immediately before the observation's store write, after
+    everything that can wait on PostgreSQL. So the write lands within the lease plus the takeover
+    margin, and only for the session that numbered it (ADR-0051 §2). A lost fence raises
+    `WriterSessionError` and writes nothing. One store write comes before that check: the
+    completeness guard's `reconcile` may withdraw completeness. A withdrawal never claims anything,
+    so a stale writer moving the epoch fails safe."""
 
     # -- canonical mapping ---------------------------------------------------
 
@@ -217,7 +220,7 @@ class ScoringPipeline:
     # -- feature read --------------------------------------------------------
 
     def record_and_read(
-        self, canonical: CanonicalTransaction
+        self, canonical: CanonicalTransaction, *, session_id: str | None = None
     ) -> tuple[FeatureContext, float, str | None, ObserveOutcome, int | None, int | None]:
         """Record the scored transaction and read its context, in one atomic store call.
 
@@ -248,7 +251,7 @@ class ScoringPipeline:
         began = time.perf_counter()
         if guard is not None:
             guard.reconcile()
-        if self.writer is not None and not self.writer.ready:
+        if self.writer is not None and not self.writer.ready_as(session_id):
             # The reconcile above may have waited on PostgreSQL past the lease: nothing is written.
             raise WriterSessionError("the writer fence was lost before the store write")
         reason: str | None = None
@@ -321,8 +324,13 @@ class ScoringPipeline:
         *,
         now: dt.datetime | None = None,
         extra_degraded: tuple[str, ...] = (),
+        session_id: str | None = None,
     ) -> ScoringOutcome:
-        """Score one transaction. Never raises for a missing dependency."""
+        """Score one transaction. Never raises for a missing dependency.
+
+        `session_id` is the writer session that numbered this observation, when one did: the store
+        write is refused unless that session is still the one writing (`WriterSessionError`).
+        """
         began = time.perf_counter()
         moment = now or dt.datetime.now(dt.UTC)
         reasons: list[str] = list(extra_degraded)
@@ -332,7 +340,7 @@ class ScoringPipeline:
 
         canonical = self.to_canonical(request)
         context, read_seconds, read_reason, observe_outcome, position, epoch = self.record_and_read(
-            canonical
+            canonical, session_id=session_id
         )
         if read_reason is not None:
             reasons.append(read_reason)

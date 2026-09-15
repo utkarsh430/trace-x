@@ -211,6 +211,7 @@ def _coverage(spark: Any, lake: LakeConfig, args: argparse.Namespace) -> int:
             {
                 "gap_free": result.coverage.gap_free,
                 "gaps": len(gaps),
+                "open_gaps": sum(1 for gap in gaps if gap.end is None),
                 "anomalies": len(result.coverage.anomalies),
                 "observations": result.observations,
                 "beyond_high_water": result.beyond_high_water,
@@ -226,7 +227,9 @@ def _coverage(spark: Any, lake: LakeConfig, args: argparse.Namespace) -> int:
         )
         + "\n"
     )
-    # No mark, no claim: gaps the rule found are real, but nothing past them is vouched for.
+    # Exit 0 only when Bronze vouches for everything it read: a mark, no gap, no anomaly. A live
+    # gateway's session always has an open tail, so this exits 1 while a writer runs, by design;
+    # `open_gaps` tells a live tail from a bounded gap.
     vouched = result.coverage.gap_free and result.bronze_high_water is not None
     return EXIT_OK if vouched else EXIT_FAILED_CHECK
 

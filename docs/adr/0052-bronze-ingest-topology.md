@@ -76,7 +76,9 @@ implementation found it needed.
 (ADR-0051 §5).
 - It counts every `tx.scored.v1` record, and every `identity.events.v1` record carrying session
   headers.
-- A record without session headers is a gap only if its envelope producer is `trace-gateway`.
+- A `tx.scored.v1` record without session headers is a gap whoever produced it, because only the
+  gateway produces that topic. An `identity.events.v1` record without them is a gap only if its
+  envelope producer is `trace-gateway`, because the generator also produces that topic.
 - The high-water mark is the earliest, across partitions, of each partition's newest arrival. It is
   `None` if any partition holds no rows.
 - The ledger is read after the high-water mark is established, and the read time is recorded.
@@ -142,6 +144,9 @@ implementation found it needed.
     - A coverage case now spreads records over every partition.
     - A checkpoint that starts above its predecessor's end has unit tests.
   - **C, still open.** CI provisioning of PostgreSQL for the live coverage test.
+  - **`coverage` exit status.** A live gateway's session always has an open tail, so `coverage`
+    exits 1 while a writer runs, by design. It prints `open_gaps`, so a live tail can be told
+    apart from a bounded gap.
 - `P3.kafka-ingest` is not PASS before the step's exit evidence.
 
 ## Status

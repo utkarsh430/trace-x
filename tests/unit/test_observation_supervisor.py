@@ -331,3 +331,23 @@ def test_timings_that_cannot_fence_are_refused(
 ) -> None:
     with pytest.raises(WriterSessionError):
         _supervisor(Database(Clock()), interval_s=interval_s, lease_s=lease_s, grace_s=grace_s)
+
+
+def test_a_replacement_session_is_ready_but_never_for_its_predecessor_s_numbers() -> None:
+    """Critic re-review finding 1: readiness alone let a write numbered in a lost session through,
+    once the same process was writing again as a new session."""
+    clock = Clock()
+    db = Database(clock)
+    supervisor = _supervisor(db)
+    supervisor.tick()
+    lost = supervisor.session
+    assert lost is not None and lost.session_id is not None
+    assert supervisor.ready_as(lost.session_id) and supervisor.ready_as(None)
+    db.holder = None
+    supervisor.tick()
+    clock.now = START + GRACE_S
+    supervisor.tick()
+    replacement = supervisor.session
+    assert replacement is not None and replacement.session_id != lost.session_id
+    assert supervisor.ready and supervisor.ready_as(replacement.session_id)
+    assert not supervisor.ready_as(lost.session_id)

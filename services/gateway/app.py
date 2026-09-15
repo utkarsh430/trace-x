@@ -208,7 +208,14 @@ class GatewayState:
             # Reported, never gated on: a broker outage costs history coverage, never a decision.
             checks["observation_log"] = self.observation_log.status
         # Reported, never gated on: an undrained outbox delays events, it never loses them.
-        checks["outbox_relay"] = "running" if self.outbox_relay is not None else "disabled"
+        relay = self.outbox_relay
+        checks["outbox_relay"] = (
+            "disabled"
+            if relay is None
+            else "running"
+            if relay.running
+            else "stopped: the relay thread is not running"
+        )
         checks["feature_history"] = self._history_status()
         return healthy, checks
 
@@ -923,7 +930,11 @@ def _register_routes(app: FastAPI) -> None:
             except WriterSessionError:
                 return _writer_refusal(request, surface="transaction")
         try:
-            outcome = state.pipeline.score(body, extra_degraded=tuple(degraded_reasons))
+            outcome = state.pipeline.score(
+                body,
+                extra_degraded=tuple(degraded_reasons),
+                session_id=None if sequenced is None else sequenced.session_id,
+            )
         except WriterSessionError:
             # The fence was lost while the pipeline waited before its store write (ADR-0051 §2):
             # nothing was written, so nothing is answered, and the number stays unpublished.
@@ -1143,8 +1154,10 @@ def _ingest(
         guard = state.pipeline.completeness
         if guard is not None:
             guard.reconcile()
-        if not _still_the_writer(state):
-            # The reconcile above may have waited on PostgreSQL past the lease: nothing is written.
+        numbered_in = None if sequenced is None else sequenced.session_id
+        if not _still_the_writer(state, numbered_in):
+            # The reconcile above may have waited on PostgreSQL past the lease, or past a loss and a
+            # new session: nothing is written.
             if observation_log is not None and sequenced is not None:
                 observation_log.unpublished(sequenced, IDENTITY_EVENTS_V1)
             return _writer_refusal(request, surface="identity")
@@ -1353,15 +1366,17 @@ def _not_the_writer(request: Request, *, surface: str) -> JSONResponse | None:
     return _writer_refusal(request, surface=surface)
 
 
-def _still_the_writer(state: GatewayState) -> bool:
-    """Whether this process may write the online store now: an attribute read, no I/O.
+def _still_the_writer(state: GatewayState, session_id: str | None = None) -> bool:
+    """Whether this process may write the online store now: attribute reads, no I/O.
 
-    Read at the route's entry, and again immediately before every store write, after anything that
-    can wait on PostgreSQL, so the write lands within the lease plus the takeover margin (ADR-0051
-    §2). True when no fence is configured.
+    Read at the route's entry, and again immediately before every observation's store write, after
+    anything that can wait on PostgreSQL. So the write lands within the lease plus the takeover
+    margin, and only for the session that numbered it (`session_id`, ADR-0051 §2). The completeness
+    guard's `reconcile` writes before that check, and only ever withdraws completeness, which fails
+    safe. True when no fence is configured.
     """
     writer = state.writer
-    return writer is None or bool(writer.ready)
+    return writer is None or bool(writer.ready_as(session_id))
 
 
 def _writer_refusal(request: Request, *, surface: str) -> JSONResponse:

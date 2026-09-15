@@ -1227,8 +1227,10 @@ def _reset(
             raise CheckpointRefusedError(
                 f"refusing to reset {query!r}: "
                 + " ".join(skips)
-                + f" Start each partition at or below where v{previous_version} stopped, to "
-                f"continue. If those offsets are gone from the broker, the loss is real: reset at "
+                + f" Start each partition exactly where v{previous_version} stopped, to "
+                f"continue: a start below it re-reads offsets Bronze already holds, which "
+                f"conservation counts as duplicates. If those offsets are gone from the broker, "
+                f"the loss is real: reset at "
                 f"earliest, and Bronze conservation reports the skipped offsets for as long as the "
                 f"table exists."
             )

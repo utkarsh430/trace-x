@@ -7,7 +7,9 @@ both hold:
    including an open one, overlaps it, and no anomaly was found. An anomaly contradicts the
    premises the gaps rest on, so it keeps every horizon incomplete.
 2. **Authorization-outbox delivery coverage** (`trace_core.observation.outbox_watermark`). Every
-   authorization outcome recorded before the horizon's end must have a confirmed delivery.
+   authorization outcome recorded before the horizon's end must have a confirmed delivery. That is
+   delivery to Kafka, not presence in Bronze. A caller certifying history rebuilt from Bronze must
+   also require Bronze's `tx.authorization.v1` conservation and high-water mark through the horizon.
 
 Anything else is INCOMPLETE, with every reason that applies, so an unresolved gap on either path
 keeps the horizon incomplete. Times are write and record times on the host and database clocks;

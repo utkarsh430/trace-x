@@ -115,6 +115,7 @@ def main(argv: list[str]) -> int:
         pack=default_loader(frozenset(ONLINE_FEATURES.ids)).load(),
         thresholds=load_thresholds(),
         feature_store=store,
+        writer=writer,
     )
     ledger = DeliveryLedger()
     config: dict[str, Any] = producer_config(
@@ -157,7 +158,7 @@ def main(argv: list[str]) -> int:
                     "occurred_at": now.isoformat().replace("+00:00", "Z"),
                 }
             )
-            outcome = pipeline.score(request, now=now)
+            outcome = pipeline.score(request, now=now, session_id=sequenced.session_id)
             # Printed once the store write has returned, before any kill point: every write the
             # test may find missing from the log is on record with a time at or after it happened,
             # and before the next observation's stamp.

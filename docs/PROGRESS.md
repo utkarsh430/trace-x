@@ -851,9 +851,9 @@ both reports.
       * The first chaos draft expected COMPLETE straight after the marking pass. That cannot happen:
         no pass moves the watermark past its own start, and COMPLETE needs it past the horizon by the
         margin. The test was corrected, not the rule.
-  * **`P3.observation-log`.** The evidence above is what its revert required. It was committed in
-    `1d216c5` with `make verify` green. It returns to PASS once an independent critic's re-review of
-    these fixes finds no Category A defect.
+  * **`P3.observation-log` stays IN_PROGRESS.** The evidence above was committed in `1d216c5` with
+    `make verify` green. The critic's re-review then found a Category A defect (below). That defect
+    is now fixed and tested, and the capability returns to PASS at Step 4's exit, after the A/B.
   * **The A/B harness now pins its gateway image.** The driver used to start the gateway without
     building it, and no record named the image, so an image built from an older tree could have run
     unnoticed.
@@ -861,6 +861,85 @@ both reports.
       records.
     * Before every run, it checks that the tree has not moved and that the gateway runs that image.
     * `report` refuses runs from any other commit, and names the image.
+  * **Critic re-review of `1d216c5` (2026-09-15): one Category A defect, fixed before the A/B.**
+    * **A1, fixed.**
+      * *The defect.* The check before a store write asked whether the process was the writer, not
+        whether the session that numbered the observation still was. A request waiting in the
+        completeness reconcile could lose its session while the same process re-acquired a new one.
+        Its old-session write then passed. The critic proved at the rule level that such a write is
+        vouched for.
+      * *The fix.* `WriterSupervisor.ready_as(session_id)` now requires the session that numbered
+        the observation, and both scoring and identity events pass it.
+      * *Tests.* One supervisor test, plus one route test per path in which the reconcile loses the
+        fence and re-acquires. All three fail when the session id is ignored.
+    * **Already fixed when reviewed:**
+      * the relay's fallback `RelayPass` (in `1d216c5`);
+      * tests for the B2 refusal paths.
+    * **B, fixed:**
+      * Readiness reported `outbox_relay: running` even after the relay thread had died. It now
+        reports whether the thread is alive. The tests fail against a relay whose failed pass
+        escapes the loop, and against readiness that ignores liveness.
+      * A host stamp within the clock margin of a PostgreSQL time counted as an anomaly, which kept
+        history incomplete. A run is now an anomaly only when its bounds cross by more than twice
+        the margin, and `vouches` is false while any anomaly stands.
+    * **B, recorded as residuals or caller obligations:**
+      * the completeness withdrawal happens before the writer check; it fails safe;
+      * a Redis command can run after the client gave up on it; that causes a loss only together
+        with a lost record;
+      * the watermark proves delivery to Kafka, not presence in Bronze, so a caller certifying
+        history rebuilt from Bronze must also require that.
+    * **C, fixed:**
+      * the property-test generator, widened by an agent (below);
+      * the watermark chaos test now seeds the watermark, runs a concurrent relay pass during the
+        stalled flush, and asserts exact values;
+      * the wording of ADR-0052's headerless-record rule;
+      * the checkpoint reset advice: start exactly where the old version stopped;
+      * the stamp order stated in the coverage docstring;
+      * `coverage` prints `open_gaps`, and ADR-0052 documents that it exits 1 while a writer is live.
+    * **Evidence (2026-09-15):**
+      * 269 unit tests across the gateway, observation, relay, coverage and Bronze suites, and 43
+        checkpoint tests;
+      * `pytest -m chaos` on `test_observation_log.py` and `test_outbox_watermark.py`: 11 passed;
+      * 25 integration tests passed: the observation-log and relay suites against a real broker,
+        and the pool, relay and watermark suites against PostgreSQL;
+      * four mutation checks of the new tests, each of which failed them;
+      * **the widened property tests**, from an agent, in `tests/unit/test_observation_coverage_properties.py`:
+        * the generated histories now include:
+          * host and broker clocks offset from PostgreSQL, within the margin;
+          * heartbeats that commit late, across the ledger read, or never, while writes continue
+            until the lease ends;
+          * one to three sessions from one or two processes, with takeovers;
+          * sessions opened after the ledger read;
+          * duplicate and missing deliveries;
+        * a new invariant: a history that keeps every premise is never an anomaly;
+        * 5 tests, all passing on seeds 1-3, about 7 s each.
+      * **Mutation checks of the rule.** Each of 10 mutants ran against a copy of `coverage.py`,
+        leaving the worktree file untouched. Property-test columns count catches over 3 hypothesis
+        seeds:
+
+        | mutant | old property tests | widened property tests | hand-written tests |
+        |---|---|---|---|
+        | takeover margin dropped from the fence | 0/3 | 2/3 | caught |
+        | margin dropped from the lease check and bound | 0/3 | 0/3 | caught |
+        | `through` without the margin | 0/3 | 0/3 | caught |
+        | run gaps not widened | 0/3 | 3/3 | caught |
+        | unclosed tail not widened | 0/3 | 1/3 | caught |
+        | stranger gap starts at its first record | 0/3 | 3/3 | caught |
+        | stranger anomaly without the margin | 0/3 | 1/3 | caught, by a new boundary test |
+        | strangers ignored | 0/3 | 3/3 | caught |
+        | fence shrunk to 0.3 x lease | 2/3 | 3/3 | caught |
+        | finding-3 fix reverted | 0/3 | 3/3 | caught |
+
+        * The committed widened file catches 22 of the 30 mutant-seed runs. The first widened
+          version caught 16, and the original caught 2.
+        * Biasing generated times towards the bounds made two mutants caught on every seed: run gaps
+          not widened, and the finding-3 fix reverted.
+        * The cost fell on two margin mutants, the lease bound and `through`. Both now survive every
+          seed.
+        * While biasing, the agent found and fixed a bug in its own generator. One draw let a write
+          land 1 ms past the lease plus the takeover margin, which the premises forbid.
+        * So a passing property run is not evidence that the margins are right. The hand-written
+          tests catch all ten mutants on every run, and they remain the deterministic guard.
   * **Not yet built:** the controlled hot-path A/B (slice 6), rerun in full on the fixed tree. It
     also decides where the relay runs.
 * **Step 5 — Bronze ingest (Spark agent, integrated by the lead): implemented, before exit evidence**

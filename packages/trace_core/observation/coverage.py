@@ -11,13 +11,16 @@ hold. Its *write time* is when the writer wrote the online store. Every lost wri
 `start <= end`, and `end is None` means the gap is open, because the session may still be writing.
 
 **Premises.** The bounds are derived from these, and from nothing else:
-1. *Serial writer.* One process writes a session, and handles one observation at a time: it assigns
-   the number, writes the online store, stamps the record's `written_at` (its envelope
-   `ingested_at`) and produces it before it starts the next (the gateway serialises on its event
-   loop, ADR-0039). So for numbers `k < n < j`, `written_at(k) <= write(n) <= written_at(j)`.
-2. *Lease.* A write happens only while the writer is ready: within `lease_s` of the start of a
-   heartbeat that committed before it, plus at most `takeover_margin_s` between the final
-   readiness check and the store write (ADR-0051 §2).
+1. *Serial writer.* One process writes a session, and handles one observation at a time. It assigns
+   the number, stamps the record's `written_at` (its envelope `ingested_at`), writes the online
+   store and produces the record, all before it starts the next. The gateway serialises on its
+   event loop (ADR-0039). The order of steps within one observation does not matter; what matters is
+   that observations never interleave. So for numbers `k < n < j`,
+   `written_at(k) <= write(n) <= written_at(j)`.
+2. *Lease.* A write happens only while the writer is ready, and only for the session that numbered
+   it: within `lease_s` of the start of a heartbeat that committed before it, plus at most
+   `takeover_margin_s` between the final readiness check and the store write (ADR-0051 §2). A
+   session the same process acquires later never writes a predecessor's numbers.
 3. *Clocks.* `written_at` is the writer's host clock, as the write is. Session times come from
    PostgreSQL, within `clock_margin_s` of it.
 4. *Snapshot.* `ledger_read_at` is PostgreSQL's `now()` for the ledger read, so the read sees every
@@ -43,8 +46,10 @@ the delivery timeout would put such a loss outside its gap; the writer's own sta
   out: `heartbeat_at + lease_s + takeover_margin_s + 2 * clock_margin_s < ledger_read_at`. It then
   ends at `heartbeat_at + lease_s + takeover_margin_s + clock_margin_s`. Otherwise, or when a
   record shows the writer outlived that bound, the tail is open.
-- *Inconsistent times* (a run whose start would follow its end) contradict the premises: an
-  anomaly, and that run's gap starts at the session's start.
+- *Inconsistent times* contradict the premises. The bounds mix host stamps with PostgreSQL times,
+  each within the clock margin of the other, so they may cross by up to twice the margin and still
+  be consistent. A run whose start follows its end by more than that is an anomaly, and that run's
+  gap starts at the session's start.
 
 **Outside the ledger.**
 - A session id the ledger does not hold is an open gap. It starts at the ledger read when the
@@ -55,7 +60,8 @@ the delivery timeout would put such a loss outside its gap; the writer's own sta
   writes fall at or after `through`, which is why `through` never passes the ledger read.
 
 `Coverage.vouches(start, end)` is the question a reader asks: whether the log vouches for every
-write in that span.
+write in that span. It never does while any anomaly stands, because an anomaly means a premise the
+bounds rest on does not hold.
 """
 
 from __future__ import annotations
@@ -140,17 +146,18 @@ class Coverage:
         return (*self.unknown, *(gap for s in self.sessions.values() for gap in s.gaps))
 
     @property
+    def consistent(self) -> bool:
+        """No anomaly anywhere: every premise the bounds rest on held for what was read."""
+        return not self.anomalies and all(not s.anomalies for s in self.sessions.values())
+
+    @property
     def gap_free(self) -> bool:
         """No gap and no anomaly anywhere. Says nothing about writes at or after `through`."""
-        return (
-            not self.gaps
-            and not self.anomalies
-            and all(not session.anomalies for session in self.sessions.values())
-        )
+        return not self.gaps and self.consistent
 
     def vouches(self, start: dt.datetime, end: dt.datetime) -> bool:
-        """Whether the log vouches for every write in `[start, end]`."""
-        if start > end or end >= self.through:
+        """Whether the log vouches for every write in `[start, end]`: never with an anomaly."""
+        if start > end or end >= self.through or not self.consistent:
             return False
         return not any(gap.overlaps(start, end) for gap in self.gaps)
 
@@ -201,7 +208,8 @@ def _assess_session(
     gaps: list[Gap] = []
 
     def run(first: int, last: int, lower: dt.datetime, upper: dt.datetime) -> None:
-        if lower > upper:
+        # Host stamps against PostgreSQL times: consistent while they cross by at most two margins.
+        if lower - margin > upper + margin:
             anomalies.append(
                 f"numbers {first}-{last}: no serial writer stamps these times, so the gap starts "
                 f"at the session's start"

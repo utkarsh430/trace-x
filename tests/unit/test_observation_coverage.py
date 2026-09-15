@@ -278,6 +278,61 @@ def test_stamps_no_serial_writer_produces_are_an_anomaly_and_the_gap_widens_to_t
     _well_formed(coverage)
 
 
+def test_a_host_stamp_crossing_a_postgresql_time_within_twice_the_margin_is_consistent() -> None:
+    """Critic re-review finding 3: with the host 0.3 s behind PostgreSQL, number 2 is stamped before
+    the session's recorded start. Within the margins that is consistent, not an anomaly."""
+    rows = [_row(started=10.0, closed=60.0, last_seq=2)]
+    coverage = _assess(rows, [_one(2, written=9.76, arrived=10.3)])
+    session = coverage.sessions["s1"]
+    assert not session.anomalies and coverage.consistent
+    (gap,) = session.gaps
+    assert gap == Gap("s1", _at(10.0) - MARGIN, _at(9.76) + MARGIN, (1,))
+    _well_formed(coverage)
+
+
+def test_a_stamp_ahead_of_the_close_within_the_margins_is_consistent() -> None:
+    coverage = _assess([_row(closed=60.0, last_seq=2)], [_one(1, written=60.4, arrived=60.6)])
+    session = coverage.sessions["s1"]
+    assert not session.anomalies
+    (gap,) = session.gaps
+    assert gap == Gap("s1", _at(60.4) - MARGIN, _at(60.0) + MARGIN, (2,))
+
+
+def test_stamps_crossing_by_more_than_twice_the_margin_are_an_anomaly() -> None:
+    rows = [_row(started=10.0, closed=60.0, last_seq=2)]
+    coverage = _assess(rows, [_one(2, written=7.5, arrived=10.3)])
+    session = coverage.sessions["s1"]
+    assert session.anomalies and not coverage.consistent
+    (gap,) = session.gaps
+    assert gap == Gap("s1", _at(7.5) - MARGIN, _at(7.5) + MARGIN, (1,))
+
+
+def test_nothing_is_vouched_for_while_an_anomaly_stands() -> None:
+    """A session the ledger should hold is missing: an anomaly whose own gap starts far later, so
+    only the anomaly itself can withhold the earlier span."""
+    rows = [_row(closed=60.0, last_seq=2)]
+    assert _assess(rows, _seen(1, 2)).vouches(_at(10.0), _at(20.0))
+    ghost = _one(1, written=500.0, arrived=500.5, session_id="ghost")
+    coverage = _assess(rows, [*_seen(1, 2), ghost])
+    assert coverage.anomalies and not any(
+        gap.overlaps(_at(10.0), _at(20.0)) for gap in coverage.gaps
+    )
+    assert not coverage.vouches(_at(10.0), _at(20.0))
+
+
+def test_a_session_absent_from_the_ledger_within_the_margin_of_the_read_is_not_an_anomaly() -> None:
+    """The ledger is read at 100 s. A session it does not hold has a first stamp of 99.5 s.
+
+    On a host clock half a second behind PostgreSQL, that session may have opened just after the
+    read. The result is an open gap from the earlier of the two, not an anomaly.
+    """
+    late = _one(1, written=99.5, arrived=100.2, session_id="late")
+    coverage = _assess([_row(closed=60.0, last_seq=1)], [*_seen(1), late], ledger_read=100.0)
+    assert not coverage.anomalies and coverage.consistent
+    (gap,) = [gap for gap in coverage.unknown if gap.session_id == "late"]
+    assert gap == Gap("late", _at(99.5) - MARGIN, None)
+
+
 def test_sessions_are_judged_independently() -> None:
     coverage = _assess(
         [_row("s1", closed=60.0, last_seq=2), _row("s2", heartbeat=30.0)],

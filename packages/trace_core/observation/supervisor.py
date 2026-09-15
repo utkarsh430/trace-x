@@ -113,6 +113,15 @@ class WriterSupervisor:
     @property
     def ready(self) -> bool:
         """Whether this process is the prepared writer, within its lease. Read per request."""
+        return self.ready_as(None)
+
+    def ready_as(self, session_id: str | None) -> bool:
+        """Whether this process may write now, for an observation numbered in `session_id`.
+
+        Ready, and that session is still the one writing. A session this process acquires after a
+        loss never writes a predecessor's numbers (ADR-0051 §2), however ready it is. With None,
+        nothing was numbered, and readiness alone decides.
+        """
         session, confirmed = self._writable, self._confirmed_at
         return (
             session is not None
@@ -120,6 +129,7 @@ class WriterSupervisor:
             and session.state is SessionState.ACTIVE
             and confirmed is not None
             and self._clock() - confirmed < self._lease_s
+            and (session_id is None or session.session_id == session_id)
         )
 
     @property

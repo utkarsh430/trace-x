@@ -119,7 +119,9 @@ the first version bounded gaps by arrival times and ignored when the ledger and 
 - **Premises.**
   - One serial writer per session. The gateway handles one observation at a time on its event loop,
     and stamps the record's envelope `ingested_at` before producing it.
-  - The writer writes only within `lease_s` of a committed heartbeat, plus `takeover_margin_s` (§2).
+  - The writer writes only within `lease_s` of a committed heartbeat, plus `takeover_margin_s` (§2),
+    and only for the session that numbered the observation. A session the same process acquires
+    after a loss never writes its predecessor's numbers.
   - Session times come from PostgreSQL, within the clock margin.
   - The ledger read carries its own database time.
   - The log is read through a stated high-water mark.
@@ -137,7 +139,8 @@ the first version bounded gaps by arrival times and ignored when the ledger and 
 - **Outside the ledger.**
   - A session id the ledger does not hold is an open gap.
   - A record without usable session headers, or without a usable stamp, is a gap at its own times.
-  - Stamps that no serial writer could produce are anomalies.
+  - Stamps that no serial writer could produce, beyond twice the clock margin, are anomalies.
+    `vouches` is false while any anomaly stands.
 - **Bronze** supplies each record's stamp and a high-water mark: over every partition the
   checkpoints read, the earliest of the newest arrivals. The mark is strict, so rows at or past it
   are left out. When there is no mark, gaps are still reported but nothing is vouched for.
@@ -158,6 +161,9 @@ the first version bounded gaps by arrival times and ignored when the ledger and 
     vouch for the horizon: it ends before `through`, no gap overlaps it, and there is no anomaly.
     The watermark must clear the horizon's end by the clock margin. Any unresolved gap on either
     path keeps it INCOMPLETE.
+  - The watermark vouches for delivery to Kafka, not for presence in Bronze. A caller that
+    certifies history rebuilt from Bronze must also require Bronze's `tx.authorization.v1`
+    conservation and high-water mark through the horizon.
 
 ### 6. `tx.scored.v1`
 - **Key:** `account_id`. **Dedup identity:** `payload.transaction_id`.
@@ -256,6 +262,12 @@ the first version bounded gaps by arrival times and ignored when the ledger and 
 - A network partition can keep a stale backend's lock until PostgreSQL notices the dead connection,
   so no successor takes over until then. The partitioned process stops writing when its lease
   expires, and its gap is bounded by its last heartbeat.
+- A Redis command the client gave up on can still run when Redis resumes, after the writer's next
+  stamp. If that observation's record is also lost from the log, the write falls outside its gap.
+  That needs two faults at once: a stalled store and a lost record.
+- The completeness guard's `reconcile` writes Redis before the final writer check, to withdraw
+  completeness. A stale writer can therefore move the completeness epoch after its lease. That
+  only ever withdraws a claim.
 - A process suspended between its readiness check and its write (a paused VM) can outlive both its
   lease and a successor's grace. The store checks no fencing token, so an overlap is not prevented.
   The session headers planned for published observations (slice 3) are what could make it
@@ -296,6 +308,13 @@ the first version bounded gaps by arrival times and ignored when the ledger and 
     - the rule stated in §5;
     - property tests over generated histories;
     - chaos checks that put each lost write's recorded time inside a gap.
+- **Critic re-review (2026-09-15):**
+  - The write check now also requires the session that numbered the observation
+    (`ready_as(session_id)`). Before, a same-process re-acquisition let an old session's number pass.
+  - Clock-offset false anomalies are fixed, and `vouches` now refuses to vouch while any anomaly
+    stands.
+  - Readiness reports whether the relay thread is alive.
+  - The residuals are recorded above.
 - **Authorization-outcome delivery watermark (implemented):** migration 0008,
   `outbox_watermark.advance` in the relay's marking transaction, and `assess_history`, with unit,
   integration and chaos tests.

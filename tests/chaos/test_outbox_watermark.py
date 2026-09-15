@@ -84,14 +84,22 @@ def test_a_lost_marking_commit_keeps_history_incomplete_until_the_duplicates_are
     )
     owner.execute("TRUNCATE app.outbox_delivery_watermark")
     try:
+        # Seeded first, so "held back" can be told from "never written".
+        assert _relay(outbox_topic, pool, "chaos-watermark-seed").run_once().claimed == 0
+        with pool.connection() as conn:
+            seeded = outbox_watermark.read(conn)
+        assert seeded is not None
         ids = [_insert(pool, _event(i, account=f"acct_{200_000 + i:06d}")) for i in range(3)]
         with pool.connection() as conn:
-            newest = conn.execute(
-                "SELECT max(created_at) FROM app.outbox WHERE outbox_id = ANY(%s)", (ids,)
-            ).fetchone()[0]
+            oldest, newest = conn.execute(
+                "SELECT min(created_at), max(created_at) FROM app.outbox WHERE outbox_id = ANY(%s)",
+                (ids,),
+            ).fetchone()
+        assert seeded < oldest
         start = _watermarks(outbox_topic, TX_AUTHORIZATION_V1)
         failed: list[BaseException] = []
         relay = _relay(outbox_topic, pool, "chaos-watermark-first")
+        concurrent = _relay(outbox_topic, pool, "chaos-watermark-concurrent")
 
         def pass_that_loses_its_commit() -> None:
             try:
@@ -109,6 +117,12 @@ def test_a_lost_marking_commit_keeps_history_incomplete_until_the_duplicates_are
                 pid = _relay_backend(owner)
                 time.sleep(0.2)
             assert pid is not None, "the relay's pass never reached its flush"
+            # A second relay while the first holds the rows in its flush: SKIP LOCKED gives it
+            # nothing, and its advance must still stop at the rows it could not see.
+            assert concurrent.run_once().claimed == 0
+            with pool.connection() as conn:
+                during = outbox_watermark.read(conn)
+            assert during is not None and seeded <= during <= oldest
             owner.execute("SELECT pg_terminate_backend(%s)", (pid,))
         finally:
             _docker("unpause", outbox_topic.name)
@@ -127,10 +141,7 @@ def test_a_lost_marking_commit_keeps_history_incomplete_until_the_duplicates_are
         assert not verdict.complete, "records in Kafka are not marks; history stays incomplete"
         with pool.connection() as conn:
             held = outbox_watermark.read(conn)
-            oldest = conn.execute(
-                "SELECT min(created_at) FROM app.outbox WHERE outbox_id = ANY(%s)", (ids,)
-            ).fetchone()[0]
-        assert held is None or held <= oldest, "the watermark never passed an unmarked row"
+        assert held == during, "the lost commit moved nothing; the watermark never passed a row"
 
         healthy = _relay(outbox_topic, pool, "chaos-watermark-second")
         assert healthy.run_once().published == 3

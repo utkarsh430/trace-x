@@ -217,6 +217,12 @@ class OutboxRelay:
         for (topic, outcome), count in tallies.items():
             self._record(topic, outcome, count)
 
+    @property
+    def running(self) -> bool:
+        """Whether the relay's thread is alive, so readiness can report a relay that has died."""
+        thread = self._thread
+        return thread is not None and thread.is_alive() and not self._stop.is_set()
+
     def start(self) -> None:
         if self._thread is None:
             self._thread = threading.Thread(target=self._run, name="outbox-relay", daemon=True)

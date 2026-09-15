@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import datetime as dt
 import uuid
+from collections.abc import Callable
 from typing import Any
 
 import pytest
@@ -67,12 +68,28 @@ class SpyStore:
         return getattr(self.inner, name)
 
 
+class LosableFence(RecordingFence):
+    """Confirms the fence until told to lose one heartbeat."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.lose = False
+
+    def heartbeat(self, session_id: str) -> bool:
+        if self.lose:
+            self.lose = False
+            return False
+        return True
+
+
 class LeaseOutlastingGuard:
-    """A completeness guard whose reconcile, once armed, takes longer than the writer's lease."""
+    """A completeness guard whose reconcile, once armed, takes longer than the writer's lease, or
+    does whatever `on_reconcile` says happens meanwhile."""
 
     def __init__(self, clock: Clock) -> None:
         self.clock = clock
         self.armed = False
+        self.on_reconcile: Callable[[], None] | None = None
         self.unrecorded: list[HoleReason] = []
 
     @property
@@ -80,7 +97,9 @@ class LeaseOutlastingGuard:
         return False
 
     def reconcile(self) -> None:
-        if self.armed:
+        if self.armed and self.on_reconcile is not None:
+            self.on_reconcile()
+        elif self.armed:
             self.clock.now += 3 * HOUR_S
 
     def resume(self) -> None:
@@ -101,7 +120,7 @@ class RecordingAuthorizations:
 
 class Gateway:
     def __init__(self, *, authorizations: Any = None) -> None:
-        self.fence, clock = RecordingFence(), Clock()
+        self.fence, clock = LosableFence(), Clock()
         self.writer = WriterSupervisor(
             connect=Conn,
             producer="trace-gateway@0.1.0",
@@ -161,6 +180,32 @@ def test_a_fence_lost_while_scoring_waits_writes_nothing_and_publishes_no_number
     assert gateway.store.writes == ["score"], "the second transaction never reached the store"
     assert _seqs(gateway.producer) == [(TX_SCORED_V1, 1)], "number 2 is never published"
     assert gateway.fence.closed == {}, "an unpublished number leaves the session unclosed"
+
+
+@pytest.mark.parametrize("route", ["transaction", "identity"])
+def test_a_number_from_a_lost_session_is_refused_once_the_process_writes_as_a_new_one(
+    route: str,
+) -> None:
+    """Critic re-review finding 1: while the request waits, its session is lost and this same
+    process acquires a new one. The process is ready again, but not for the old session's number."""
+    gateway = Gateway()
+
+    def lose_and_reacquire() -> None:
+        gateway.fence.lose = True
+        gateway.writer.tick()
+
+    gateway.guard.on_reconcile = lose_and_reacquire
+    with gateway.client as client:
+        before = gateway.writer.session
+        assert before is not None and before.session_id is not None
+        gateway.guard.armed = True
+        refused = _score(client) if route == "transaction" else _identity(client, "PASSWORD_CHANGE")
+        after, ready = gateway.writer.session, gateway.writer.ready
+    _assert_refused_as_not_the_writer(refused)
+    assert after is not None and after.session_id != before.session_id
+    assert ready, "the process is the writer again, as a new session"
+    assert gateway.store.writes == [], "nothing numbered in the lost session reached the store"
+    assert gateway.producer.produced == []
 
 
 def test_a_fence_lost_while_an_identity_event_waits_writes_nothing() -> None:
