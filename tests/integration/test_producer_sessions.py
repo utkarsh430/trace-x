@@ -175,6 +175,10 @@ def test_a_second_writer_session_is_not_ready_while_the_first_holds_the_fence(co
         other.close()
 
 
+RECENT_S = 5.0
+"""How recent a heartbeat must be to count as live in the predecessor test."""
+
+
 def _skip_if_a_gateway_holds_the_fence(conn: Any) -> None:
     """A running gateway's live session makes any other writer wait, so no absence of a live
     predecessor can be asserted while one holds the gateway's lock."""
@@ -201,13 +205,17 @@ def test_the_writer_connection_is_autocommit_and_time_bounded(conn: Any) -> None
 def test_a_live_predecessor_is_seen_and_a_closed_or_silent_one_is_not(conn: Any) -> None:
     _skip_if_a_gateway_holds_the_fence(conn)
     ledger = PostgresSessionLedger(conn)
+    # The window is short on purpose. `others_live` looks at every session in the shared database,
+    # and a writer stopped without a confirmed flush -- a compose gateway with no observation log --
+    # stays unclosed by design (ADR-0051 §4). Sixty seconds counted such a session as this test's
+    # live predecessor. Five still spans the milliseconds between these statements many times over.
     ledger.open(session_id="s-old", producer="p", instance_id="gw-old")
     ledger.open(session_id="s-new", producer="p", instance_id="gw-new")
-    assert ledger.others_live("s-new", within_s=60.0)
+    assert ledger.others_live("s-new", within_s=RECENT_S)
     assert not ledger.others_live("s-new", within_s=0.0), "a heartbeat older than the window"
     assert ledger.close("s-old", last_seq=0)
-    assert not ledger.others_live("s-new", within_s=60.0), "a cleanly closed predecessor"
-    assert ledger.others_live("s-old", within_s=60.0), "the open session is live to anyone else"
+    assert not ledger.others_live("s-new", within_s=RECENT_S), "a cleanly closed predecessor"
+    assert ledger.others_live("s-old", within_s=RECENT_S), "the open session is live to anyone else"
 
 
 def _supervisor(name: str, prepared: list[str]) -> WriterSupervisor:

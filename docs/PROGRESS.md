@@ -1309,6 +1309,47 @@ both reports.
     - a Silver reset needs Bronze's log from version 0;
     - there is one writer per canonical table;
     - `publish._models` is private.
+* **Phase 3 exit item: service-backed tests in CI. Configured and proven locally, not yet run on
+  GitHub (2026-09-15).**
+  * **The gap.** `test-integration` started no services and installed no JVM.
+    * About 130 integration and chaos tests use the compose PostgreSQL and Redis. In CI they skipped
+      loudly, and the job stayed green.
+    * The Kafka-backed Bronze and Silver integration tests skipped for want of a JDK.
+    * `test-stream` selected the same broker-backed tests with no broker.
+  * **The change.**
+    * *Provisioning.* `test-integration` now installs Temurin 17 and the verified jars, and writes a
+      throwaway `.env` from `.env.example` with random passwords and token. It starts the compose
+      core services and migrates.
+    * *Two pytest sessions.* The first stops the gateway, waits out the writer takeover grace (read
+      from the supervisor), then runs `integration or chaos` without the gateway concurrency test.
+      The second starts the gateway, waits for `/readyz`, and runs that one test.
+    * *`test-stream`* runs `stream and not integration`.
+    * *The CI skip guard.* `tests/conftest.py` fails any CI session whose marker expression selects
+      `integration`, `chaos` or `stream` if a test skipped (`ci_skip_failure`, 3 unit tests).
+    * `docs/TESTING.md` is updated.
+  * **Evidence: the CI-equivalent run locally** (`CI=true pytest -m "integration or chaos"`, compose
+    services, Temurin 17).
+    * *The first run:* 257 passed, 2 skipped, 2 failed, 1 error. The guard failed the session as
+      designed. Classified:
+      - `test_migration_is_recorded_in_the_version_table` was a **stale test (C)**. Migration 0008
+        landed in Step 4, but the pin said 0007. It went unnoticed because the suite never ran in CI;
+        the pin is now 0008.
+      - The writer-fence and producer-session tests need the gateway stopped, and
+        `test_gateway_concurrency` needs it running. This was **CI topology (D)**, hence the two
+        sessions.
+      - A feature-store-holes setup error was a **harness race (D)**. `flushdb` ran before Redis
+        answered after the previous chaos test's pause; the local Redis was empty, so data size was
+        ruled out. The fixture now waits for Redis before flushing.
+      - The predecessor test counted every unclosed session in the shared database within 60 s. A
+        compose gateway stopped without a confirmed flush stays unclosed by design (ADR-0051 §4), so
+        this was a **test-isolation defect (C)**; its window is now 5 s.
+    * *The lead's own slip, not counted.* A re-run stored the compose command in a variable, which
+      zsh does not word-split, so the gateway was never stopped.
+    * *After the fixes:* session one (gateway stopped) passed 34 of the affected tests, none skipped;
+      session two passed the gateway concurrency test.
+  * **Not yet proven.** No GitHub Actions run of the new workflows exists: the branch is not pushed,
+    and pushing is outward-facing. It is raised at Phase 3 exit.
+
 * **Step E — `eval-v2`.** Stages 1, 1b and 1c are complete. Their code is integrated onto this branch.
   * **Integration.** The worktree branch `worktree-agent-aae9faa608636c9c8` was fast-forwarded to the
     phase branch, and the Step E work was committed on top. The phase branch fast-forwards to it.

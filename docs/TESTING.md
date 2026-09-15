@@ -42,9 +42,13 @@ unimplemented regardless of how much code exists.
    uncalibrated; ML beats rules-only) and *properties* (termination, idempotency), never magic values.
 5. **A skipped test must say so loudly.** Resource-gated tests (`external`, `cloud`, `integration`)
    print an explicit reason. A silent skip is a false pass. In CI a loud skip is still not evidence:
-   `tests/conftest.py` fails every Docker-backed test at setup when Docker is missing, and `-m stream`
-   fails when no stream test executed. A test that finds a service for itself -- the Redis and
-   PostgreSQL suites -- still skips where that service is absent, which today includes CI (PROGRESS).
+   - `tests/conftest.py` fails every Docker-backed test at setup when Docker is missing.
+   - `-m stream` fails when no stream test executed.
+   - A session whose marker expression selects `integration`, `chaos` or `stream` fails if any test
+     skipped (`ci_skip_failure`).
+   - So CI provisions what those suites find for themselves. `test-integration` starts the compose
+     core services (PostgreSQL, migrated; both Redis instances; the gateway) and installs the pinned
+     JVM toolchain.
 6. **Coverage gates:** ≥85% on `domain/`, `policy/`, `actions/`, `rules/`; ≥70% overall.
 
 ---
@@ -191,8 +195,8 @@ These exist because a specific failure would be severe and silent.
 | `lint` | every push | ruff format + lint, mypy strict, bandit, secret scan, pip-audit |
 | `test-fast` | every push | unit, property, contract, conformance, transport parity |
 | `claims` | every push | `make check-claims` |
-| `test-integration` | PR | testcontainers, feature parity, agent replay, adversarial |
-| `test-stream` | PR | Temurin 17 and SHA-256-verified Spark jars; `pytest -m stream`, failing if no stream test executed (ADR-0045) |
+| `test-integration` | PR | Compose core services (PostgreSQL migrated, both Redis, the gateway), Temurin 17 and verified jars; `pytest -m "integration or chaos"`, failing if any test skipped. Later phases add feature parity, agent replay and adversarial suites |
+| `test-stream` | PR | Temurin 17 and SHA-256-verified Spark jars; `pytest -m "stream and not integration"`, failing if no stream test executed or any skipped (ADR-0045) |
 | `contracts` | PR | OpenAPI + event-schema breaking-change diff vs `main` |
 | `e2e` | nightly + release | full compose, real services, **no-mock grep assertion** |
 | `eval` | nightly + manual | Track A arms A–G, Track B E1–E5, manifest + tier gates, regression gate |

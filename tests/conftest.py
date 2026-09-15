@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -62,6 +63,29 @@ def docker_available() -> bool:
 
 _STREAM_NODEIDS: set[str] = set()
 _STREAM_EXECUTED: list[str] = []
+_SKIPPED: list[str] = []
+_SERVICE_MARKERS: re.Pattern[str] = re.compile(r"(?<!not )\b(integration|chaos|stream)\b")
+_LISTED_SKIPS = 20
+
+
+def ci_skip_failure(expression: str, skipped: Sequence[str], *, in_ci: bool) -> str | None:
+    """The failure message for a CI session that skipped tests it selected for real services.
+
+    A loud skip is right on a laptop missing PostgreSQL, Redis or a JDK. In CI the same skip turns a
+    job green while the tests it names proved nothing (docs/PHASE3_PLAN.md §4.4), so a session whose
+    marker expression selects `integration`, `chaos` or `stream` fails if any test skipped. None
+    when the session may pass.
+    """
+    if not in_ci or not skipped or not _SERVICE_MARKERS.search(expression):
+        return None
+    listed = "".join(f"\n  - {nodeid}" for nodeid in skipped[:_LISTED_SKIPS])
+    if len(skipped) > _LISTED_SKIPS:
+        listed += f"\n  ... and {len(skipped) - _LISTED_SKIPS} more"
+    return (
+        f"\nFAILED (CI skip guard): {len(skipped)} test(s) skipped in a session that selects real "
+        f"services. In CI a skip is not evidence; provision what they need (docs/PHASE3_PLAN.md "
+        f"§4.4):{listed}\n"
+    )
 
 
 def _stream_toolchain_failures() -> list[str]:
@@ -128,6 +152,8 @@ def pytest_report_header(config: pytest.Config) -> list[str]:
 def pytest_runtest_logreport(report: pytest.TestReport) -> None:
     if report.when == "call" and report.passed and report.nodeid in _STREAM_NODEIDS:
         _STREAM_EXECUTED.append(report.nodeid)
+    if report.skipped:
+        _SKIPPED.append(report.nodeid)
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
@@ -140,6 +166,13 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     """
     del exitstatus
     expression = str(session.config.getoption("markexpr") or "")
+    reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+    if (skip_failure := ci_skip_failure(expression, _SKIPPED, in_ci=_in_ci())) is not None:
+        if reporter is not None:
+            reporter.write_line(skip_failure, red=True, bold=True)
+        else:
+            sys.stderr.write(skip_failure)
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
     if re.search(r"(?<!not )\bstream\b", expression) and not _STREAM_EXECUTED:
         message = (
             "\nFAILED (collection guard): `-m stream` selected no stream test that actually "

@@ -1,7 +1,13 @@
 name: test-integration
 
-# Real services, never mocks (docs/TESTING.md §4). This workflow runs the
-# release-blocking ground-truth isolation suite against a real PostgreSQL.
+# Real services, never mocks (docs/TESTING.md §4). The integration and chaos suites run against the
+# same compose services a developer's `make up` starts -- PostgreSQL (migrated), both Redis
+# instances and the gateway -- and the pinned JVM toolchain, so the Kafka-backed Bronze and Silver
+# tests execute here too. Kafka tests start their own broker from compose's image.
+#
+# In CI a skipped test fails the session (tests/conftest.py, `ci_skip_failure`): a job whose
+# service-backed tests skipped would report green while proving nothing. That includes the
+# release-blocking ground-truth isolation suite.
 
 on:
   pull_request:
@@ -15,23 +21,93 @@ concurrency:
 jobs:
   integration:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
 
-      - name: Install dependencies
-        run: |
-          bash scripts/install_locked.sh python
+      - name: Install dependencies from the hashed locks
+        run: bash scripts/install_locked.sh python
 
-      # Docker is available on ubuntu-latest, so the suite manages its own
-      # PostgreSQL container exactly as it does locally -- one code path.
-      - name: Integration suite (incl. ground-truth isolation)
-        run: pytest -m integration -v
+      - name: Restore verified Spark jars
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/trace-x/spark-jars
+          key: spark-jars-${{ hashFiles('packages/trace_core/stream/jars.lock') }}
+
+      - name: Fetch and verify Spark jars
+        run: python scripts/stream_jars.py fetch
+
+      # Throwaway credentials for this job only: every password and the local service token are
+      # random, and the file never leaves the runner.
+      - name: Generate the job's .env from .env.example
+        run: |
+          python - <<'PY'
+          import pathlib, re, secrets
+          lines = []
+          for line in pathlib.Path(".env.example").read_text().splitlines():
+              key = line.split("=", 1)[0]
+              if re.fullmatch(r"[A-Z_]+_PASSWORD", key):
+                  line = f"{key}={secrets.token_hex(16)}"
+              elif key == "TRACE_SERVICE_TOKEN_LOCAL":
+                  line = f"{key}=local_ci_{secrets.token_hex(16)}"
+              lines.append(line)
+          pathlib.Path(".env").write_text("\n".join(lines) + "\n")
+          PY
+
+      - name: Start the core services
+        run: docker compose -f deploy/compose.yml --env-file .env --profile core up -d --wait
+
+      - name: Apply migrations (schemas, roles, grants -- ADR-0004)
+        run: |
+          set -a; . ./.env; set +a
+          python -m alembic upgrade head
+
+      # Two sessions, because two groups of tests need opposite gateway states. The writer-fence
+      # and producer-session tests assert that no live predecessor holds the fence, so the gateway
+      # must be stopped; only test_gateway_concurrency drives the running gateway over HTTP. Every
+      # other gateway test builds the app in-process.
+      - name: Integration and chaos suites, gateway stopped (a skip fails the session in CI)
+        run: |
+          set -a; . ./.env; set +a
+          docker compose -f deploy/compose.yml --env-file .env stop gateway
+          # A gateway that took the fence leaves a lease that expires only after the takeover
+          # grace; wait it out, from the supervisor's own constants, so the fence tests see no
+          # live predecessor.
+          sleep "$(python -c 'from trace_core.observation.supervisor import TAKEOVER_GRACE_S as g; print(int(g) + 2)')"
+          pytest -m "integration or chaos" -v -rs \
+            --deselect tests/integration/test_gateway_concurrency.py
+
+      # /readyz connects as trace_app, which only the migration creates, so readiness is awaited
+      # after it.
+      - name: Start the gateway and wait for it to be ready
+        run: |
+          set -a; . ./.env; set +a
+          docker compose -f deploy/compose.yml --env-file .env start gateway
+          for _ in $(seq 90); do
+            curl -fsS "http://localhost:${TRACE_GATEWAY_PORT:-8010}/readyz" >/dev/null && exit 0
+            sleep 2
+          done
+          curl -sS "http://localhost:${TRACE_GATEWAY_PORT:-8010}/readyz" || true
+          exit 1
+
+      - name: Gateway concurrency against the running gateway (a skip fails the session in CI)
+        run: |
+          set -a; . ./.env; set +a
+          pytest -m integration -v -rs tests/integration/test_gateway_concurrency.py
+
+      - name: Service logs
+        if: failure()
+        run: docker compose -f deploy/compose.yml --env-file .env logs --no-color --tail 200
 
       - name: Ground-truth isolation is a release blocker
         if: failure()

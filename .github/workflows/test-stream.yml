@@ -47,5 +47,7 @@ jobs:
       - name: Fetch and verify Spark jars
         run: python scripts/stream_jars.py fetch
 
-      - name: Stream tests (the session fails if none executed)
-        run: pytest -m stream -v
+      # Stream tests that also need a broker or PostgreSQL are integration-marked and run in
+      # test-integration, which provisions them; here they would only skip.
+      - name: Stream tests (the session fails if none executed, or if any skipped)
+        run: pytest -m "stream and not integration" -v -rs

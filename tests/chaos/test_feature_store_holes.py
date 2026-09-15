@@ -74,6 +74,11 @@ def feature_redis() -> Iterator[Any]:
         retry=Retry(NoBackoff(), 0),
         retry_on_timeout=False,
     )
+    # The previous chaos test paused and unpaused this container, and its teardown only polls for
+    # a while. Flushing before Redis answers again timed out at setup, which is a harness race, not
+    # a result.
+    if not _answering(client):
+        pytest.fail(f"container {CONTAINER!r} is running but Redis did not answer within 5 s")
     client.flushdb()
     try:
         yield client
