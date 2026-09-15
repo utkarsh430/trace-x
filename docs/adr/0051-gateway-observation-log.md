@@ -142,6 +142,29 @@ Bronze (Step 5) applies it; it is stated here because the producer must make it 
   - The deciding test is Step 4's controlled hot-path A/B. A is kept only if the scoring-core p99
     and achieved throughput stay within the no-relay control's run-to-run noise. Otherwise B.
     ADR-0049 is updated to match.
+- **The A/B, pre-registered before any run (2026-09-15).** Written here before the first measurement,
+  so neither the rule nor the workload is chosen after seeing a result:
+  - **One image, three arms differing only in configuration**, all built from the same clean commit:
+    - `log-off`: no broker configured, no relay (the publisher's control);
+    - `log-on`: the observation log publishing, no relay (the no-relay control this section names);
+    - `log-relay`: the observation log publishing and the relay running in the gateway (option A).
+  - **Workload:** the load gate's `representative` profile, its seed, 500 TPS, 180 s per run, on this
+    host with the compose limits unchanged.
+  - **State:** before every run the gateway is stopped, both Redis instances flushed, the `app` case,
+    queue, outbox and authorization tables truncated, and the covered topics deleted and recreated
+    from their declarations. Each is verified empty before the gateway restarts.
+  - **Order:** `log-off`, `log-on`, `log-relay`, `log-relay`, `log-on`, `log-off`, so drift over the
+    session and run-to-run noise are both visible.
+  - **Metrics:** the gateway's own decision-latency p99 (`RiskDecision.latency_ms`, the scoring core)
+    and the achieved rate, both from the load harness's records. Each record also carries the live
+    gateway's `/readyz` checks, so every run's arm is read from the gateway, not from a label.
+  - **Rule for the relay's process.** For each metric, the arm's noise is the spread of its own two
+    runs. Option A is kept only if, for both metrics, the difference between the `log-relay` and
+    `log-on` means is no larger than the larger of the two arms' spreads. Otherwise the relay moves to
+    option B, and ADR-0049 is updated to match.
+  - **The publisher's cost** (`log-on` against `log-off`) is measured and reported the same way. No
+    pass threshold is set for it here; the ROADMAP latency budget still applies to every run.
+  - A run that fails the load harness's integrity conditions is recorded and repeated, never dropped.
 - **Settled while implementing (slice 4):**
   - One pass is one transaction: claim the oldest unpublished batch, publish, flush, and mark
     published only the rows the broker confirmed. Delivery reports are counted per topic, so a
