@@ -78,6 +78,9 @@ TABLES: Final = (
 )
 REDIS_CONTAINERS: Final = ("tracex-redis-1", "tracex-redis-cache-1")
 COMPOSE: Final = ("docker", "compose", "-f", "deploy/compose.yml", "--env-file", ".env")
+GATEWAY_IMAGE: Final = "tracex-gateway:dev"
+IMAGE_RECORD: Final = "gateway-image.json"
+"""Beside the run records: the one image every run of an experiment used, and its commit."""
 METRICS: Final = (
     ("server_p99_ms", "scoring-core p99 (ms)"),
     ("achieved_tps", "achieved rate (req/s)"),
@@ -157,6 +160,23 @@ def load_results(record_dir: Path) -> list[Result]:
     return sorted(results, key=lambda result: result.started_at)
 
 
+def load_image(record_dir: Path) -> dict[str, str]:
+    path = record_dir / IMAGE_RECORD
+    if not path.exists():
+        raise ExperimentError(f"{path} is missing: the runs' gateway image is unknown")
+    record = json.loads(path.read_text())
+    return {"git_commit_sha": str(record["git_commit_sha"]), "image_id": str(record["image_id"])}
+
+
+def check_image(results: Sequence[Result], image: Mapping[str, str]) -> None:
+    """Refuse runs whose commit is not the one the pinned gateway image was built from."""
+    if any(result.git_commit_sha != image["git_commit_sha"] for result in results):
+        raise ExperimentError(
+            f"the runs' commit is not the pinned image's ({image['git_commit_sha']}): the numbers "
+            f"would be attributed to code the gateway did not run"
+        )
+
+
 def check_arms(results: Sequence[Result]) -> None:
     """Refuse a comparison the pre-registration does not describe."""
     if tuple(result.arm for result in results) != ORDER:
@@ -205,7 +225,7 @@ def decide(results: Sequence[Result]) -> Decision:
     )
 
 
-def render(results: Sequence[Result], decision: Decision) -> str:
+def render(results: Sequence[Result], decision: Decision, *, image_id: str) -> str:
     """The comparison. Every line carrying a measured number cites the run_id(s) it comes from."""
     runs = {arm: [r.run_id for r in results if r.arm == arm] for arm in ARMS}
     lines = [
@@ -230,6 +250,7 @@ def render(results: Sequence[Result], decision: Decision) -> str:
         "  run.",
         f"- Order: {', '.join(f'`{arm}`' for arm in ORDER)}.",
         f"- Commit `{results[0].git_commit_sha}`, clean worktree for every run.",
+        f"- Gateway image `{image_id}`, built once from that commit and checked before every run.",
         "",
         "## Runs",
         "",
@@ -351,6 +372,40 @@ def reset_stores(env: Mapping[str, str]) -> None:
         consumer.close()
 
 
+def build_gateway_image(record_dir: Path, head: str) -> str:
+    """Build the gateway image from the committed tree once, and pin it for every run.
+
+    Compose starts the gateway without building, so an image left over from an older tree would
+    run silently, and every number would be attributed to a commit it did not come from. The
+    record is created exclusively: one experiment, one image.
+    """
+    _run([*COMPOSE, "--profile", "core", "build", "gateway"])
+    image_id = _run(["docker", "image", "inspect", "--format", "{{.Id}}", GATEWAY_IMAGE]).strip()
+    if not image_id.startswith("sha256:"):
+        raise ExperimentError(f"{GATEWAY_IMAGE} has no image id after the build: {image_id!r}")
+    with (record_dir / IMAGE_RECORD).open("x") as handle:
+        json.dump({"git_commit_sha": head, "image_id": image_id}, handle, sort_keys=True)
+        handle.write("\n")
+    return image_id
+
+
+def require_pinned(head: str, image_id: str) -> None:
+    """Before a run: the tree is still that commit, clean, and the gateway runs the pinned image."""
+    moved = _run(["git", "rev-parse", "HEAD"]).strip() != head
+    if moved or _run(["git", "status", "--porcelain"]).strip():
+        raise ExperimentError("the worktree moved or became dirty during the experiment")
+    container = _run([*COMPOSE, "ps", "-q", "gateway"]).strip()
+    running = (
+        _run(["docker", "inspect", "--format", "{{.Image}}", container]).strip()
+        if container
+        else ""
+    )
+    if running != image_id:
+        raise ExperimentError(
+            f"the gateway runs image {running or 'none'}, not the pinned {image_id}"
+        )
+
+
 def start_gateway(arm: str, base_url: str) -> dict[str, str]:
     """Start the gateway with the arm's configuration; return its checks once they match."""
     _run(
@@ -381,14 +436,17 @@ def run_all(record_dir: Path, *, duration_s: int, target_tps: int, base_url: str
         raise ExperimentError(
             "the worktree is dirty: commit before the runs, or none is publishable"
         )
+    head = _run(["git", "rev-parse", "HEAD"]).strip()
     env = {**_dotenv(), **os.environ}
     record_dir.mkdir(parents=True, exist_ok=True)
+    image_id = build_gateway_image(record_dir, head)
     _run([*COMPOSE, "--profile", "streaming", "up", "-d", "--wait", "kafka"])
     for index, arm in enumerate(ORDER, start=1):
         before = set(record_dir.glob("load-*.json"))
         print(f"[{index}/{len(ORDER)}] {arm}: resetting stores", flush=True)
         reset_stores(env)
         checks = start_gateway(arm, base_url)
+        require_pinned(head, image_id)
         print(f"[{index}/{len(ORDER)}] {arm}: gateway ready {checks}", flush=True)
         k6_dir = record_dir / f"k6-{index}-{arm}"
         done = subprocess.run(  # noqa: S603
@@ -427,11 +485,13 @@ def run_all(record_dir: Path, *, duration_s: int, target_tps: int, base_url: str
 
 def publish(record_dir: Path) -> Decision:
     results = load_results(record_dir)
+    image = load_image(record_dir)
     decision = decide(results)
+    check_image(results, image)
     MANIFEST_DIR.mkdir(parents=True, exist_ok=True)
     for result in results:
         shutil.copy2(record_dir / f"{result.run_id}.json", MANIFEST_DIR / f"{result.run_id}.json")
-    REPORT.write_text(render(results, decision))
+    REPORT.write_text(render(results, decision, image_id=image["image_id"]))
     return decision
 
 

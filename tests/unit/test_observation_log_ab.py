@@ -32,6 +32,7 @@ def _load() -> Any:
 
 
 ab = _load()
+IMAGE_ID = "sha256:" + "0" * 64
 CHECKS = {
     "log-off": {
         "writer_session": "active s",
@@ -120,7 +121,7 @@ def test_a_comparison_the_pre_registration_does_not_describe_is_refused() -> Non
 
 def test_every_measured_number_in_the_report_cites_a_run_id() -> None:
     results = _results({"log-off": (0.60, 0.62), "log-on": (0.66, 0.70), "log-relay": (0.69, 0.71)})
-    text = ab.render(results, ab.decide(results))
+    text = ab.render(results, ab.decide(results), image_id=IMAGE_ID)
     rows = [
         line
         for line in text.splitlines()
@@ -130,3 +131,52 @@ def test_every_measured_number_in_the_report_cites_a_run_id() -> None:
     assert len(measured) == len(ab.ORDER) + 4
     assert all("run_id:" in row for row in measured)
     assert "Option A is kept" in text
+    assert f"Gateway image `{IMAGE_ID}`" in text
+
+
+def test_runs_from_a_commit_other_than_the_pinned_image_s_are_refused() -> None:
+    results = _results(dict.fromkeys(ab.ARMS, (0.6, 0.6)))
+    ab.check_image(results, {"git_commit_sha": "a" * 40, "image_id": IMAGE_ID})
+    with pytest.raises(ab.ExperimentError, match="pinned image"):
+        ab.check_image(results, {"git_commit_sha": "b" * 40, "image_id": IMAGE_ID})
+
+
+class FakeDocker:
+    def __init__(self, *, running: str, head: str = "a" * 40, status: str = "") -> None:
+        self.answers = {"rev-parse": head, "status": status, "ps": "c0ffee", "inspect": running}
+        self.calls: list[list[str]] = []
+
+    def __call__(self, command: list[str], **_: Any) -> str:
+        self.calls.append(list(command))
+        for word in ("rev-parse", "status", "ps", "inspect"):
+            if word in command:
+                return self.answers[word]
+        return ""
+
+
+def test_one_image_is_built_and_pinned_per_experiment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(ab, "_run", FakeDocker(running=IMAGE_ID))
+    assert ab.build_gateway_image(tmp_path, "a" * 40) == IMAGE_ID
+    assert ab.load_image(tmp_path) == {"git_commit_sha": "a" * 40, "image_id": IMAGE_ID}
+    with pytest.raises(FileExistsError):
+        ab.build_gateway_image(tmp_path, "a" * 40)
+
+
+@pytest.mark.parametrize(
+    ("docker", "match"),
+    [
+        ({"running": "sha256:" + "1" * 64}, "not the pinned"),
+        ({"running": IMAGE_ID, "head": "b" * 40}, "moved or became dirty"),
+        ({"running": IMAGE_ID, "status": " M scripts/load_gateway.py"}, "moved or became dirty"),
+    ],
+)
+def test_a_run_is_refused_unless_the_gateway_runs_the_pinned_image_from_the_same_tree(
+    docker: dict[str, str], match: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(ab, "_run", FakeDocker(**docker))
+    with pytest.raises(ab.ExperimentError, match=match):
+        ab.require_pinned("a" * 40, IMAGE_ID)
+    monkeypatch.setattr(ab, "_run", FakeDocker(running=IMAGE_ID))
+    ab.require_pinned("a" * 40, IMAGE_ID)

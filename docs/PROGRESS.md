@@ -851,9 +851,16 @@ both reports.
       * The first chaos draft expected COMPLETE straight after the marking pass. That cannot happen:
         no pass moves the watermark past its own start, and COMPLETE needs it past the horizon by the
         margin. The test was corrected, not the rule.
-  * **`P3.observation-log`.** The evidence above is what its revert required. It returns to PASS in
-    the commit that records this, after `make verify` and an independent critic's re-review of these
-    fixes.
+  * **`P3.observation-log`.** The evidence above is what its revert required. It was committed in
+    `1d216c5` with `make verify` green. It returns to PASS once an independent critic's re-review of
+    these fixes finds no Category A defect.
+  * **The A/B harness now pins its gateway image.** The driver used to start the gateway without
+    building it, and no record named the image, so an image built from an older tree could have run
+    unnoticed.
+    * `run` builds the image once from the clean committed tree and records its id beside the run
+      records.
+    * Before every run, it checks that the tree has not moved and that the gateway runs that image.
+    * `report` refuses runs from any other commit, and names the image.
   * **Not yet built:** the controlled hot-path A/B (slice 6), rerun in full on the fixed tree. It
     also decides where the relay runs.
 * **Step 5 — Bronze ingest (Spark agent, integrated by the lead): implemented, before exit evidence**
