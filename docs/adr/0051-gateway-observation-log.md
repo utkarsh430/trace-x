@@ -215,6 +215,28 @@ the first version bounded gaps by arrival times and ignored when the ledger and 
   - **The publisher's cost** (`log-on` against `log-off`) is measured and reported the same way. No
     pass threshold is set for it here; the ROADMAP latency budget still applies to every run.
   - A run that fails the load harness's integrity conditions is recorded and repeated, never dropped.
+- **Result (2026-09-15): option A is rejected, and the relay runs in `trace-worker` (option B).**
+  - `scripts/observation_log_ab.py report` applied the rule as written, to six runs from one pinned
+    image on a clean commit. `benchmarks/gateway/observation-log-ab.md` holds every number, each
+    citing its `run_id`.
+  - **Scoring-core p99:** `log-relay` differed from `log-on` by less than the noise.
+  - **Achieved rate:** `log-relay` differed from `log-on` by slightly more than the noise, so the
+    rule rejects option A on this metric.
+  - **Recorded, not acted on:** on that metric `log-relay` was the faster arm. The noise was tiny
+    because the load harness fixes the offered rate. The rule compares absolute differences, so
+    direction does not count. Reinterpreting the rule after seeing the result is what
+    pre-registration forbids, so the rule stands.
+  - **The publisher's cost** (`log-on` against `log-off`) was within noise on both metrics.
+  - **Repeated runs.** Three runs failed the load harness's integrity conditions and wrote no
+    record. Each was repeated, and its raw k6 summary kept outside the repository:
+    - the first try's run 1 (`log-off`), with dropped iterations;
+    - run 5 (`log-on`), twice: dropped iterations once, then dropped iterations and a p99 over
+      budget.
+  - **What those failures showed.** Each was a short burst of gateway-side latency, with no errors
+    and no lost data, and the bursts were not tied to one arm. PostgreSQL checkpoints did not line
+    up with them. The host was in interactive use during the runs. The driver restarts only whole
+    experiments, so the failed slot was repeated with the driver's own functions from a script
+    outside the repository: the same state reset, pinned image, commit and order.
 - **Settled while implementing (slice 4):**
   - One pass is one transaction: claim the oldest unpublished batch, publish, flush, and mark
     published only the rows the broker confirmed. Delivery reports are counted per topic, so a
@@ -318,7 +340,14 @@ the first version bounded gaps by arrival times and ignored when the ledger and 
 - **Authorization-outcome delivery watermark (implemented):** migration 0008,
   `outbox_watermark.advance` in the relay's marking transaction, and `assess_history`, with unit,
   integration and chaos tests.
-- **Not yet built:** the controlled hot-path A/B, which also decides where the relay runs.
+- **Slice 6 (implemented):**
+  - the controlled hot-path A/B, whose result is above;
+  - option B, `services/worker/relay.py`: a `trace-worker` process that runs `OutboxRelay` with
+    its own bounded pool and producer, refuses to start without a broker or credentials, and exits
+    non-zero when the relay thread dies;
+  - the compose `worker` service, in the `streaming` profile.
+  - The gateway's `TRACE_GATEWAY_OUTBOX_RELAY` stays, off, only so the A/B's `log-relay` arm can
+    be reproduced.
 
 ## Status
 Proposed

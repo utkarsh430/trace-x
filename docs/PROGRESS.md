@@ -24,7 +24,7 @@ planning surfaced recorded under *What Phase 3 planning found in Phase 2's artef
 complete locally** — `make verify`, the real-JVM stream tests on macOS, a hashed install in a Linux
 container, and a Linux build of the gateway image from its hashed runtime lock. Its first GitHub CI run
 (including the new `test-stream` job) is still pending. Wave B (Steps 1, 2, 3 and E) is under way; see
-*WORK IN PROGRESS*. Two Phase 3 capabilities are PASS: `P3.pin-failfast` and `P3.semantics-hardening`. The plan was built by six specialist reviews whose load-bearing claims were
+*WORK IN PROGRESS*. Three Phase 3 capabilities are PASS: `P3.pin-failfast`, `P3.semantics-hardening` and `P3.observation-log`. The plan was built by six specialist reviews whose load-bearing claims were
 checked against the code, by experiment in a throwaway container, or against cited upstream
 documentation — claims resting only on documentation are re-verified by the step that depends on
 them. The architecture that
@@ -532,7 +532,7 @@ both reports.
     Spark session log the lake root to stdout, ahead of the refusal line a toolchain test reads. The
     session factory now resolves the root quietly, and `tests/stream/test_session.py`, rerun after the
     fix, 9 passed, 1 warning. `tests/stream/test_delta_capabilities.py` passed in full.
-* **Step 4 — durable observation log (lead): in progress** (ADR-0051, Proposed; `P3.observation-log`
+* **Step 4 — durable observation log (lead): complete** (ADR-0051, Proposed; `P3.observation-log`
   IN_PROGRESS, reverted from PASS after a critic review). Started 2026-09-14, once the eval-v2 sub-track closed.
   * **Slice 1, fenced producer sessions: implemented.**
     * **Migration 0006, `app.producer_sessions`.** A trigger stamps `started_at`, `heartbeat_at`
@@ -940,8 +940,45 @@ both reports.
           land 1 ms past the lease plus the takeover margin, which the premises forbid.
         * So a passing property run is not evidence that the margins are right. The hand-written
           tests catch all ten mutants on every run, and they remain the deterministic guard.
-  * **Not yet built:** the controlled hot-path A/B (slice 6), rerun in full on the fixed tree. It
-    also decides where the relay runs.
+  * **Slice 6, the controlled hot-path A/B: done. Option A is rejected, and the relay runs in
+    `trace-worker`.**
+    * **How it was decided.** `scripts/observation_log_ab.py report` applied the pre-registered rule
+      as written. It used six runs from one pinned image on commit `8c9a85a`. The report is
+      `benchmarks/gateway/observation-log-ab.md`, and every number in it cites its `run_id`.
+    * **Scoring-core p99:** `log-relay` against `log-on` was within noise.
+    * **Achieved rate:** outside noise, so the rule rejects option A. On that metric `log-relay` was
+      the faster arm, and the noise band was tiny because the offered rate is fixed. The rule compares
+      absolute differences, so it stands as written.
+    * **The publisher's cost** (`log-on` against `log-off`) was within noise on both metrics.
+    * **Attempts:**
+      * `ab-records` was voided by the run-id collision (above);
+      * `ab-records-2` stopped at run 1 (`log-off`), which failed the harness's integrity conditions;
+      * `ab-records-3` recorded runs 1-4. Run 5 (`log-on`) failed integrity twice and passed on its
+        third try. Run 6 passed.
+    * **What the failed runs showed.** Each wrote no record, and its raw k6 summary is kept outside the
+      repository.
+      * Each failure was a short burst of gateway-side latency, with no errors and no lost data. The
+        bursts were not tied to one arm.
+      * PostgreSQL checkpoints did not coincide with them.
+      * The host was in interactive use during the runs.
+    * **How the failed slot was repeated.** The driver restarts only whole experiments, so the slot
+      was repeated with the driver's own functions, from a script outside the repository. It used the
+      same state reset, image, commit and order.
+  * **Option B, implemented:** `services/worker/relay.py`.
+    * It runs `OutboxRelay` in its own process, with its own bounded pool and producer.
+    * It refuses to start without a broker or credentials.
+    * It exits non-zero when the relay thread dies, and logs row counts.
+    * The compose `worker` service runs it in the `streaming` profile.
+    * The gateway's `TRACE_GATEWAY_OUTBOX_RELAY` stays, off, only to reproduce the A/B.
+    * **Evidence:**
+      * `tests/unit/test_worker_relay.py`: 5 passed.
+      * `tests/integration/test_worker_relay_kafka.py`: 2 passed. The real process relays a committed
+        outcome to a real broker, marks it, and stops with exit 0 on SIGTERM. Without a broker it
+        exits 2.
+      * The compose profile tests: 25 passed.
+  * **Step 4: complete. `P3.observation-log` is PASS** on its acceptance command,
+    `pytest -m chaos tests/chaos/test_observation_log.py`, which passed 10 twice on the fixed tree.
+    The critic re-review's Category A defect is fixed, and the A/B is decided.
 * **Step 5 — Bronze ingest (Spark agent, integrated by the lead): implemented, before exit evidence**
   (ADR-0052, Proposed; `P3.kafka-ingest` IN_PROGRESS).
   * **What exists:**

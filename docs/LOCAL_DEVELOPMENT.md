@@ -85,7 +85,7 @@ make up-full             # everything — needs ~15 GB free and 8 GB Docker RAM
 ```
 
 The table is the design. **What `core` actually starts today is postgres, redis and the gateway**;
-`trace-api`, `trace-worker` and the dashboard arrive with their phases, and the MCP servers are
+`trace-api` and the dashboard arrive with their phases; `trace-worker` runs the outbox relay today, in the `streaming` profile, and its investigations arrive with their phase; and the MCP servers are
 spawned over stdio by the worker rather than run as containers. `docs/PROGRESS.md` is the live state.
 
 **Every degraded mode is visible, never silent.** A response made without reconciled features says so
@@ -204,7 +204,7 @@ without a `--result`.
 | Gateway is healthy but `/readyz` returns 503 | Migrations have not run, so the `trace_app` role does not exist | `make migrate`. Health is liveness; readiness needs the database |
 | `/readyz` 503 with `writer_session: lock held elsewhere` | Another gateway process (a second `uvicorn`, a stale container) holds the online store's writer fence | Stop the other process cleanly. One gateway writes online state at a time (ADR-0051) |
 | `/readyz` shows `observation_log: not configured` | `TRACE_GATEWAY_KAFKA_BOOTSTRAP` is empty, the default, because Kafka is the `streaming` profile | Scoring works either way. To publish the observation log, start `--profile streaming`, apply the topics, and set `TRACE_GATEWAY_KAFKA_BOOTSTRAP=kafka:19092` |
-| `/readyz` shows `outbox_relay: disabled` | `TRACE_GATEWAY_OUTBOX_RELAY` is `false`, the default until the hot-path A/B | Cases and authorization outcomes wait in `app.outbox`. To relay them, set it to `true` with the broker configured |
+| Cases and authorization outcomes wait in `app.outbox` | The relay runs in the `worker` service (ADR-0051 §7), which needs the `streaming` profile | Start it with `--profile core --profile streaming up -d worker`. `/readyz` `outbox_relay: disabled` on the gateway is expected: its in-gateway relay exists only to reproduce the A/B |
 | Gateway logs `connection refused` for port 5442 or 6389 | The container inherited the **host** ports from `.env` | Inside the compose network Postgres is `postgres:5432` and Redis is `redis:6379`; `deploy/compose.yml` sets those explicitly |
 | Code changes have no effect on the running gateway | The image is built, not mounted | `docker compose -f deploy/compose.yml --env-file .env --profile core up -d --build gateway` |
 | Integration tests skipped | Docker not running | Start Docker; the skip message names the reason |

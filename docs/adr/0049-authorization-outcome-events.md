@@ -140,7 +140,8 @@ A reversal contract is a separate decision, made when something reads reversals.
 
 **Release.**
 - The topic becomes RELEASED in the step that gives it its first real producers: the eval-v2 generator
-  and the gateway's outbox relay (§4).
+  and the outbox relay, which runs in `trace-worker` (ADR-0051 §7: the pre-registered hot-path A/B
+  ruled out a relay on a gateway thread).
 - Its schema file, its `RELEASED.json` entry, its `deploy/kafka/topics.yaml` declaration and the
   `docs/EVENT_CONTRACTS.md` §3 row are added in that step, not before.
 

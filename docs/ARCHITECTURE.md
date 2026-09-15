@@ -74,7 +74,7 @@ servers. Every process boundary has a stated technical reason; there are no othe
 |---|---|---|
 | `trace-gateway` | Hot path, ~100 ms p99 budget, stateless, scales on TPS | Must never share a thread pool, connection pool or GC pause with 60-second LLM investigations |
 | `trace-api` | Control plane; scales on analyst concurrency | Different SLO (seconds), different authz surface (human RBAC vs service tokens), different availability class |
-| `trace-worker` | Investigations: 30–120 s, LLM-bound, checkpointed, retried; scales on queue depth | A long-running non-idempotent workload inside an HTTP server loses work on restart and truncates on request timeout |
+| `trace-worker` | Investigations: 30–120 s, LLM-bound, checkpointed, retried; scales on queue depth. Since Phase 3 it also runs the outbox relay (ADR-0051 §7) | A long-running non-idempotent workload inside an HTTP server loses work on restart and truncates on request timeout. The pre-registered hot-path A/B ruled out the relay sharing the scoring process |
 | `trace-stream` | JVM runtime, checkpointed, event-time stateful | Cannot run inside a Python web process |
 | `trace-ui` | Different runtime | — |
 | 3 MCP servers | A genuine protocol + serialization boundary for tool domains that must be independently addressable, independently authorized, and federatable by AgentCore later | Merging collapses the boundary the design asserts, and turns the Phase 12 Gateway step into a rewrite |

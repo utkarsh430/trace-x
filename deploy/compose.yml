@@ -237,8 +237,9 @@ services:
       # publishes nothing, and leaves every writer session unclosed, so history claims no
       # completeness. With `--profile streaming`, set it to kafka:19092.
       TRACE_GATEWAY_KAFKA_BOOTSTRAP: ${TRACE_GATEWAY_KAFKA_BOOTSTRAP:-}
-      # Drains app.outbox to Kafka on a gateway thread (ADR-0051 §7, option A). Off until the
-      # controlled hot-path A/B shows the relay may share the scoring process.
+      # Experiment-only: option A, the relay on a gateway thread, kept so the pre-registered A/B's
+      # `log-relay` arm stays reproducible. The A/B ruled it out (ADR-0051 §7); the relay runs in
+      # the `worker` service. Leave it false.
       TRACE_GATEWAY_OUTBOX_RELAY: ${TRACE_GATEWAY_OUTBOX_RELAY:-false}
     # Enumerated rather than `env_file: ../.env` on purpose. .env also holds the
     # superuser password, the eval role that CAN read ground truth, and any
@@ -307,6 +308,35 @@ services:
   # Phase 3. Topics are DECLARED in deploy/kafka/topics.yaml and created only by
   # `scripts/kafka_topics.py apply --environment local`; this broker never creates
   # one by itself.
+  worker:
+    # trace-worker (ADR-0051 §7, option B): drains app.outbox to Kafka in its own process, since the
+    # pre-registered hot-path A/B ruled out the relay on a gateway thread. The same Dockerfile as
+    # the gateway: its image already holds packages/ and services/, and the relay needs nothing the
+    # gateway's lock does not (confluent-kafka, psycopg). It runs with the `core` profile's
+    # PostgreSQL, so start both: `--profile core --profile streaming`.
+    build:
+      context: ..
+      dockerfile: deploy/gateway.Dockerfile
+    image: tracex-gateway:dev
+    profiles: ["streaming"]
+    <<: *restart
+    command: ["python", "-m", "services.worker"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    environment:
+      # Enumerated, as for the gateway: the app role only, never the superuser or eval credentials.
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-tracex}
+      TRACE_APP_DB_USER: ${TRACE_APP_DB_USER:-trace_app}
+      TRACE_APP_DB_PASSWORD: ${TRACE_APP_DB_PASSWORD:?set it in .env}
+      TRACE_WORKER_KAFKA_BOOTSTRAP: kafka:19092
+      TRACE_LOG_LEVEL: ${TRACE_LOG_LEVEL:-INFO}
+      TRACE_LOG_FORMAT: ${TRACE_LOG_FORMAT:-json}
+
   kafka:
     # Pinned by tag AND multi-arch index digest (an OCI index with linux/amd64 and
     # linux/arm64 images): a tag can be moved, a digest cannot (ADR-0036's rule).
