@@ -164,6 +164,35 @@ topics:
     cloud:
       partitions: 24
 
+  tx.scored.v1:
+    key_field: account_id
+    # ADR-0051 §6: one observation per scored transaction. A retried request carries a new
+    # envelope, so the transaction id is the identity -- as for tx.raw.v1.
+    dedup_identity: payload.transaction_id
+    config:
+      cleanup.policy: delete
+      message.timestamp.type: LogAppendTime
+      retention.ms: "604800000"          # 7 days, equal to tx.raw.v1
+    local:
+      # Equal to tx.raw.v1, so an account maps to the same partition number on both topics.
+      partitions: 6
+      replication_factor: 1
+      overrides:
+        # 192 MiB per partition, below the 256 MiB tx-topic cap, so the measured record size fits
+        # the local disk cap. A run that writes more than this before Bronze reads it stops Bronze
+        # loudly (failOnDataLoss, PHASE3_PLAN §4.1 point 8) rather than skipping data.
+        retention.bytes: "201326592"
+        segment.bytes: "16777216"        # 16 MiB
+      # MEASURED, replacing the reservation's 4096-byte placeholder: records the builder makes from
+      # the real pipeline (26 served features) averaged 6415 bytes for generator-shaped transactions
+      # and 7238 bytes with every attacker-controlled string at its maximum.
+      # test_the_scored_record_size_is_a_measurement_the_builder_still_fits rebuilds both.
+      design_ingress:
+        events_per_s: 5000
+        assumed_mean_record_bytes: 8192
+    cloud:
+      partitions: 24
+
 # ----------------------------------------------------------------------------
 # The declared local disk cap, and how the bound it must cover is derived.
 # `kafka_topics.py budget --environment local` prints the breakdown;
@@ -203,15 +232,6 @@ local_disk_budget:
   # Retention reserved for a topic that is PLANNED but not yet released, so the
   # step that releases it inherits a budget rather than discovering it was
   # overcommitted. It is not a declaration: `apply` never creates it. Step 4
-  # replaces this entry with the topic's declaration, and the assumed record size
-  # below with a measured one.
-  reservations:
-    - reserved_for: tx.scored.v1
-      partitions: 6
-      retention_bytes: 268435456         # the tx-topic cap: 256 MiB per partition
-      segment_bytes: 16777216
-      design_ingress:
-        events_per_s: 5000
-        # A placeholder assumption: a scored transaction carries its served
-        # features, so it is assumed larger than a raw one until Step 4 measures it.
-        assumed_mean_record_bytes: 4096
+  # replaced the tx.scored.v1 reservation with that topic's declaration, and its
+  # placeholder record size with a measured one. None is outstanding.
+  reservations: []

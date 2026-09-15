@@ -84,7 +84,7 @@ def test_partition_key_is_extracted_from_the_payload() -> None:
 
 def test_an_unknown_topic_refuses_rather_than_defaulting() -> None:
     with pytest.raises(UnreleasedTopicError):
-        partition_key("tx.scored.v1", {"payload": {"account_id": "acct_000123"}})
+        partition_key("audit.v1", {"payload": {"entity_id": "acct_000123"}})
 
 
 def test_a_missing_key_field_refuses_rather_than_publishing_unkeyed() -> None:

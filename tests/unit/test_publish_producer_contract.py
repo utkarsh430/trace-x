@@ -310,7 +310,7 @@ def test_an_undecodable_value_needs_a_key_event_and_the_invalid_opt_in() -> None
 def test_an_unreleased_topic_is_refused() -> None:
     publisher, producer = _publisher()
     with pytest.raises(UnreleasedTopicError):
-        publisher.publish("tx.scored.v1", _bytes(_tx()))
+        publisher.publish("audit.v1", _bytes(_tx()))
     assert producer.produced == []
 
 

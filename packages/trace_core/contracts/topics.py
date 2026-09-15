@@ -31,6 +31,7 @@ IDENTITY_EVENTS_V1: Final = "identity.events.v1"
 DEVICE_EVENTS_V1: Final = "device.events.v1"
 INVESTIGATION_REQUESTED_V1: Final = "investigation.requested.v1"
 TX_AUTHORIZATION_V1: Final = "tx.authorization.v1"
+TX_SCORED_V1: Final = "tx.scored.v1"
 
 PARTITION_KEY_FIELD: Final[dict[str, str]] = {
     # Keyed by the entity whose ORDERING matters, never for load balancing
@@ -47,6 +48,9 @@ PARTITION_KEY_FIELD: Final[dict[str, str]] = {
     # One outcome per transaction, read by a per-account window: per-account order is the order
     # that matters, as for tx.raw.v1 (ADR-0049 §2).
     TX_AUTHORIZATION_V1: "account_id",
+    # The observation log of per-account online state: rebuilding an account's windows needs that
+    # account's order, as for tx.raw.v1 (ADR-0051 §6).
+    TX_SCORED_V1: "account_id",
 }
 """Released topic -> the PAYLOAD field whose value is the partition key.
 

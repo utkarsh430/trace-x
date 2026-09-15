@@ -188,7 +188,7 @@ def test_a_missing_key_field_refuses_to_publish() -> None:
 def test_an_unreleased_topic_refuses_to_publish() -> None:
     sink, producer = _sink()
     with pytest.raises(UnreleasedTopicError):
-        sink.write("tx.scored.v1", _transaction())
+        sink.write("audit.v1", _transaction())
     assert producer.calls == []
 
 

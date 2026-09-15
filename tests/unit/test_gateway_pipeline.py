@@ -32,7 +32,7 @@ from trace_core.contracts.api.transaction import TransactionRequest
 from trace_core.contracts.canonical import CanonicalField
 from trace_core.domain.enums import RiskBand
 from trace_core.domain.errors import FeatureWriteFailedError
-from trace_core.domain.time import event_time
+from trace_core.domain.time import event_time, to_millis
 from trace_core.features import FeatureState
 from trace_core.features.completeness import CompletenessGuard, HoleReason
 from trace_core.features.definitions import ONLINE_FEATURES
@@ -460,3 +460,29 @@ def test_a_transaction_id_reused_for_another_payload_is_decided_rules_only() -> 
     assert not reused.features["account_tx_count_1m"].is_available, (
         "another payload's context was evaluated as this one's"
     )
+
+
+# --- what the observation log publishes ------------------------------------------
+
+
+def test_the_outcome_carries_the_epoch_its_position_was_counted_in_and_the_served_context() -> None:
+    """ADR-0051 §3: a store that restarts empty restarts its counter, so a position names a served
+    state only together with its epoch. Both travel on the outcome the observation log publishes,
+    with the context the features were evaluated against."""
+    since = event_time(NOW - dt.timedelta(days=2))
+    outcome = _pipeline(ReferenceFeatureStore(complete_since=since)).score(_request(), now=NOW)
+    assert outcome.observe_position == 1
+    assert outcome.store_epoch_ms == to_millis(since)
+    assert outcome.context is not None and outcome.context.complete_since == since
+
+
+def test_a_store_that_claims_no_epoch_serves_a_position_without_one() -> None:
+    outcome = _pipeline(ReferenceFeatureStore()).score(_request(), now=NOW)
+    assert (outcome.observe_position, outcome.store_epoch_ms) == (1, None)
+
+
+@pytest.mark.parametrize("store", [None, _BrokenStore()], ids=["no-store", "unreachable"])
+def test_an_outcome_with_no_store_write_carries_no_position_or_epoch(store: Any) -> None:
+    outcome = _pipeline(store).score(_request(), now=NOW)
+    assert (outcome.observe_position, outcome.store_epoch_ms) == (None, None)
+    assert outcome.context is not None, "the empty context the decision was made on"

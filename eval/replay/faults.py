@@ -139,6 +139,7 @@ DEDUP_IDENTITY: Final[Mapping[str, tuple[str, str]]] = {
     "device.events.v1": ("envelope", "event_id"),
     "investigation.requested.v1": ("envelope", "idempotency_key"),
     "tx.authorization.v1": ("payload", "transaction_id"),
+    "tx.scored.v1": ("payload", "transaction_id"),
 }
 
 _ENUM_FIELD: Final[Mapping[str, str]] = {
@@ -147,6 +148,7 @@ _ENUM_FIELD: Final[Mapping[str, str]] = {
     "device.events.v1": "device_event_type",
     "investigation.requested.v1": "feature_source",
     "tx.authorization.v1": "authorization_outcome",
+    "tx.scored.v1": "observe_outcome",
 }
 UNKNOWN_ENUM_VALUE: Final = "OVERLAY_UNSEEN_VALUE"
 
@@ -328,6 +330,7 @@ def _model(topic: str) -> Any:
         investigation_requested_v1,
         tx_authorization_v1,
         tx_raw_v1,
+        tx_scored_v1,
     )
 
     models: dict[str, Any] = {
@@ -336,6 +339,7 @@ def _model(topic: str) -> Any:
         "device.events.v1": device_events_v1.DeviceEventV1,
         "investigation.requested.v1": investigation_requested_v1.InvestigationRequestedV1,
         "tx.authorization.v1": tx_authorization_v1.TxAuthorizationV1,
+        "tx.scored.v1": tx_scored_v1.TxScoredV1,
     }
     return models[topic]
 

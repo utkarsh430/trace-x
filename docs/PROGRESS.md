@@ -576,7 +576,7 @@ both reports.
       * device events, and identity events that feed no stream, are accepted;
       * the start-up writes to online state (hole inheritance, the epoch) run only inside the fence;
       * `writer_refused_total{surface}` counts the refusals;
-      * shutdown closes the session. Nothing is published yet, so there is no delivery to confirm.
+      * shutdown closed the session as if everything had been logged: a defect, fixed in slice 3.
     * **The lock key is injectable**, so tests never contend with a running gateway. The integration
       fixture no longer deletes a gateway's own session row.
     * **Evidence (2026-09-14):**
@@ -597,9 +597,55 @@ both reports.
       * OpenAPI regenerated: the identity route documents 503, and the 503 description names the
         fence.
       * `make verify` runs before the commit that records this entry, gated on its exit code.
+  * **Slice 3, `tx.scored.v1` and the observation log: implemented.**
+    * **A slice-2 defect, found while designing slice 3 and fixed here.** The slice-2 gateway closed its
+      session at shutdown with `last_seq` 0, as if every observation had been logged, although it
+      published nothing. Under the coverage rule that close would have certified the session's whole
+      lifetime. No fenced gateway image had run, so only test rows carried it. A session now closes
+      only on a confirmed flush of every number it assigned; without a broker it is left unclosed.
+    * **The contract, released with its producer** (ADR-0051 §6; PHASE3_PLAN §3 Q1):
+      * the transaction as served, flat in the payload so `payload.transaction_id` is the dedup
+        identity, with `field_coverage`;
+      * a decision summary, including the fired rules and the rule pack, threshold and feature-set
+        versions;
+      * served features as an extensible collection: state, value when available, approximation,
+        source, `missing_fields`, and `lookback_completeness`, which tells a genuinely new entity from a
+        store that could not vouch;
+      * `observe_outcome`, `store_position` and `store_epoch`. The epoch is new on `ServedRead`, from
+        both stores, because a position names a served state only with the epoch it was counted in;
+      * `amount_minor` bounded at a signed 64-bit integer rather than `tx.raw.v1`'s bound, because the
+        API accepts any integer (D17).
+      * The RELEASED entry, the codegen model, the `topics.py` key and the `topics.yaml` declaration
+        replace the planned entry and the reservation. The gateway is recorded as an
+        `identity.events.v1` producer.
+    * **Record size, measured before declaring.** The builder's records from the real pipeline exceed
+      the reservation's placeholder. The declaration assumes a larger mean and caps local retention per
+      partition so the local disk budget still fits (D18). The measured figures are recorded beside the
+      declaration, and a test rebuilds the records and requires them to fit.
+    * **`trace_core.observation.log.ObservationLog`:**
+      * sequence, refused unless this process is the writer within its lease; write online; then
+        produce with `block=False` and the `tracex-session-id` and `tracex-seq` headers;
+      * scored transactions and identity events that feed a stream are covered. Device events,
+        non-feeding identity events, replays and rate-limited requests consume no number;
+      * a transaction refused for clock skew is refused before its number is assigned, and one that
+        triage refuses with 503 is still published;
+      * topics are verified at start and retried on the log's own thread, so no publish waits on
+        broker metadata. A broker outage costs coverage, never a decision;
+      * `observation_log_total{topic, outcome}` counts handed-over and lost observations, and
+        `/readyz` reports `checks.observation_log` without gating on it.
+    * **Deployment.** The gateway image lock gains `confluent-kafka`, and only it, from the `stream`
+      extra. Compose and `.env.example` gain `TRACE_GATEWAY_KAFKA_BOOTSTRAP`, empty by default because
+      Kafka is the `streaming` profile. The image is not rebuilt yet; the A/B does that.
+    * **Evidence (2026-09-14):**
+      * 606 targeted tests passed, none skipped, across 22 suites: unit, contract, conformance, and the
+        PostgreSQL and Redis integration suites. They include `tests/unit/test_observation_log.py`,
+        `tests/unit/test_gateway_observation_log.py` and `tests/unit/test_scored_event.py`.
+      * `tests/integration/test_observation_log_kafka.py`, against a throwaway real broker: 2 passed.
+        Every number from 1 to `last_seq` arrived across both topics in one session, keyed and stamped
+        with LogAppendTime, and a paused broker refused the close.
+      * The ARCHITECTURE §18 Kafka row no longer claims a local WAL the gateway never had.
+      * `make verify` runs before the commit that records this entry, gated on its exit code.
   * **Not yet built:**
-    * sequencing and session headers on produce;
-    * the `tx.scored.v1` contract;
     * the outbox relay, whose process ADR-0051 leaves to the A/B;
     * the chaos tests;
     * the controlled hot-path A/B.
@@ -720,6 +766,9 @@ both reports.
 | ~~D10~~ | ~~No declarative SQLAlchemy models, so autogenerate is unused~~ | Still true and still correct: migrations 0001 and 0002 are hand-written because they are security-critical grants. Re-evaluate when ordinary application tables arrive | Phase 2 |
 | **D15** | **Deferred evaluation hardening:** `LPC-5` §14 controls at acceptance scale on the frozen eval-v2 candidate -- the zero-rate control and the 21 full-scale ablations -- were not run (user decision, 2026-09-14). Unit self-tests, smoke-scale controls and the control framework exist | An ablation that would not fail its check at full scale is unverified at full scale | Only for a final research or evaluation release; not Phase 3 |
 | **D16** | **Research-grade synthetic-data work:** eval-v2's `LPC-5` Category B consequences outside the declared values, and its Category C support and power limits at acceptance scale (rare burst values, MC-1 and MC-2 near misses) | eval-v2 is disclosed as not `LPC-5` compliant; no Category A defect is known | Deferred; reopened only by a downstream Category A finding |
+| **D17** | **The API accepts an unbounded `amount_minor`.** The observation log bounds it at a signed 64-bit integer, the width consumers parse, so a wider amount is scored but refused by the log | That transaction is missing from history and its writer session cannot close: detectable, never silent | The next breaking API revision; narrowing v1 is a breaking change |
+| **D18** | **Local `tx.scored.v1` retention is capped per partition** so the measured record size fits the local disk cap (`deploy/kafka/topics.yaml`) | A run that writes more before Bronze reads it trims unread segments, and Bronze stops loudly (`failOnDataLoss`) | Step 5 Bronze and the streaming throughput evidence: run Bronze during a load, or size the run |
+| **D19** | **A reused identity-event key with a different event time, while the replay cache is down,** gets a new envelope `event_id` on the log while the store records a conflict under one observation id (ADR-0051 risks) | History and the online store disagree about that one event | Step 6 exact dedup and conflicts |
 | **D14** | CI provisions no Redis or PostgreSQL, so the Redis conformance suite, the Redis store tests, the hole-ledger tests and the other service-backed integration tests skip there, loudly. Their evidence is local runs | CI cannot catch a regression in the online store or the ledger | Before Phase 3 exit: provision the services in `test-integration.yml`, or start throwaway containers in those fixtures as the capacity test does |
 
 ---

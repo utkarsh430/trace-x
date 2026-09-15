@@ -25,6 +25,7 @@ from __future__ import annotations
 import contextlib
 import datetime as dt
 import hashlib
+import random
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable
@@ -50,6 +51,7 @@ from services.gateway.pipeline import (
     REASON_RATE_LIMIT,
     REASON_REDIS,
     REASON_WRITE_FAILED,
+    ScoringOutcome,
     ScoringPipeline,
     TriageUnavailableError,
     absent_feature_reasons,
@@ -64,9 +66,12 @@ from trace_core.contracts.api.events_ingress import (
 )
 from trace_core.contracts.api.problem import ErrorType
 from trace_core.contracts.api.transaction import TransactionRequest
-from trace_core.contracts.envelope import ZERO_TRACE_ID
+from trace_core.contracts.envelope import ZERO_TRACE_ID, build_event
+from trace_core.contracts.publish import EventPublisher
+from trace_core.contracts.topics import IDENTITY_EVENTS_V1, TX_SCORED_V1
 from trace_core.domain.enums import AuthorizationOutcome
 from trace_core.domain.errors import FeatureWriteFailedError
+from trace_core.domain.identifiers import uuid7
 from trace_core.domain.time import event_time, from_millis, to_millis, utc_now
 from trace_core.features.completeness import CompletenessGuard, HoleReason
 from trace_core.features.definitions import ONLINE_FEATURES
@@ -75,6 +80,9 @@ from trace_core.features.semantics import Stream, identity_stream
 from trace_core.observability.logging import configure_logging
 from trace_core.observability.metrics import HotPathMetrics, register_online_store_gauges
 from trace_core.observability.telemetry import configure_telemetry, current_trace_id
+from trace_core.observation.log import DELIVERY_TIMEOUT_MS, ObservationLog, Sequenced
+from trace_core.observation.scored_event import build_scored_event
+from trace_core.observation.session import WriterSessionError
 from trace_core.observation.supervisor import WriterSupervisor
 from trace_core.repositories.circuit_breaker import CircuitBreaker
 from trace_core.repositories.postgres_authorization import (
@@ -143,6 +151,9 @@ class GatewayState:
     """The online store's fenced writer session (ADR-0051 §2). While it is not ready, neither is
     the instance, and every request that would write online state is refused. None when no fence
     is configured: in tests, and without a system of record, which readiness refuses anyway."""
+    observation_log: ObservationLog | None = None
+    """The durable observation log (ADR-0051 §3): every write that changes online state is sequenced
+    in the writer's session and published. None when no fence is configured."""
 
     def ready(self) -> tuple[bool, dict[str, str]]:
         """Readiness, per ADR-0035.
@@ -188,6 +199,9 @@ class GatewayState:
             writer_ready = self.writer.ready
             checks["writer_session"] = self.writer.status
             healthy = healthy and writer_ready
+        if self.observation_log is not None:
+            # Reported, never gated on: a broker outage costs history coverage, never a decision.
+            checks["observation_log"] = self.observation_log.status
         checks["feature_history"] = self._history_status()
         return healthy, checks
 
@@ -243,6 +257,25 @@ def _prepare_online_state(completeness: CompletenessGuard | None, store: Any) ->
             log.info("feature_store_epoch", complete_since=since.isoformat())
         except Exception as exc:
             log.warning("feature_store_epoch_unavailable", error=type(exc).__name__)
+
+
+def _observation_publisher(settings: GatewaySettings, client_id: str) -> EventPublisher | None:
+    """The observation log's producer, or None when no broker is configured (ADR-0051 §3).
+
+    Building one contacts no broker: its topics are verified at start, off the request path.
+    """
+    if not settings.kafka_bootstrap_servers:
+        log.warning("observation_log_not_configured", detail="no writer session will close")
+        return None
+    try:
+        return EventPublisher.connect(
+            settings.kafka_bootstrap_servers,
+            client_id=client_id,
+            message_timeout_ms=DELIVERY_TIMEOUT_MS,
+        )
+    except Exception as exc:  # a missing client library: scoring continues, nothing is logged
+        log.error("observation_log_unavailable", error=type(exc).__name__)
+        return None
 
 
 def build_state(settings: GatewaySettings | None = None) -> GatewayState:
@@ -344,6 +377,19 @@ def build_state(settings: GatewaySettings | None = None) -> GatewayState:
         if pool is not None
         else None
     )
+    metrics = HotPathMetrics()
+    observation_log = (
+        ObservationLog(
+            writer=writer,
+            publisher=_observation_publisher(resolved, instance_id),
+            topics=(TX_SCORED_V1, IDENTITY_EVENTS_V1),
+            record=lambda topic, outcome: metrics.observation_log.add(
+                1, {"topic": topic, "outcome": outcome.value}
+            ),
+        )
+        if writer is not None
+        else None
+    )
     cache_breaker = CircuitBreaker("redis-cache")
     return GatewayState(
         settings=resolved,
@@ -357,7 +403,7 @@ def build_state(settings: GatewaySettings | None = None) -> GatewayState:
             breaker=breaker,
             completeness=completeness,
         ),
-        metrics=HotPathMetrics(),
+        metrics=metrics,
         limiter=limiter,
         idempotency=idempotency,
         triage=triage,
@@ -370,6 +416,7 @@ def build_state(settings: GatewaySettings | None = None) -> GatewayState:
         cache_breaker=cache_breaker,
         feature_store=feature_store,
         writer=writer,
+        observation_log=observation_log,
     )
 
 
@@ -403,6 +450,8 @@ def create_app(state: GatewayState | None = None) -> FastAPI:
             resolved.writer.start()
         else:
             _prepare_online_state(resolved.completeness, resolved.feature_store)
+        if resolved.observation_log is not None:
+            resolved.observation_log.start()
 
         # Each Redis instance's own memory and eviction counters, as gauges
         # labelled by store. Registered here rather than in `build_state`
@@ -431,9 +480,10 @@ def create_app(state: GatewayState | None = None) -> FastAPI:
         )
         yield
         if resolved.writer is not None:
-            # Nothing is published yet, so there is no delivery to confirm: the session closes
-            # with the sequence numbers it assigned (ADR-0051 §4).
-            resolved.writer.stop(confirmed=True)
+            # The session closes only on a confirmed flush of everything it sequenced (ADR-0051
+            # §4). Without a log nothing was published, so it is left unclosed: a gap, not a claim.
+            confirmed = resolved.observation_log is not None and resolved.observation_log.close()
+            resolved.writer.stop(confirmed=confirmed)
         if resolved.pool is not None:
             resolved.pool.close()
 
@@ -787,11 +837,34 @@ def _register_routes(app: FastAPI) -> None:
                 response.headers[HEADER_FEATURE_SOURCE] = replayed.feature_source.value
                 return replayed
 
-        outcome = state.pipeline.score(body, extra_degraded=tuple(degraded_reasons))
+        # Sequence, write online, produce (ADR-0051 §3). The clock is checked before a number is
+        # assigned, so a refused transaction consumes none; a fence lost since the readiness check
+        # assigns nothing and writes nothing.
+        observation_log = state.observation_log
+        sequenced: Sequenced | None = None
+        if observation_log is not None:
+            if (problem := _future_skew_problem(request, body.occurred_at)) is not None:
+                return problem
+            try:
+                sequenced = observation_log.sequence()
+            except WriterSessionError:
+                return _writer_refusal(request, surface="transaction")
+        try:
+            outcome = state.pipeline.score(body, extra_degraded=tuple(degraded_reasons))
+        except BaseException:
+            if observation_log is not None and sequenced is not None:
+                observation_log.unpublished(sequenced, TX_SCORED_V1)
+            raise
         decision = outcome.decision
 
-        if state.pipeline.opens_investigation(decision):
-            decision = _triage(state, outcome, body)
+        try:
+            if state.pipeline.opens_investigation(decision):
+                decision = _triage(state, outcome, body)
+        finally:
+            # Published even when triage refuses the request: the online store has recorded the
+            # transaction, so the log must too, with the decision the pipeline reached.
+            if observation_log is not None and sequenced is not None:
+                _publish_scored(observation_log, sequenced, outcome, decision)
 
         # The transaction was recorded in the online store by the scoring read itself, before
         # this response: an answered transaction is never missing from the store (plan §4.1).
@@ -970,6 +1043,14 @@ def _ingest(
                     f"Use a new key for a new event."
                 ),
             )
+    # Sequenced before the online write, published after it whatever the store did (ADR-0051 §3).
+    observation_log = state.observation_log if stream is not None else None
+    sequenced: Sequenced | None = None
+    if observation_log is not None:
+        try:
+            sequenced = observation_log.sequence()
+        except WriterSessionError:
+            return _writer_refusal(request, surface="identity")
     if stream is not None and state.pipeline.feature_store is not None:
         event = Event(
             stream=stream,
@@ -993,6 +1074,16 @@ def _ingest(
             if guard is not None:
                 guard.observation_unrecorded(HoleReason.UNREACHABLE)
             state.metrics.degraded.add(1, {"reason": REASON_REDIS})
+    if observation_log is not None and sequenced is not None:
+        _publish_identity(
+            observation_log,
+            sequenced,
+            payload=payload,
+            token_id=token_id,
+            idempotency_key=idempotency_key,
+            observation_id=event_id,
+            occurred_at=occurred_at,
+        )
     accepted = AcceptedResponse(accepted=True, event_id=event_id, request_id=request_id)
     if cache_key is not None and state.idempotency is not None and cache_usable:
         with contextlib.suppress(Exception):
@@ -1153,11 +1244,15 @@ def _not_the_writer(request: Request, *, surface: str) -> JSONResponse | None:
     refused; so are identity events a released feature reads, and authorization outcomes. Events
     that change no online state are not.
     """
-    state = _gateway(request)
-    writer = state.writer
+    writer = _gateway(request).writer
     if writer is None or writer.ready:
         return None
-    state.metrics.writer_refused.add(1, {"surface": surface})
+    return _writer_refusal(request, surface=surface)
+
+
+def _writer_refusal(request: Request, *, surface: str) -> JSONResponse:
+    """The 503 for a request this instance may not serve as the online store's writer."""
+    _gateway(request).metrics.writer_refused.add(1, {"surface": surface})
     return _problem_response(
         request,
         ErrorType.SERVICE_UNAVAILABLE,
@@ -1167,6 +1262,87 @@ def _not_the_writer(request: Request, *, surface: str) -> JSONResponse | None:
         ),
         headers={"Retry-After": "5"},
     )
+
+
+IDENTITY_EVENT_TYPE: Final = "identity.events"
+IDENTITY_EVENT_FIELDS: Final = (
+    "account_id",
+    "identity_event_type",
+    "device_id",
+    "ip_id",
+    "user_agent",
+)
+
+
+def _publish_scored(
+    observation_log: ObservationLog,
+    sequenced: Sequenced,
+    outcome: ScoringOutcome,
+    decision: RiskDecision,
+) -> None:
+    """Produce the scored observation, whatever the store did with it (ADR-0051 §3). Never raises:
+    an event that cannot be built leaves its number unpublished, and so its session unclosable."""
+    try:
+        event = build_scored_event(
+            canonical=outcome.canonical,
+            decision=decision,
+            features=outcome.features,
+            context=outcome.context,
+            observe_outcome=outcome.observe_outcome.value,
+            store_position=outcome.observe_position,
+            store_epoch_ms=outcome.store_epoch_ms,
+            producer=producer_string(SERVICE_VERSION),
+            trace_id=_trace_id(),
+        )
+    except Exception as exc:
+        log.error("scored_event_unbuildable", error=type(exc).__name__)
+        observation_log.unpublished(sequenced, TX_SCORED_V1)
+        return
+    observation_log.publish(sequenced, TX_SCORED_V1, event)
+
+
+def _identity_envelope_id(
+    token_id: str, idempotency_key: str | None, occurred_ms: int
+) -> uuid.UUID:
+    """The published event's `event_id`, its topic's dedup identity (PHASE3_PLAN §3 Q2).
+
+    Derived from `(token, key)` like the observation's own id, so a retry under the same key is the
+    same event on Kafka as it is the same observation in the store. Without a key, every delivery is
+    new in both places.
+    """
+    if not idempotency_key:
+        return uuid7(millis=occurred_ms)
+    digest = hashlib.sha256(f"{token_id}\x00{idempotency_key}".encode()).digest()
+    return uuid7(millis=occurred_ms, rng=random.Random(int.from_bytes(digest, "big")))  # noqa: S311
+
+
+def _publish_identity(
+    observation_log: ObservationLog,
+    sequenced: Sequenced,
+    *,
+    payload: dict[str, object],
+    token_id: str,
+    idempotency_key: str | None,
+    observation_id: str,
+    occurred_at: dt.datetime,
+) -> None:
+    """Produce an identity event that changed online state (ADR-0051 §1). Never raises."""
+    moment = event_time(occurred_at)
+    try:
+        event = build_event(
+            event_type=IDENTITY_EVENT_TYPE,
+            occurred_at=moment,
+            payload={key: payload[key] for key in IDENTITY_EVENT_FIELDS if key in payload},
+            producer=producer_string(SERVICE_VERSION),
+            trace_id=_trace_id(),
+            correlation_id=observation_id,
+            event_id=_identity_envelope_id(token_id, idempotency_key, to_millis(moment)),
+        )
+    except Exception as exc:
+        log.error("identity_event_unbuildable", error=type(exc).__name__)
+        observation_log.unpublished(sequenced, IDENTITY_EVENTS_V1)
+        return
+    observation_log.publish(sequenced, IDENTITY_EVENTS_V1, event)
 
 
 def _authorization_unavailable(request: Request) -> JSONResponse:

@@ -28,7 +28,7 @@ import pytest
 from tests.conformance.feature_semantics_suite import AsServedConformanceSuite
 
 from trace_core.contracts.canonical import CanonicalTransaction
-from trace_core.domain.time import EventTime
+from trace_core.domain.time import EventTime, to_millis
 from trace_core.features import FeatureContext
 from trace_core.features.observation import Event
 from trace_core.repositories.redis_features import RedisOnlineFeatureStore
@@ -86,6 +86,11 @@ class TestRedisOnlineFeatureStore(AsServedConformanceSuite):
             store.observe(event)
         served = store.score(log[subject_index])
         assert served.receipt.position == len({e.identity for e in log[: subject_index + 1]})
+        # The epoch the position was counted in travels with it (ADR-0051 §3).
+        if complete_since is not None:
+            assert served.store_epoch_ms == to_millis(complete_since)
+        else:
+            assert served.store_epoch_ms is not None, "the first write dated the epoch"
         if complete_since is None:
             # The first write stamped the clock as the epoch; the fixture asked for no claim.
             return dataclasses.replace(served.context, complete_since=None)

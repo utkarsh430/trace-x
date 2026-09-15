@@ -12,6 +12,7 @@ from trace_core.contracts.events import (
     investigation_requested_v1,
     tx_authorization_v1,
     tx_raw_v1,
+    tx_scored_v1,
 )
 
 __all__ = [
@@ -21,4 +22,5 @@ __all__ = [
     "investigation_requested_v1",
     "tx_authorization_v1",
     "tx_raw_v1",
+    "tx_scored_v1",
 ]

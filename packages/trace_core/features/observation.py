@@ -230,6 +230,12 @@ class ServedRead:
 
     receipt: ObserveReceipt
     context: FeatureContext
+    store_epoch_ms: int | None = None
+    """The store's recording epoch at this read, in epoch milliseconds; None if it has none.
+
+    Paired with `receipt.position`: a store that restarts empty restarts its counter and dates a new
+    epoch, so a position names a served state only together with the epoch it was counted in
+    (ADR-0051 §3)."""
 
 
 def transaction_observation(transaction: CanonicalTransaction) -> Event:

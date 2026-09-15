@@ -133,6 +133,10 @@ class ScoringOutcome:
     observe_outcome: ObserveOutcome = ObserveOutcome.SKIPPED
     observe_position: int | None = None
     """The store's observation counter after this write, when it recorded or recognised it."""
+    store_epoch_ms: int | None = None
+    """The store's recording epoch the position was counted in (ADR-0051 §3); None when unknown."""
+    context: FeatureContext | None = None
+    """The context the features were evaluated against, completeness withdrawals applied."""
 
 
 @dataclass
@@ -207,7 +211,7 @@ class ScoringPipeline:
 
     def record_and_read(
         self, canonical: CanonicalTransaction
-    ) -> tuple[FeatureContext, float, str | None, ObserveOutcome, int | None]:
+    ) -> tuple[FeatureContext, float, str | None, ObserveOutcome, int | None, int | None]:
         """Record the scored transaction and read its context, in one atomic store call.
 
         The transaction is inside its own transactional windows (ADR-0046 §2), and the
@@ -226,19 +230,20 @@ class ScoringPipeline:
         as_of = event_time(canonical.occurred_at)
         empty = FeatureContext(as_of=as_of)
         if self.feature_store is None:
-            return empty, 0.0, REASON_REDIS, ObserveOutcome.SKIPPED, None
+            return empty, 0.0, REASON_REDIS, ObserveOutcome.SKIPPED, None, None
         guard = self.completeness
         if self.breaker is not None and not self.breaker.allows():
             # Skipped, not attempted: the circuit already established that the store is
             # unavailable. The transaction still went unrecorded, which is a hole.
             if guard is not None:
                 guard.observation_unrecorded(HoleReason.BREAKER_OPEN)
-            return empty, 0.0, REASON_REDIS, ObserveOutcome.SKIPPED, None
+            return empty, 0.0, REASON_REDIS, ObserveOutcome.SKIPPED, None, None
         began = time.perf_counter()
         if guard is not None:
             guard.reconcile()
         reason: str | None = None
         position: int | None = None
+        epoch: int | None = None
         try:
             served = self.feature_store.score(transaction_observation(canonical))
         except FeatureWriteFailedError:
@@ -273,11 +278,12 @@ class ScoringPipeline:
             if guard is not None:
                 guard.observation_unrecorded(HoleReason.UNREACHABLE)
             elapsed = time.perf_counter() - began
-            return empty, elapsed, REASON_REDIS, ObserveOutcome.UNREACHABLE, None
+            return empty, elapsed, REASON_REDIS, ObserveOutcome.UNREACHABLE, None, None
         else:
             if self.breaker is not None:
                 self.breaker.record_success()
             position = served.receipt.position
+            epoch = served.store_epoch_ms
             if served.receipt.conflicting:
                 # The first delivery's context, which this payload must not be evaluated against:
                 # another account's windows would read as this one's, zeros included.
@@ -295,7 +301,7 @@ class ScoringPipeline:
             # The store may still hold an epoch from before the hole; nothing it claims about
             # completeness may be believed until the hole has been withdrawn.
             context = dataclasses.replace(context, complete_since=None)
-        return context, time.perf_counter() - began, reason, outcome, position
+        return context, time.perf_counter() - began, reason, outcome, position, epoch
 
     # -- the sequence --------------------------------------------------------
 
@@ -315,7 +321,7 @@ class ScoringPipeline:
             reasons.append(flag)
 
         canonical = self.to_canonical(request)
-        context, read_seconds, read_reason, observe_outcome, position = self.record_and_read(
+        context, read_seconds, read_reason, observe_outcome, position, epoch = self.record_and_read(
             canonical
         )
         if read_reason is not None:
@@ -345,6 +351,8 @@ class ScoringPipeline:
             degraded_reasons=tuple(dict.fromkeys(reasons)),
             observe_outcome=observe_outcome,
             observe_position=position,
+            store_epoch_ms=epoch,
+            context=context,
         )
 
     def opens_investigation(self, decision: RiskDecision) -> bool:

@@ -136,6 +136,17 @@ class WriterSupervisor:
     def session(self) -> WriterSession | None:
         return self._session
 
+    def next_seq(self) -> tuple[str, int]:
+        """The writable session's id and its next contiguous sequence number (ADR-0051 §3).
+
+        Refused unless this process is the prepared writer within its lease, so a request that
+        passed its readiness check and then lost the fence assigns nothing and writes nothing.
+        """
+        session = self._writable
+        if session is None or not self.ready or session.session_id is None:
+            raise WriterSessionError("not the writer: no sequence number is assigned")
+        return session.session_id, session.next_seq()
+
     def tick(self) -> None:
         """One supervision step."""
         with self._gate:

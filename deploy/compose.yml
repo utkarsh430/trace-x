@@ -232,6 +232,11 @@ services:
       TRACE_LOG_LEVEL: ${TRACE_LOG_LEVEL:-INFO}
       TRACE_LOG_FORMAT: ${TRACE_LOG_FORMAT:-json}
       TRACE_RATE_LIMIT_PER_MINUTE: ${TRACE_RATE_LIMIT_PER_MINUTE:-1000}
+      # The observation log's broker (ADR-0051), on the in-network listener. Empty by default,
+      # because Kafka is the opt-in `streaming` profile: a `core`-only gateway scores normally,
+      # publishes nothing, and leaves every writer session unclosed, so history claims no
+      # completeness. With `--profile streaming`, set it to kafka:19092.
+      TRACE_GATEWAY_KAFKA_BOOTSTRAP: ${TRACE_GATEWAY_KAFKA_BOOTSTRAP:-}
     # Enumerated rather than `env_file: ../.env` on purpose. .env also holds the
     # superuser password, the eval role that CAN read ground truth, and any
     # Kaggle/OpenAI key the developer has added; least privilege (CLAUDE.md §9)

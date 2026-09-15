@@ -70,6 +70,9 @@ class GatewaySettings:
     pool_min_size: int
     pool_max_size: int
     log_json: bool
+    kafka_bootstrap_servers: str = ""
+    """Where the observation log is published (ADR-0051). Empty: nothing is published, so no writer
+    session ever closes and no completeness can be claimed from history. Scoring is unaffected."""
 
     @classmethod
     def from_environment(cls, environ: dict[str, str] | None = None) -> GatewaySettings:
@@ -107,6 +110,7 @@ class GatewaySettings:
             pool_min_size=int(env.get("TRACE_PG_POOL_MIN", "4")),
             pool_max_size=int(env.get("TRACE_PG_POOL_MAX", "32")),
             log_json=env.get("TRACE_LOG_FORMAT", "json").lower() == "json",
+            kafka_bootstrap_servers=env.get("TRACE_GATEWAY_KAFKA_BOOTSTRAP", ""),
         )
 
     @property

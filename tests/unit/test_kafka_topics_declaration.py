@@ -97,6 +97,8 @@ APPROVED_DEDUP_IDENTITY = {
     "investigation.requested.v1": "envelope.idempotency_key",
     # ADR-0049 §2, as approved: one outcome per transaction.
     "tx.authorization.v1": "payload.transaction_id",
+    # ADR-0051 §6, as approved: one observation per scored transaction.
+    "tx.scored.v1": "payload.transaction_id",
 }
 
 CONTRACTS_ROW = re.compile(
@@ -503,3 +505,76 @@ def test_the_broker_image_is_pinned_to_the_client_spark_builds_against() -> None
     assert match.group(1) == client.group(1), (
         f"broker {match.group(1)} but Spark's connector ships kafka-clients {client.group(1)}"
     )
+
+
+def _scored_record_sizes(*, maximal: bool, count: int = 50) -> list[int]:
+    """Sizes of `tx.scored.v1` records the builder makes from the real pipeline (ADR-0051 §6)."""
+    import datetime as dt
+
+    from services.gateway.pipeline import ScoringPipeline
+
+    from trace_core.contracts.api.transaction import TransactionRequest
+    from trace_core.domain.time import event_time
+    from trace_core.features.definitions import ONLINE_FEATURES
+    from trace_core.features.reference import ReferenceFeatureStore
+    from trace_core.observation.scored_event import build_scored_event
+    from trace_core.rules.loader import default_loader
+    from trace_core.scoring.banding import load_thresholds
+
+    now = dt.datetime(2026, 3, 1, 12, 0, 0, tzinfo=dt.UTC)
+    pipeline = ScoringPipeline(
+        pack=default_loader(frozenset(ONLINE_FEATURES.ids)).load(),
+        thresholds=load_thresholds(),
+        feature_store=ReferenceFeatureStore(complete_since=event_time(now - dt.timedelta(days=40))),
+    )
+    sizes: list[int] = []
+    for i in range(count):
+        body: dict[str, Any] = {
+            "transaction_id": ("t" * 52 + f"{i:012d}") if maximal else f"tx_{i:012d}",
+            "account_id": "acct_000000123",
+            "amount_minor": -9_223_372_036_854_775_808 if maximal else 5_000 + i,
+            "currency": "GBP",
+            "occurred_at": (now + dt.timedelta(seconds=i)).isoformat().replace("+00:00", "Z"),
+            "merchant_id": f"mrch_{i % 7:06d}",
+            "merchant_mcc": "5411",
+            "merchant_country": "GB",
+            "device_id": f"dev_{i % 3:09d}",
+            "card_id": "card_000000123",
+            "ip_id": f"ip_{i % 5:07d}",
+            "latitude": -89.123456789012,
+            "longitude": -179.123456789012,
+            "channel": "CARD_NOT_PRESENT",
+            "entry_mode": "CONTACTLESS",
+            "authorization_outcome": "APPROVED",
+        }
+        if maximal:
+            body |= {"merchant_name": "m" * 128, "user_agent": "u" * 256, "memo": "n" * 256}
+        moment = now + dt.timedelta(seconds=i)
+        outcome = pipeline.score(TransactionRequest.model_validate(body), now=moment)
+        event = build_scored_event(
+            canonical=outcome.canonical,
+            decision=outcome.decision,
+            features=outcome.features,
+            context=outcome.context,
+            observe_outcome=outcome.observe_outcome.value,
+            store_position=outcome.observe_position,
+            store_epoch_ms=outcome.store_epoch_ms,
+            producer="trace-gateway@0.1.0",
+            trace_id="0" * 32,
+        )
+        sizes.append(len(canonical_bytes(event)))
+    return sizes
+
+
+def test_the_scored_record_size_is_a_measurement_the_builder_still_fits(declaration: Any) -> None:
+    """The assumed mean replaced the reservation's placeholder with a measurement (ADR-0051 §6).
+
+    Records from the real pipeline, generator-shaped and with every attacker-controlled string at
+    its maximum, must both fit. A schema or feature-set change that grows them fails here, before
+    it silently overcommits the local disk budget."""
+    assumed = declaration.topics["tx.scored.v1"].assumed_record_bytes
+    typical = _scored_record_sizes(maximal=False)
+    largest = _scored_record_sizes(maximal=True)
+    assert sum(typical) / len(typical) <= assumed, (sum(typical) / len(typical), assumed)
+    assert max(largest) <= assumed, (max(largest), assumed)
+    assert min(typical) > 4096, "the reservation's placeholder was too small; keep the measurement"

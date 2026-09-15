@@ -714,8 +714,11 @@ class RedisOnlineFeatureStore:
             ids=_ids(current),
             current=current,
         )
+        epoch_text = _text(reply[0])
         return ServedRead(
-            receipt=_receipt(event, recorded, position, current, verdict), context=context
+            receipt=_receipt(event, recorded, position, current, verdict),
+            context=context,
+            store_epoch_ms=int(epoch_text) if epoch_text else None,
         )
 
     def _run(self, mode: str, event: Event) -> Any:

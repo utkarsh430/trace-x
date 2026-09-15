@@ -475,7 +475,12 @@ class ReferenceFeatureStore:
             mode=EvaluationMode.AS_SERVED,
             complete_since=self.complete_since,
         )
-        return ServedRead(receipt=receipt, context=context)
+        epoch = self.complete_since
+        return ServedRead(
+            receipt=receipt,
+            context=context,
+            store_epoch_ms=None if epoch is None else to_millis(epoch),
+        )
 
     def snapshot(
         self,

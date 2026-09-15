@@ -68,6 +68,7 @@ from trace_core.contracts.topics import (
     INVESTIGATION_REQUESTED_V1,
     TX_AUTHORIZATION_V1,
     TX_RAW_V1,
+    TX_SCORED_V1,
     partition_key,
 )
 from trace_core.domain.errors import (
@@ -441,6 +442,7 @@ def _models() -> Mapping[str, Any]:
         investigation_requested_v1,
         tx_authorization_v1,
         tx_raw_v1,
+        tx_scored_v1,
     )
 
     return MappingProxyType(
@@ -450,6 +452,7 @@ def _models() -> Mapping[str, Any]:
             DEVICE_EVENTS_V1: device_events_v1.DeviceEventV1,
             INVESTIGATION_REQUESTED_V1: investigation_requested_v1.InvestigationRequestedV1,
             TX_AUTHORIZATION_V1: tx_authorization_v1.TxAuthorizationV1,
+            TX_SCORED_V1: tx_scored_v1.TxScoredV1,
         }
     )
 
@@ -628,6 +631,32 @@ class EventPublisher:
         if isinstance(trace_id, str) and trace_id:
             header_list.append((TRACE_ID_HEADER, trace_id.encode()))
         return key.encode(), header_list
+
+    def check_topics(self, topics: Sequence[str], *, timeout_s: float) -> list[str]:
+        """The topics the broker does not confirm, checked WITHOUT holding the publish gate.
+
+        A publisher on a hot path verifies its topics here, off the request thread, so no publish
+        ever waits on broker metadata: a confirmed topic is known, and `publish` skips the check.
+        """
+        unconfirmed: list[str] = []
+        for topic in topics:
+            if topic in self._known_topics:
+                continue
+            try:
+                metadata = self.producer.list_topics(topic, timeout=timeout_s)
+            except Exception as exc:  # confluent_kafka.KafkaException, imported lazily
+                _log.warning(
+                    "event_publish_topic_unverified", topic=topic, error=type(exc).__name__
+                )
+                unconfirmed.append(topic)
+                continue
+            described = metadata.topics.get(topic)
+            if described is None or described.error is not None or not described.partitions:
+                unconfirmed.append(topic)
+                continue
+            with self._gate:
+                self._known_topics.add(topic)
+        return unconfirmed
 
     def _ensure_topic(self, topic: str) -> None:
         """Fail at the first publish, not after the message timeout, if the topic is absent."""

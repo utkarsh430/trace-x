@@ -74,6 +74,9 @@ AUTHORIZATION_OUTCOME_TOTAL: Final = "authorization_outcome_total"
 RULE_PACK_RELOAD_FAILED_TOTAL: Final = "rule_pack_reload_failed_total"
 WRITER_REFUSED_TOTAL: Final = "writer_refused_total"
 """Requests refused because this instance is not the online store's fenced writer (ADR-0051)."""
+OBSERVATION_LOG_TOTAL: Final = "observation_log_total"
+"""Sequenced observations handed to the log's producer, or lost from the log, by topic and
+outcome (ADR-0051 §3). Any outcome but `handed_over` leaves the session unclosable."""
 
 ONLINE_STORE_EVICTED_KEYS: Final = "online_store_evicted_keys_total"
 """Keys Redis has discarded under its own memory pressure.
@@ -111,6 +114,7 @@ HOT_PATH_METRICS: Final[frozenset[str]] = frozenset(
         RULE_PACK_RELOAD_FAILED_TOTAL,
         AUTHORIZATION_OUTCOME_TOTAL,
         WRITER_REFUSED_TOTAL,
+        OBSERVATION_LOG_TOTAL,
         ONLINE_STORE_EVICTED_KEYS,
         ONLINE_STORE_MEMORY_BYTES,
     }
@@ -144,6 +148,7 @@ class HotPathMetrics:
         "feature_read_latency",
         "feature_unavailable",
         "latency",
+        "observation_log",
         "rate_limited",
         "reload_failed",
         "replays",
@@ -215,6 +220,13 @@ class HotPathMetrics:
         self.reload_failed: Counter = meter.create_counter(
             RULE_PACK_RELOAD_FAILED_TOTAL,
             description="Rule-pack reloads refused; the previous pack stayed in force.",
+        )
+        self.observation_log: Counter = meter.create_counter(
+            OBSERVATION_LOG_TOTAL,
+            description=(
+                "Sequenced observations handed to the log's producer, or lost from the log, by "
+                "topic and outcome."
+            ),
         )
         self.writer_refused: Counter = meter.create_counter(
             WRITER_REFUSED_TOTAL,

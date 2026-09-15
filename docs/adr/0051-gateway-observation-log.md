@@ -86,6 +86,18 @@
   content and `idempotency_key` must not depend on which session carried it.
 - **Failures change no decision.** A shed or failed delivery makes the session unclosable. Scoring
   fails open (CLAUDE.md §3.7).
+- **Settled while implementing (slice 3):**
+  - Topics are verified at start, and retried on the log's own thread. A topic not yet verified is
+    not published to, so no publish waits on broker metadata.
+  - A transaction refused for clock skew is refused before its number is assigned.
+  - A transaction triage refuses with 503 is still published, with the decision the pipeline
+    reached and no case id: the online store recorded it.
+  - The gateway producer's delivery timeout is 30 s, because it bounds an unclosed session's gap
+    (§5).
+  - Without a configured broker nothing is published and no session closes. A `core`-only
+    gateway scores normally.
+  - A retried identity event under the same idempotency key keeps its envelope `event_id`, derived
+    from `(token, key)` as the observation's own id is.
 
 ### 4. Close
 The session closes only after a confirmed flush: nothing outstanding, no failed delivery report and
@@ -112,6 +124,8 @@ Bronze (Step 5) applies it; it is stated here because the producer must make it 
 - **Release:** with its producer: the schema, its RELEASED entry, the codegen model, the `topics.py`
   key, and a `topics.yaml` declaration replacing the reservation.
 - **Measured before declaring:** the record size replaces the reservation's placeholder.
+  - The measured size exceeded the placeholder. The local byte cap is 192 MiB per partition so the
+    declaration fits the local disk cap; the numbers are recorded beside it in `topics.yaml`.
 - **`identity.events.v1`** gains the gateway as a producer. That is ledger metadata, not a schema
   change.
 
@@ -163,6 +177,9 @@ Bronze (Step 5) applies it; it is stated here because the producer must make it 
   detectable.
 - A misestimated clock margin would misplace gap edges. The signal is the coverage tests at gap
   boundaries.
+- An identity event that reuses an idempotency key with a different event time, while the replay
+  cache is down, gets a different envelope `event_id`, but the store records a conflict under one
+  observation id. History and the store then disagree about that event.
 
 ## Implementation status
 - **Slice 1 (implemented):** migration 0006, `PostgresSessionLedger`, `PostgresWriterLock` and
@@ -173,9 +190,15 @@ Bronze (Step 5) applies it; it is stated here because the producer must make it 
     and re-acquisition with a new session;
   - readiness, the 503 refusals, and the start-up writes behind the fence;
   - unit tests, integration tests, and a chaos test that terminates the writer's backend.
+- **Slice 3 (implemented):** `tx.scored.v1` released with its producer, and the observation log:
+  - the schema, its RELEASED entry, the codegen model, the `topics.py` key, and a `topics.yaml`
+    declaration replacing the reservation, with a measured record size;
+  - `trace_core.observation.scored_event` and `trace_core.observation.log.ObservationLog`:
+    sequence, write online, produce with `block=False` and session headers, and close only on a
+    confirmed flush of every assigned number;
+  - identity events that feed a stream are sequenced and published on `identity.events.v1`;
+  - the gateway image gains `confluent-kafka`, and only it, from the `stream` extra.
 - **Not yet built:**
-  - sequencing and session headers;
-  - `tx.scored.v1`;
   - the outbox relay;
   - the chaos tests;
   - the A/B.

@@ -192,10 +192,22 @@ not a store fault.
 their LangGraph checkpoints. Verify no duplicate action execution via idempotency keys.
 
 ### Kafka unavailable
-**Detect:** producer timeouts.
-**Behaviour:** gateway buffers to a bounded local WAL, then sheds. **Scoring continues.**
-**Action:** restore Kafka; drain the WAL. Confirm dedup absorbed replays. Check `late_events` growth —
-buffered events may now be late and must land there, not vanish.
+**Detect:** `/readyz` `checks.observation_log` is `unavailable: …`; `observation_log_total` outcomes
+other than `handed_over` rising; `event_publish_outcomes_total{outcome="failed"}`.
+**Behaviour:** **Scoring continues.** The gateway producer buffers in memory, bounded, and sheds when
+full; there is no local WAL. Every observation shed, refused or undelivered leaves its writer session
+unclosed, so history claims no completeness across the outage (ADR-0051 §4-5).
+**Action:** restore Kafka. The gateway verifies its topics again by itself every 5 s. Nothing is
+replayed: the gap is recorded, not repaired, and a store rebuilt from history must refuse completeness
+across it. Check `late_events` growth for records delivered after the outage.
+
+### Observation log not configured
+**Detect:** `/readyz` `checks.observation_log` is `not configured: …`; log event
+`observation_log_not_configured` at start.
+**Behaviour:** the gateway scores normally and publishes nothing. No writer session ever closes, so
+history coverage claims nothing for the time it runs. This is the default for a `core`-only stack.
+**Action:** start the `streaming` profile, apply the topics (`scripts/kafka_topics.py apply
+--environment local`), and set `TRACE_GATEWAY_KAFKA_BOOTSTRAP=kafka:19092` for the gateway.
 
 ### Kafka topic missing or drifted
 

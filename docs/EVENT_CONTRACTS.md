@@ -68,7 +68,7 @@ any code references a topic that is not RELEASED (ADR-0028).
 | `tx.raw.v1` | `account_id` | 6 / 24 | 7 d | delete | **RELEASED** (Phase 1) |
 | `identity.events.v1` | `account_id` | 3 / 12 | 30 d | delete | **RELEASED** (Phase 1) |
 | `device.events.v1` | `device_id` | 3 / 12 | 30 d | delete | **RELEASED** (Phase 1) |
-| `tx.scored.v1` | `account_id` | 6 / 24 | 7 d | delete | PLANNED (Phase 3) |
+| `tx.scored.v1` | `account_id` | 6 / 24 | 7 d | delete | **RELEASED** (Phase 3) |
 | `investigation.requested.v1` | `case_id` | 3 / 6 | 30 d | delete | **RELEASED** (Phase 2) |
 | `tx.authorization.v1` | `account_id` | 6 / 24 | 7 d | delete | **RELEASED** (Phase 3) |
 | `investigation.events.v1` | `investigation_id` | 3 / 6 | 90 d | delete | PLANNED (Phase 7) |
@@ -133,8 +133,8 @@ An incompatible change without a version bump **fails the build**.
 - **Ordering is guaranteed per partition key only** — per `account_id`, never globally. No consumer may
   assume cross-account ordering.
 - **Deduplication** is by each topic's declared identity (`deploy/kafka/topics.yaml`, PHASE3_PLAN
-  §3 Q2): `payload.transaction_id` for `tx.raw.v1` -- a producer retry carries a new `event_id` and
-  must still collapse -- `envelope.event_id` for identity and device events, and
+  §3 Q2): `payload.transaction_id` for `tx.raw.v1`, `tx.authorization.v1` and `tx.scored.v1` -- a
+  producer retry carries a new `event_id` and must still collapse -- `envelope.event_id` for identity and device events, and
   `envelope.idempotency_key` for `investigation.requested.v1`. The online store deduplicates on the
   same identities (ADR-0046 §1), and Spark within its watermark.
 - **Out-of-order events** are normal and handled by event-time windowing with a 10-minute watermark.
