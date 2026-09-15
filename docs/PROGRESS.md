@@ -1039,6 +1039,36 @@ both reports.
       * a topic recreated under a running query: the query stops, and nothing of the new topic lands;
       * the two coverage cases: the exact gaps, and vouching before the mark once every partition has
         arrived.
+* **Step 5 — Bronze: complete. `P3.kafka-ingest` is PASS (2026-09-15)** on the existing suites. No
+  Bronze functionality was added to close it.
+  * **Evidence:**
+    * `pytest -m integration tests/integration/test_kafka_platform.py tests/integration/test_bronze_kafka.py`:
+      19 passed, none skipped, against a real broker and PostgreSQL;
+    * `pytest -m stream tests/stream/test_bronze_tables.py`: 5 passed;
+    * the Bronze unit suites: 157 passed.
+  * **Each invariant, and the test that proves it:**
+    * produced records equal Bronze records, byte for byte:
+      `test_every_released_topic_lands_in_bronze_byte_for_byte_and_is_conserved`, and the stream test
+      `test_a_micro_batch_lands_byte_for_byte_through_the_checkpoint_and_is_never_parsed`;
+    * an unparseable value is stored raw and blocks nothing:
+      `test_a_poison_value_between_valid_records_is_stored_raw_and_blocks_nothing`;
+    * a restart neither loses nor duplicates, and a batch Spark replays from its offsets is skipped by
+      Delta: `test_a_restart_from_checkpoint_neither_loses_nor_duplicates`;
+    * expired offsets and a changed topic identity fail loudly:
+      `test_trimmed_unread_offsets_stop_bronze_loudly_and_trimmed_read_ones_do_not`,
+      `test_a_recreated_topic_is_refused_where_spark_alone_silently_skips_its_first_records` and
+      `test_a_topic_recreated_under_a_running_query_stops_it_and_lands_nothing_of_the_new_topic`;
+    * conservation: the unit suite, and the stream test
+      `test_conservation_statistics_computed_in_spark_equal_the_reference`;
+    * coverage: the two Bronze coverage integration tests, and the stream coverage-rows test;
+    * declared topics and a correct producer: `tests/integration/test_kafka_platform.py`.
+  * **The acceptance command** named `tests/integration/test_kafka_ingest.py`, which was never
+    written. It now names the suites that hold the evidence.
+  * **Not Step 5's, and recorded where they belong:**
+    * replay from an arbitrary offset into a fresh lake is `P3.checkpoint-resume` (Step 10);
+    * CI PostgreSQL for the live coverage tests is a Phase 3 exit item (Kafka and Spark tests in CI,
+      nothing skipped);
+    * B6, the retention floor, is decided before Step 11.
 * **Step 6 — Silver: in progress** (ADR-0053, Proposed; `P3.event-time`).
   * **Design (ADR-0053):**
     * **Tables:** one canonical Silver table per released topic, plus shared `silver.late_events`
