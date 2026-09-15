@@ -458,8 +458,8 @@ both reports.
       account's velocity. A diagnostic measurement without a `run_id` showed it material for
       accounts with thousands of transactions a day, which an adversary controls. Step 12 measures
       it with a `run_id`; pre-aggregating account windows inside the script is the fallback design.
-    * The memory model (`run_id: bench-20260913-memory-model-5c770259`) describes the Phase 2
-      layout, not this one. Memory is re-measured in Step 12.
+    * Memory was re-measured for this layout in Step 12
+      (`run_id: bench-20260915-054159-memory-model-5ee55136`, ADR-0054).
     * The script spans several entities' keys, so the store runs on one Redis instance, not a
       Cluster (Phase 12).
     * Key expiry is wall-clock garbage collection, sized for event time advancing at least as fast
@@ -1069,6 +1069,24 @@ both reports.
     * CI PostgreSQL for the live coverage tests is a Phase 3 exit item (Kafka and Spark tests in CI,
       nothing skipped);
     * B6, the retention floor, is decided before Step 11.
+* **Step 12 — memory model correction (lead): in progress** (ADR-0054, Proposed).
+  * **Memory, measured through the store itself**
+    (`run_id: bench-20260915-054159-memory-model-5ee55136`, from clean commit `5ee5513`):
+    * **Why a rewrite.** The Phase 2 model restated Phase 2 key shapes and fitted two-point lines.
+      `benchmarks/features/memory_model.py` now drives `RedisOnlineFeatureStore`'s own scripts on a
+      throwaway Redis of the compose image, and sums exact `MEMORY USAGE` by key family into curves.
+    * **Ten-minute acceptance run:** 477.7 MiB projected. 188.8 MiB of that is an assumed
+      authorization outcome per transaction, labelled as an upper bound.
+    * **Steady state at 500 TPS:** 36.53 GiB, dominated by one string key per observation:
+      45,000,000 keys at 416 bytes.
+    * **The encoding jump is measured:** a sorted set costs 7,232 bytes at 128 members and 18,040 at
+      129.
+    * **Limit.** The model's rule implies 640 MiB; the configured 704 MiB stays until the Phase 3
+      re-run of Phase 2's load gate measures this layout's real end-of-run memory (ADR-0054 §3).
+    * **Evidence:** `tests/unit/test_memory_model.py` 7 passed; every measured family non-zero; the
+      record is clean.
+  * **Still to run:** score latency by account depth, the other Step 12 measurement, on a quiet
+    machine after the Silver suites.
 * **Step 6 — Silver: in progress** (ADR-0053, Proposed; `P3.event-time`).
   * **Design (ADR-0053):**
     * **Tables:** one canonical Silver table per released topic, plus shared `silver.late_events`

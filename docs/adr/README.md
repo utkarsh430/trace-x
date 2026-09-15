@@ -53,7 +53,7 @@ been thought through.
 | [0039](0039-event-loop-over-threadpool.md) | The hot path stays on the event loop; the workload, not the scheduler, is the bottleneck | 2 | Accepted |
 | [0040](0040-two-workload-profiles.md) | Two workload profiles: a representative acceptance gate and an adversarial saturation benchmark | 2 | Accepted |
 | [0041](0041-online-store-memory-and-eviction.md) | Online-store memory classes: a best-effort cache must not evict correctness-relevant state | 2 | Superseded by 0042 |
-| [0042](0042-online-store-memory-corrected.md) | Online-store memory corrected: AOF was the latency cause, eviction is the correctness cause | 2 | Accepted |
+| [0042](0042-online-store-memory-corrected.md) | Online-store memory corrected: AOF was the latency cause, eviction is the correctness cause | 2 | Superseded by 0054 |
 | [0043](0043-small-threadpool-measured.md) | The small-threadpool middle ground is measured, and it is worse | 2 | Accepted |
 | [0044](0044-online-store-correctness-topology.md) | Feature state cannot silently evict: two Redis instances, a declaration-driven write plan, and a completeness epoch | 2 | Accepted |
 | [0045](0045-phase3-toolchain-contract.md) | The Phase 3 toolchain contract: hashed installs, verified JVM jars, and Java 17 enforced by the repository | 3 | Accepted |
@@ -65,6 +65,7 @@ been thought through.
 | [0051](0051-gateway-observation-log.md) | The gateway's durable observation log: fenced producer sessions, contiguous sequences and detectable gaps | 3 | Proposed |
 | [0052](0052-bronze-ingest-topology.md) | Bronze ingest topology and its no-skip guards: a table and query per topic, the raw row, topic-id and conservation checks | 3 | Proposed |
 | [0053](0053-silver-canonical-events.md) | Silver: validated, exactly deduplicated, late-tagged canonical events, with quarantine and Bronze-to-Silver conservation | 3 | Proposed |
+| [0054](0054-online-store-memory-step1b-layout.md) | Online-store memory re-measured through the store for the Step 1b layout; the configured limit stays until the load gate re-runs | 3 | Proposed |
 
 ## Notes on status
 

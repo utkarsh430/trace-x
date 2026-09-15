@@ -521,12 +521,13 @@ correctness-relevant state and runs `noeviction`: when full it refuses the write
 store's epoch forward (ADR-0046 §5). The cache instance holds the replay
 cache and rate-limit windows and runs `allkeys-lru`, because nothing in it decides — the replay
 guarantee's authority is `cases.trigger_transaction_id` in Postgres and the limiter fails open. The
-feature store's limit follows from `benchmarks/features/memory_model.py`: 704 MiB holds the
-ten-minute representative acceptance run with 1.25× headroom and about thirteen minutes of 500 TPS;
-the steady-state requirement at that rate is ~26 GiB and does not fit this profile, which ADR-0044
-states structure by structure rather than resolving by changing feature semantics. That model
-describes the Phase 2 layout; the Step 1 layout (ADR-0046 §5) keeps raw observations for 25 hours and
-is re-measured in Phase 3 Step 12. Allocated:
+feature store's limit follows from `benchmarks/features/memory_model.py`, which measures the Step 1b
+layout through the store itself (`run_id: bench-20260915-054159-memory-model-5ee55136`, ADR-0054). It
+projects 477.7 MiB for the ten-minute representative acceptance run, including an assumed
+authorization outcome per transaction, so its 1.25× headroom rule implies 640 MiB. The configured
+704 MiB stays until the Phase 3 re-run of the load gate measures this layout's real end-of-run
+memory. The steady-state requirement at 500 TPS is 36.53 GiB, dominated by one string key per
+observation, and does not fit this profile. Allocated:
 postgres 768M, redis 832M, redis-cache 160M, gateway 384M — 2,144 MiB, leaving 621 MiB for `api`,
 `worker` and `ui`.
 

@@ -147,8 +147,8 @@ offered rate if it is a spike; provision memory if it is not. The memory model
 a given rate and retention. Keys expire on their declared retention, so a full store recovers on its
 own once the rate drops. When a write next succeeds, the gateway clears the hole and moves the epoch
 to that moment plus 24 hours (a lost observation may be dated up to 24 h ahead), and warm-up runs from
-there; the ledger keeps the record. The memory model describes the Phase 2 layout; the Step 1 layout
-(ADR-0046 §5) is re-measured in Phase 3 Step 12.
+there; the ledger keeps the record. The memory model measures the Step 1b layout through the store itself
+(`run_id: bench-20260915-054159-memory-model-5ee55136`, ADR-0054).
 
 ### Feature store empty or warming — after a restart or `FLUSHALL`
 
