@@ -284,9 +284,13 @@ decisions, and no target or exit condition was lowered.
 - All medallion tables produced; parity test in CI with Spark actually executed; replay-from-offset
   demonstrated.
 - **ADR-0015 merged citing committed benchmark output.**
-- Every Phase 3 capability in `tests/acceptance/status.json` PASS with executable evidence — including
-  durable reconstruction, observation-log coverage, semantics hardening with the Phase 2 load gate
-  re-met, and `eval-v2`.
+- All REQUIRED Phase 3 exit capabilities in `tests/acceptance/status.json` PASS with executable
+  evidence — including durable reconstruction, observation-log coverage, and semantics hardening with
+  the Phase 2 load gate re-met.
+- `P3.eval-v2` is a tracked, non-gating evaluation artifact, not a required exit capability (user
+  decision, 2026-09-15). Its strict LPC-5 FAIL stays recorded as it is: a frozen dataset, zero Category
+  A findings, limitations disclosed, never described as LPC-5 compliant. It is never converted to PASS,
+  SKIP or any other status to make this checklist green.
 - Local Kafka byte caps and bounded lake retention documented as **local-development overrides**; the
   production retention contract is unchanged.
 

@@ -1282,8 +1282,33 @@ both reports.
       * **Memory model re-measured for the per-stream identity layout** (`run_id: bench-20260915-095206-memory-model-77d9afa4`, clean
         commit): the ten-minute run 477.7 MiB, which implies a 640 MiB limit, and steady state 37,401.9 MiB.
         The configured limit stays until the load gate re-runs (ADR-0054).
+      * **A Phase 2 load-gate re-run was invalid, and nothing was published (2026-09-15, 09:57–10:07 UTC).**
+        * *The configuration.* The gateway was rebuilt from f8c0573 (feature set 4.0.0, cap 512)
+          with the observation log on, as in the Step 4 A/B's log-on arm. The per-token rate limit
+          was raised for the run. The workload was `make load-gateway` defaults: representative
+          profile, 500 TPS, 600 s.
+        * *The script refused to record it.* It found two integrity failures (an achieved 478.0 TPS,
+          and 13,158 iterations never started) and one unexpected degradation count of 3. The raw
+          k6 summary is kept in the session scratchpad.
+        * *What the evidence shows.*
+          - The gateway's own histograms averaged 1.32 ms per request, 0.60 ms of scoring and
+            0.47 ms of store reads.
+          - Its completions ran at 500/s for most of the run. From 10:00:00 to 10:01:30 they dropped
+            to about 370–400/s, and the backlog of about 11,000 requests queued behind the single
+            async uvicorn worker, which gave the 1.6–3 s tail.
+          - The three store timeouts coincide with slow Redis scripts at 10:05:28 and 10:07:03, and
+            one slow script fell inside the dip.
+          - The host was loaded at the time (load average about 3–3.8, the Docker VM at about 70%
+            CPU, interactive browser use, two agents active). Step 4's A/B saw slot failures under
+            interactive use too.
+        * *Classified E* (machine contention). This is a hypothesis the next run must confirm, not a
+          result: a code-path slowdown would be steady or grow with data, not one 90 s dip with full
+          throughput either side. Capacity is **not** claimed from this run.
+        * *Also:* the relay worker had failed to start in that job, because it was brought up with the
+          streaming profile only. It is now started with both profiles.
       * **Still to do:**
-        - the Phase 2 load gate re-run, measuring latency with the cap in place.
+        - the Phase 2 load gate re-run on a quiet machine: no agents active, and host load checked
+          before starting, measuring latency with the cap in place.
       * Step 12 stays in progress until then.
 * **Step 6 — Silver: complete** (ADR-0053, Proposed; `P3.event-time` PASS, 2026-09-15).
   * **Design (ADR-0053):**
@@ -1465,6 +1490,17 @@ both reports.
       session two passed the gateway concurrency test.
   * **Not yet proven.** No GitHub Actions run of the new workflows exists: the branch is not pushed,
     and pushing is outward-facing. It is raised at Phase 3 exit.
+
+* **Phase 3 exit rule, decided by the user (2026-09-15).** "All REQUIRED Phase 3 exit capabilities
+  must PASS."
+  * *The tracker.* `P3.eval-v2` is a tracked, non-gating evaluation artifact, not a required exit
+    capability, flagged `"gating": false` in `status.json`. Its FAIL stays as recorded: a frozen
+    dataset, strict LPC-5 acceptance FAIL, zero Category A findings, limitations disclosed, never
+    described as LPC-5 compliant.
+  * *What never happens.* It is not converted to PASS, SKIP or any misleading status, and LPC-5
+    reopens only for a genuine downstream Category A defect.
+  * *Where it is written.* ROADMAP's Phase 3 exit conditions and PHASE3_PLAN §7 and §8 are amended to
+    match; they had said every capability, eval-v2 included, must PASS.
 
 * **Step E — `eval-v2`.** Stages 1, 1b and 1c are complete. Their code is integrated onto this branch.
   * **Integration.** The worktree branch `worktree-agent-aae9faa608636c9c8` was fast-forwarded to the

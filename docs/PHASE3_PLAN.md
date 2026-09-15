@@ -298,12 +298,13 @@ Parallel agents work in isolated git worktrees with non-overlapping ownership. O
 | `P3.stream-throughput` | the throughput target and the outage-recovery target, recorded honestly |
 | `P3.pin-failfast` | a wrong Java, Spark, Delta, Hadoop, Scala or jar fails fast with an actionable message |
 | `P3.resource-bounds` | local resource caps asserted and unsafe maintenance refused |
-| `P3.eval-v2` | the Q5 requirements, including the label-proxy test |
+| `P3.eval-v2` | the Q5 requirements, including the label-proxy test. **Tracked, non-gating**: not a required exit capability (user decision, 2026-09-15) |
 
 ## 8. Exit checklist
 
-The ROADMAP Phase 3 exit conditions, unweakened, plus: all thirteen capabilities above PASS with
-executable evidence; Phase 2's load gate and manual replay re-met after hot-path changes; Redis, Kafka
-and Spark tests running in CI with nothing silently skipped; documentation updated (including the
+The ROADMAP Phase 3 exit conditions, unweakened, plus: all REQUIRED Phase 3 exit capabilities above
+PASS with executable evidence (every capability except the non-gating `P3.eval-v2` tracker, whose
+recorded FAIL stands); Phase 2's load gate and manual replay re-met after hot-path changes; Redis,
+Kafka and Spark tests running in CI with nothing silently skipped; documentation updated (including the
 removal of the Silver tokenization claim and the local-override statement); the final adversarial
 review recorded; and no Phase 4 ML, agent or cloud-deployment work.

@@ -371,12 +371,13 @@
       "phase": "3",
       "name": "eval-v2: legitimate identity/device activity, own manifest and digest, and presence is not a label proxy",
       "status": "FAIL",
+      "gating": false,
       "evidence": {
         "command": "python -m eval.track_a.lpc5_control --control eval-v2 --candidate eval/track_a/eval-v2.candidate.manifest.json",
         "verified_at": null,
         "result": "LPC-5 revision 4 strict acceptance FAIL on the frozen eval-v2 candidate, with zero Category A (correctness, leakage or representation) findings (eval/track_a/audits/stage-2-evidence/lpc5-eval-v2-acceptance-rev4.txt)."
       },
-      "notes": "Lead-added tracker for the user-approved Q5 requirements (docs/PHASE3_PLAN.md §3); not a separately approved capability. FAIL on its label-proxy acceptance: LPC-5 strict acceptance FAIL, Category A findings 0; the Category B and C reasons are in docs/PROGRESS.md. By the user's decision (2026-09-14) eval-v2 is nonetheless the frozen Phase 3 dataset (eval/track_a/eval-v2.manifest.json, materialisation run gen-20260914-eval-v2-276b661d), used with its limits disclosed: never described as LPC-5 compliant, a coverage-floor scenario mix, no natural-prevalence claim. The eval-v2 Stage 2 sub-track is CLOSED for Phase 3; acceptance-scale controls are deferred evaluation hardening (D15) and research-grade synthetic-data work is D16. LPC-5 reopens only for a downstream Category A correctness or leakage defect."
+      "notes": "Lead-added tracker for the user-approved Q5 requirements (docs/PHASE3_PLAN.md §3); not a separately approved capability. FAIL on its label-proxy acceptance: LPC-5 strict acceptance FAIL, Category A findings 0; the Category B and C reasons are in docs/PROGRESS.md. By the user's decision (2026-09-14) eval-v2 is nonetheless the frozen Phase 3 dataset (eval/track_a/eval-v2.manifest.json, materialisation run gen-20260914-eval-v2-276b661d), used with its limits disclosed: never described as LPC-5 compliant, a coverage-floor scenario mix, no natural-prevalence claim. The eval-v2 Stage 2 sub-track is CLOSED for Phase 3; acceptance-scale controls are deferred evaluation hardening (D15) and research-grade synthetic-data work is D16. LPC-5 reopens only for a downstream Category A correctness or leakage defect. Tracked, NON-GATING: not a required Phase 3 exit capability (user decision, 2026-09-15); its FAIL stands as recorded."
     },
     {
       "id": "P4.training",
