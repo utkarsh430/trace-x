@@ -289,6 +289,14 @@ from that history.
   afterwards.
 - **The memory spike** is recorded as a diagnostic (Redis `INFO memory`), not as a target, and
   what it does and does not measure is stated with it.
+- **The fifth declared difference** (`folded_out_of_order`, D6) has its own history: one account's
+  last observation is dated past the raw horizon behind its own newest, so the live store folds out
+  of `(occurred_ms, identity)` order and serves no profile for it, while hydration -- replaying in
+  event-time order -- serves the event-time-complete value. The test asserts *containment*, not
+  merely a difference: windows and previous observations must agree, every profile the live store
+  serves must equal the hydrated one, and the extra profiles must be the hydrated store's. A test
+  that only checked "they differ" would pass if hydration were the side losing a profile, which is
+  the case this difference is declared to rule out.
 
 **Measured, 2026-09-16.** The ten tests executed together and passed, none skipped, against a
 throwaway broker, a real Redis, this suite's own migrated PostgreSQL database and Delta 4.0.1 on
@@ -356,6 +364,10 @@ history longer than the widest retention, which belongs with the Step 12 memory 
   from the marker would fail every legitimate resume as a foreign write. What still catches a real
   race is `prepare`'s two guards -- the store no more than one batch ahead, and no gateway session
   opened since -- and the per-write continuity check during the replay.
+  - *The batch in "one batch ahead" is the crashed run's, recorded in the marker, not the resuming
+    run's.* Reading it from the resuming run let a crash at `--batch-size 2`, resumed at the 1,000
+    default, tolerate 1,000 observations written by someone else. Found in the Phase 3 adversarial
+    review and fixed; `_foreign_sessions` never depended on it.
 - **`_foreign_sessions` is widened by the clock margin towards reporting one.** Session times are
   the database's and the marker's are this host's, so a session opened within a margin of the run's
   start is treated as a writer and refuses the claim. Erring the other way would let a racing
@@ -395,6 +407,21 @@ what was asked:
   child process killed between two `observe` calls.
 - **Acceptance evidence:** the ten tests passed together in one run, with the memory diagnostic
   above. The lead records the run beside it at integration.
+- **Corrected at integration, by the Phase 3 adversarial review** (all three found by reading, and
+  none of them reachable by the ten tests above):
+  - *A crash between the marker and the withdrawal wedged the namespace.* `prepare` writes the
+    marker and only then withdraws, so that window leaves a marker with no epoch -- §6's "adopts the
+    marker, sets `B'`" row. `_adopt` refused it as a foreign epoch and the `--discard-unfinished`
+    branch sat below the raise, so the documented escape hatch was unreachable and recovery meant
+    deleting keys by hand. It now adopts that state **and withdraws to a fresh `B'`**: `_adopt`
+    never called `_withdraw_to_begin`, so relaxing the refusal alone would have adopted a store with
+    no epoch and let `observe`'s `NX` date it from the first replayed observation (§5.2).
+  - *Identity conflicts did not survive a resume.* `_flush` found them, the marker did not carry
+    them, and `_ReplayState` began empty -- so a resumed run dropped the `identity_conflicts`
+    component and claimed `T` **earlier** than the evidence allows. They are now in the marker, and
+    an unreadable list is refused rather than read as "no conflicts".
+  - *The resume's foreign-write tolerance was the resuming run's batch size*, not the crashed run's
+    (see Risks).
 
 ## Status
 Proposed

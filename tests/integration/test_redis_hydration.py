@@ -230,6 +230,7 @@ def _write_history(
     transactions: int = 14,
     lose_one: bool = False,
     first_index: int = 1,
+    last_occurred: dt.datetime | None = None,
 ) -> Live:
     """A gateway session that scores, observes and publishes, exactly as the gateway does."""
     stream = identity_stream(IDENTITY_EVENT_TYPE)
@@ -276,6 +277,11 @@ def _write_history(
     try:
         for index in range(first_index, first_index + transactions):
             occurred = BASE + dt.timedelta(minutes=170 * (index - first_index))
+            if last_occurred is not None and index == first_index + transactions - 1:
+                # Absolute, not a relative backdate: accounts cycle `index % 3`, so the gap this
+                # has to clear is three steps of the schedule, and a delta would quietly stop
+                # clearing the raw horizon if `transactions` ever changed.
+                occurred = last_occurred
             sequenced = log.sequence()
             request = _transaction_request(index, f"acct_{index % 3:06d}", occurred)
             outcome = pipeline.score(
@@ -494,6 +500,31 @@ def clean(
     _fresh(topics, TX_SCORED_V1, IDENTITY_EVENTS_V1)
     lake = LakeConfig.at(tmp_path_factory.mktemp("clean-lake"))
     live = _write_history(topics, database, redis_client, lake, namespace="live-clean")
+    _medallion(spark, lake, topics, (TX_SCORED_V1, IDENTITY_EVENTS_V1))
+    return live
+
+
+@pytest.fixture(scope="module")
+def folded(
+    topics: Broker, database: str, redis_client: Any, spark: Any, tmp_path_factory: Any
+) -> Live:
+    """A history whose last observation lands more than the raw horizon behind its own account.
+
+    `acct_000002`'s previous observation sits at `BASE + 28.3 h` (indices 2, 5, 8, 11, 14 at 170
+    minutes apart), so dating index 14 at `BASE + 30 min` puts it ~27.8 h earlier -- past the 25 h
+    `raw_tx_ms`. The LIVE store therefore folds it out of `(occurred_ms, identity)` order and marks
+    that account's lifetime run inexact.
+    """
+    _fresh(topics, TX_SCORED_V1, IDENTITY_EVENTS_V1)
+    lake = LakeConfig.at(tmp_path_factory.mktemp("folded-lake"))
+    live = _write_history(
+        topics,
+        database,
+        redis_client,
+        lake,
+        namespace="live-folded",
+        last_occurred=BASE + dt.timedelta(minutes=30),
+    )
     _medallion(spark, lake, topics, (TX_SCORED_V1, IDENTITY_EVENTS_V1))
     return live
 
@@ -812,3 +843,50 @@ def test_silver_behind_the_evidence_is_refused(
                 now=dt.datetime.now(dt.UTC),
             )
         assert rebuilt.store.stored_position() == 0, "nothing is replayed onto unproven evidence"
+
+
+def test_the_fifth_declared_difference_is_an_absence_against_a_value(
+    folded: Live, database: str, redis_client: Any, spark: Any
+) -> None:
+    """ADR-0057 §3's `folded_out_of_order`, asserted in the one direction it declares.
+
+    An observation that arrives more than the raw horizon (25 h) behind its account's newest makes
+    the live store fold out of `(occurred_ms, identity)` order, which marks the lifetime run
+    inexact; `redis_features` then serves **no profile at all** for that account
+    (`prefix.inexact or prefix.run_start_ms is None`). Hydration replays in event-time order, so it
+    never folds out of order and serves the event-time-complete value.
+
+    The declared direction is an absence against a value, **never two different numbers and never
+    the reverse** -- so this asserts containment, not merely that something differs. A test that
+    only checked "they differ" would pass if hydration were the one losing the profile, which is
+    the failure this difference is declared to rule out.
+    """
+    with _hydrator(spark, folded.lake, database, redis_client, "hyd-folded") as rebuilt:
+        report = rebuilt.hydrator.run()
+    assert report.claimed, report.summary()
+
+    live_contexts = _probe_contexts(folded.store, folded)
+    rebuilt_contexts = _probe_contexts(rebuilt.store, folded)
+    assert set(live_contexts) == set(rebuilt_contexts)
+
+    missing_live: set[tuple[Any, ...]] = set()
+    for key, live_context in live_contexts.items():
+        rebuilt_context = rebuilt_contexts[key]
+        assert live_context.windows == rebuilt_context.windows, f"windows differ for {key}"
+        assert live_context.previous == rebuilt_context.previous, f"previous differs for {key}"
+        live_profiles, rebuilt_profiles = live_context.profiles, rebuilt_context.profiles
+        assert set(live_profiles) <= set(rebuilt_profiles), (
+            f"hydration lost a profile the live store served for {key}: "
+            f"the declared direction is an absence against a value, never the reverse"
+        )
+        for profile_key, profile in live_profiles.items():
+            assert profile == rebuilt_profiles[profile_key], (
+                f"two different profiles for {profile_key}: the declared difference is an "
+                f"absence against a value, never two different numbers"
+            )
+        missing_live |= set(rebuilt_profiles) - set(live_profiles)
+
+    assert missing_live, (
+        "the fixture folded nothing out of order: every profile the hydrated store serves was "
+        "also served live, so this test proved nothing about the fifth declared difference"
+    )

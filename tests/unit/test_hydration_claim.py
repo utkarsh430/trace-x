@@ -30,6 +30,7 @@ from trace_core.stream.hydration import (
     event_from_row,
     event_time_image,
     merge_ordered,
+    parse_conflicts,
     parse_cursor,
     replay_span_bound_ms,
 )
@@ -153,6 +154,24 @@ def test_a_quarantined_record_pushes_the_claim_past_its_arrival() -> None:
     assert claim.claimable
     expected = after_ms(arrival + dt.timedelta(seconds=MARGIN_S) + FUTURE_SKEW)
     assert claim.since_ms == expected == claim.components["quarantined"]
+
+
+def test_the_conflicts_a_crashed_run_found_survive_into_the_resume() -> None:
+    """ADR-0057 §4(b): a conflict is found once, while replaying, and the lost store may hold
+    either row. The marker is the only place it can survive a crash, so the round trip has to be
+    exact -- `_flush` writes the milliseconds comma-joined, and a resume seeds its state from them.
+    Dropping one removes the `identity_conflicts` component and claims `T` EARLIER than the
+    evidence allows, which costs data rather than a re-run."""
+    assert parse_conflicts("") == [], "the field `prepare` seeds is empty, and means no conflicts"
+    found = [1_700_000_000_123, 1_700_000_000_456]
+    assert parse_conflicts(",".join(str(ms) for ms in found)) == found
+    assert parse_conflicts("1700000000123") == [1_700_000_000_123]
+
+
+def test_an_unreadable_conflict_list_is_refused_not_read_as_none() -> None:
+    """Silently returning [] would turn a corrupt marker into a stronger claim."""
+    with pytest.raises(HydrationRefusedError, match="unreadable identity conflicts"):
+        parse_conflicts("1700000000123,not-a-millisecond")
 
 
 def test_an_identity_conflict_pushes_the_claim_past_its_own_event_time() -> None:

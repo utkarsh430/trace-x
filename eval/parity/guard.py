@@ -18,7 +18,11 @@ from enum import StrEnum
 from typing import Any
 
 from eval.parity.comparator import Pairing, ParityTally
-from eval.parity.partition import MIN_COMPARISONS_OVERALL, MIN_COMPARISONS_PER_STRATUM
+from eval.parity.partition import (
+    MAX_NOT_VOUCHED_FRACTION_PER_FEATURE,
+    MIN_COMPARISONS_OVERALL,
+    MIN_COMPARISONS_PER_STRATUM,
+)
 from eval.parity.skew import SkewTally
 
 
@@ -59,6 +63,7 @@ class GuardKind(StrEnum):
     NO_ARRIVAL_SKEW = "NO_ARRIVAL_SKEW"
     STRATUM_BELOW_MINIMUM = "STRATUM_BELOW_MINIMUM"
     OVERALL_BELOW_MINIMUM = "OVERALL_BELOW_MINIMUM"
+    FEATURE_MOSTLY_EXCLUDED = "FEATURE_MOSTLY_EXCLUDED"
 
 
 VACUITY = frozenset(
@@ -101,6 +106,18 @@ def collection_violations(
                     kind, f"{tally.pairing}: 0 comparisons; skipped {dict(tally.skipped)}"
                 )
             )
+        for feature_id, feature_counts in sorted(tally.features.items()):
+            offered = feature_counts.compared + feature_counts.not_vouched
+            excluded = feature_counts.not_vouched
+            if offered and excluded / offered > MAX_NOT_VOUCHED_FRACTION_PER_FEATURE:
+                violations.append(
+                    GuardViolation(
+                        GuardKind.FEATURE_MOSTLY_EXCLUDED,
+                        f"{tally.pairing}: {feature_id}: {excluded} of {offered} comparisons "
+                        f"excluded as unvouched, above "
+                        f"{MAX_NOT_VOUCHED_FRACTION_PER_FEATURE:.0%}",
+                    )
+                )
         if tally.pairing is not Pairing.AS_SERVED:
             continue
         for feature_id in approximate_features:

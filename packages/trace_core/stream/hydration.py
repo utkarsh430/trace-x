@@ -162,6 +162,23 @@ def cursor_text(order_key: tuple[int, str, str] | None) -> str:
     return "" if order_key is None else json.dumps(list(order_key), separators=(",", ":"))
 
 
+def parse_conflicts(text: str) -> list[int]:
+    """The identity conflicts a crashed run had already found (ADR-0057 §4(b)).
+
+    Unreadable content is refused, never read as "no conflicts": each one raises `T`, so losing one
+    claims completeness over a window a lost observation could fall in -- silently, and in the
+    direction that costs data rather than the direction that costs a re-run.
+    """
+    if not text:
+        return []
+    try:
+        return [int(part) for part in text.split(",")]
+    except ValueError as exc:
+        raise HydrationRefusedError(
+            f"the hydration marker holds unreadable identity conflicts: {exc}"
+        ) from exc
+
+
 def parse_cursor(text: str) -> tuple[int, str, str] | None:
     if not text:
         return None
@@ -616,6 +633,8 @@ class Hydrator:
             "count": "0",
             "position": "0",
             "digest": "",
+            "conflicts": "",
+            "batch_size": str(self.batch_size),
         }
         kind, marker = self.store.start_hydration(fields)
         if kind == "occupied":
@@ -643,7 +662,13 @@ class Hydrator:
             raise HydrationRefusedError(f"the hydration marker holds an unknown state {state!r}")
         begin = int(marker["begin_epoch_ms"])
         stored = self.store.stored_epoch_ms()
-        if stored != begin:
+        # No epoch at all is ADR-0057 §6's "after the marker, before `B`" row: `prepare` writes the
+        # marker and only then withdraws, so a crash between those two round trips leaves exactly
+        # this. Nothing is vouched for and nothing was replayed, so the run adopts the marker and
+        # withdraws to a fresh `B'`, which only ever moves the epoch later. Refusing it instead
+        # wedged the namespace: the discard branch below was unreachable, and recovery meant
+        # deleting keys by hand -- the "wipe and restart" this ADR's alternatives reject.
+        if stored is not None and stored != begin:
             raise HydrationRefusedError(
                 f"the store's epoch is {stored}, not the {begin} an unfinished hydration "
                 f"withdrew to: something else has moved it, so this run may claim nothing"
@@ -651,6 +676,24 @@ class Hydrator:
         self._begin_ms = begin
         self._begun_ms = int(marker["begun_ms"])
         self._refuse_foreign_writes(marker)
+        if stored is None:
+            # The crash above left a marker and no epoch, so this store vouches for nothing and
+            # protects nothing: `observe`'s NX would date the epoch from the first replayed
+            # observation (ADR-0057 §5.2). Withdraw to a fresh `B'` computed from this run's clock
+            # -- later than the marker's `B`, and the epoch only ever moves later.
+            now = self.now()
+            begin = to_millis(now) + int(FUTURE_SKEW.total_seconds() * 1_000)
+            begin += int(self.clock_margin_s * 1_000) + 1
+            self._begin_ms = begin
+            self._begun_ms = to_millis(now)
+            if not self.store.update_hydration(
+                run_id=str(marker["run_id"]),
+                state=STATE_REPLAYING,
+                fields={"begin_epoch_ms": str(begin), "begun_ms": str(to_millis(now))},
+            ):
+                raise HydrationRefusedError("another run adopted the hydration marker first")
+            self._withdraw_to_begin()
+            _log.info("hydration_withdrew_after_marker_only_crash", begin_epoch_ms=begin)
         if state == STATE_DISCARDING or self.discard_unfinished:
             deleted = self.store.discard_unfinished_hydration(
                 run_id=str(marker["run_id"]), begin_epoch_ms=begin
@@ -670,10 +713,13 @@ class Hydrator:
         """A gateway that wrote while this hydration was not running invalidates the resume."""
         recorded = int(marker.get("position") or 0)
         stored = self.store.stored_position()
-        if stored > recorded + self.batch_size:
+        # The crashed run's batch size, not this one's: a run killed at --batch-size 2 and resumed
+        # at the 1,000 default would otherwise tolerate 1,000 observations written by someone else.
+        tolerance = int(marker.get("batch_size") or self.batch_size)
+        if stored > recorded + tolerance:
             raise HydrationRefusedError(
-                f"the store's position is {stored}, more than one batch beyond the {recorded} the "
-                f"marker recorded: another writer has recorded observations"
+                f"the store's position is {stored}, more than one batch ({tolerance}) beyond the "
+                f"{recorded} the marker recorded: another writer has recorded observations"
             )
         foreign = self._foreign_sessions()
         if foreign:
@@ -721,7 +767,13 @@ class Hydrator:
         bound = replay_span_bound_ms()
         frame = observation_frame(self.spark, self.lake, evidence.plan)
         rows = (event_from_row(row.asDict()) for row in frame.toLocalIterator())
-        state = _ReplayState(count=count, position=position, digest=digest, resumed_from=count)
+        state = _ReplayState(
+            count=count,
+            position=position,
+            digest=digest,
+            resumed_from=count,
+            conflicts=parse_conflicts(marker.get("conflicts", "")),
+        )
         prefix_seen, prefix_digest, checked = 0, "", cursor is None
         batch: list[Event] = []
         for event in merge_ordered(rows, evidence.outcomes):
@@ -793,6 +845,11 @@ class Hydrator:
                 "count": str(state.count),
                 "position": str(state.position),
                 "digest": state.digest,
+                # An identity conflict is evidence the claim needs (ADR-0057 §4(b)): the lost store
+                # may hold either row. It is found once, while replaying, so a resume that did not
+                # carry it forward would drop the `identity_conflicts` component and claim `T`
+                # EARLIER than the evidence allows -- the over-claiming direction.
+                "conflicts": ",".join(str(ms) for ms in state.conflicts),
             },
         ):
             raise HydrationFailedError("the hydration marker is no longer this run's")

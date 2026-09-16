@@ -51,6 +51,39 @@ def test_a_run_with_enough_of_everything_passes_the_guard() -> None:
     assert _kinds(_served({"1-9": 1_000, "10-99": 200})) == []
 
 
+HEALTHY = {"1-9": 1_000, "10-99": 200}
+
+
+def test_a_feature_whose_comparisons_were_mostly_excluded_cannot_support_a_claim() -> None:
+    """Nothing else in the guard bounds the exclusions.
+
+    ADR-0046 §5 excludes an absence the store stopped vouching for, and `ParityTally.add`
+    subtracts each one from `compared`. ADR-0056 §3 F1 expects that to be material on the
+    representative partition's late band. But no verdict reads `not_vouched_fraction`, and the
+    volume floors bind only the approximate features -- so a run could exclude nearly every
+    comparison of an EXACT feature, report zero divergences, and pass.
+    """
+    served = _served(HEALTHY)
+    served.features["card_tx_count_5m"] = FeatureCounts(compared=5, not_vouched=600)
+    assert GuardKind.FEATURE_MOSTLY_EXCLUDED in _kinds(served)
+
+
+def test_material_exclusions_that_still_leave_a_feature_compared_are_not_a_violation() -> None:
+    """F1 expects exclusions. The bound catches a feature that was not compared, not the
+    presence of exclusions."""
+    served = _served(HEALTHY)
+    served.features["card_tx_count_5m"] = FeatureCounts(compared=600, not_vouched=5)
+    assert _kinds(served) == []
+
+
+def test_the_exclusion_bound_binds_the_event_time_complete_pairing_too() -> None:
+    """The exclusion is the store's, but the bound is about evidence, and Gold needs it as much."""
+    complete = _complete()
+    complete.features["account_tx_count_1h"] = FeatureCounts(compared=3, not_vouched=400)
+    served = _served(HEALTHY)
+    assert GuardKind.FEATURE_MOSTLY_EXCLUDED in _kinds(served, tallies=(served, complete))
+
+
 def test_comparing_nothing_and_skipping_everything_are_distinct_vacuities() -> None:
     empty = ParityTally(Pairing.EVENT_TIME_COMPLETE)
     skipped = ParityTally(Pairing.EVENT_TIME_COMPLETE)

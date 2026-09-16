@@ -36,6 +36,19 @@ MIN_COMPARISONS_PER_STRATUM: Final = 200
 MIN_COMPARISONS_OVERALL: Final = 1_000
 """Per approximate feature, over comparisons whose true cardinality is at least one."""
 
+MAX_NOT_VOUCHED_FRACTION_PER_FEATURE: Final = 0.5
+"""Per feature and pairing: the share of its comparisons that may be excluded as unvouched.
+
+ADR-0046 §5 excludes an absence the store stopped vouching for, and §3 F1 expects that to be
+material on the representative partition's late band -- so exclusions are not themselves a fault.
+But `ParityTally.add` subtracts each one from `compared`, no verdict reads `not_vouched_fraction`,
+and the volume floors above bind only the approximate features. Without this bound a run could
+exclude nearly every comparison of an EXACT feature, report zero divergences, and pass.
+
+Chosen, not derived, and frozen before any measured run: a feature more than half of whose offered
+comparisons were excluded was not meaningfully compared, whatever the divergence count says. It is
+not part of the partition declaration and so changes no frozen digest."""
+
 ZERO_STRATUM: Final = "0"
 """True cardinality zero: both sides must be exactly zero, never judged by the RMS bound."""
 STRATA: Final[tuple[tuple[str, int, int | None], ...]] = (

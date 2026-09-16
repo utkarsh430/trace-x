@@ -191,9 +191,22 @@ Declared in `eval/parity/partition.py`; `tests/unit/test_parity_partition.py` pi
 - **Collection guard** (`eval.parity.guard`). A run fails when:
   - a pairing compared nothing, or skipped everything;
   - Spark did not demonstrably write Bronze, Silver and a Gold build;
-  - a gated partition classified no arrival-skew comparison.
+  - a gated partition classified no arrival-skew comparison;
+  - a feature more than half of whose offered comparisons were excluded as unvouched, in either
+    pairing (`MAX_NOT_VOUCHED_FRACTION_PER_FEATURE`, 0.5).
 
   A measured run also fails on an exercised stratum below 200 or an approximate feature below 1,000.
+
+  **On the exclusion bound.** §5's exclusion rule subtracts each unvouched absence from `compared`,
+  F1 expects that to be material on the representative partition's late band, and no verdict read
+  `not_vouched_fraction` -- so a run could exclude nearly every comparison of an EXACT feature,
+  report zero divergences and pass. The volume floors above do not cover this: they bind only the
+  approximate features. The bound is per feature rather than a whole-run ceiling because the
+  failure it catches is one feature going uncompared while the run's overall fraction stays
+  healthy. **Chosen, not derived, and frozen before any measured run**, like the lateness model
+  itself: a feature more than half of whose offered comparisons were excluded was not meaningfully
+  compared, whatever its divergence count says. It is a guard constant, not part of the partition
+  declaration, so it changes no frozen digest in §5.
 - **PARITY record** (`eval.parity.record`) fields:
   - run_id, git SHA and dirty flag, environment lock;
   - partition and lateness-model digests, eval-v2 manifest digest, overlay version, seed and
@@ -211,8 +224,9 @@ Declared in `eval/parity/partition.py`; `tests/unit/test_parity_partition.py` pi
   run's as-served order is not recoverable from the log, and is refused rather than approximated.
 - **Wall-clock cost.** A paced partition costs its slice in real time, plus the warm-up's posting.
 - **Memory.** Gold's context rows for every transaction are collected to the driver.
-- **Claim linter.** `make check-claims` does not yet know record type PARITY. A report citing one
-  needs `REQUIRED_BY_TYPE["PARITY"]`, which is outside this step's ownership.
+- **Claim linter.** `make check-claims` knows record type PARITY: `scripts/check_claims.py` defines
+  `PARITY_REQUIRED`, mirroring `eval/parity/record.py`'s own `REQUIRED_FIELDS` (so the two cannot
+  drift), and registers it in `REQUIRED_BY_TYPE`. Added by the lead at integration.
 
 ### 8. Findings while building, and the lead's decisions on them
 
@@ -296,12 +310,21 @@ measured run is the lead's, on a clean commit.
 | Gold stream tests on Temurin 17, including the gateway-only identity fixture and the unmodified event-time-complete conformance suite | 88 passed |
 | `ruff`, `mypy` over `eval/parity` and the two Gold modules, `make check-claims` | clean |
 | ADR-0046 §5 probe (F1), varying only how far a later-dated write is ahead of a late read | no difference at 30 and 55 minutes; six features differ at 70, 125 and 150 |
-| End-to-end diagnostic run (synthetic partition, gateway, Kafka, Bronze, Silver, Gold) | passed; PARITY record `parity-20260916-002709-integration-synthetic-5cba28a1` |
+| End-to-end diagnostic run (synthetic partition, gateway, Kafka, Bronze, Silver, Gold) | passed; its PARITY record is diagnostic and is not retained in `eval/manifest/`, so no run_id is cited -- an id that cannot resolve is worse than none (CLAUDE.md §13.2) |
 
 The diagnostic run, on feature set 5.0.0 with Spark 4.0.1, Delta 4.0.1, Hadoop 3.4.1, Scala 2.13.16
 and Java 17.0.18 (DIAGNOSTIC, NOT publishable, dirty worktree):
 - **as-served implementation parity:** 15,652 comparisons, 0 divergent, 0 skipped;
-- **event-time-complete implementation parity:** 15,600 comparisons, 0 divergent;
+- **event-time-complete implementation parity:** 15,600 comparisons, 0 divergent -- **withdrawn,
+  and not to be cited.** This was measured before the defect the Phase 3 adversarial review found
+  was fixed: `ParityTally.add` applied ADR-0046 §5's unvouched exclusion in *both* pairings, and
+  because neither side of this pairing records lookback completeness (both are built with
+  `Observed.of`, leaving it `None`), the `!= COMPLETE` test held for every Gold absence. Each one
+  was downgraded to NOT_VOUCHED and subtracted from `compared`. The detector for exactly the
+  missing-row defect ADR-0055 §3 rules out by construction was therefore disabled, so "0 divergent"
+  is not evidence of parity here and the comparison count is not comparable to a corrected run.
+  Fixed, with a regression test that fails against the old behaviour, before any measured run. This
+  pairing must be re-measured;
 - **arrival skew:** 11 of 634 comparisons differ, with 20 capped windows excluded and 540 warm-up
   subjects excluded as the compressed replay §4 requires. Recorded, not gated: this is a synthetic
   partition, not the frozen representative one;

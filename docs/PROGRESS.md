@@ -1679,6 +1679,43 @@ both reports.
     order, so the state where the canonical MERGE landed alone is no longer implied to be reachable.
   * **Debt.** `-m "chaos and not stream"` would arm the collection guard while deselecting every
     injection case, a false failure; no repo command uses that form.
+* **Phase 3 adversarial review (2026-09-16), and the seven findings it produced.** CLAUDE.md §10's
+  "what is most likely to be wrong even though the current suite is green", run read-only over the
+  integrated Steps 6-10. Three Category A defects, each verified in the code before being fixed, and
+  each with a test that fails against the old behaviour.
+  * **A1 -- parity discarded every Gold-side absence.** `ParityTally.add` applied ADR-0046 §5's
+    unvouched exclusion in *both* pairings. Neither side of the event-time-complete pairing records
+    lookback completeness (both are built with `Observed.of`, leaving it `None`), so the
+    `!= COMPLETE` test held for every Gold absence: each was downgraded to NOT_VOUCHED and
+    subtracted from `compared`. The detector for exactly the missing-row defect ADR-0055 §3 rules
+    out by construction was disabled. Fixed by gating on the pairing. **Consequence:** ADR-0056's
+    diagnostic figure "event-time-complete parity: 15,600 comparisons, 0 divergent" was measured
+    through that mask and is **withdrawn**, not re-cited.
+  * **A2 -- a hydration crash between the marker and the withdrawal wedged the namespace.**
+    Recovery required deleting keys by hand, which ADR-0057's own alternatives reject. The fix went
+    further than the finding: `_adopt` never withdrew, so relaxing its refusal alone would have
+    adopted a store with no epoch and let `observe`'s `NX` date it from the first replayed
+    observation (ADR-0057 §5.2).
+  * **A3 -- identity conflicts did not survive a hydration resume**, so a resumed run claimed `T`
+    earlier than the evidence allowed. Silent, and in the direction that costs data.
+  * **B4** the resume's foreign-write tolerance used the resuming run's batch size, not the crashed
+    run's: a crash at `--batch-size 2` resumed at the 1,000 default tolerated 1,000 foreign writes.
+  * **B5 -- nothing bounded the parity exclusions.** `not_vouched_fraction` was computed, recorded,
+    and read by no verdict; the volume floors bind only the approximate features. A run could
+    exclude nearly every comparison of an EXACT feature, report zero divergences and pass. A
+    per-feature bound (`MAX_NOT_VOUCHED_FRACTION_PER_FEATURE`, 0.5) now fails the guard in either
+    pairing -- **chosen, not derived, and frozen before any measured run**, and recorded in
+    ADR-0056's guard list. It is a guard constant, not part of the §5 declaration, so it changes no
+    frozen digest.
+  * **C6** ADR-0056 cited a PARITY `run_id` that cannot resolve by construction (a diagnostic record
+    is never retained in `eval/manifest/`), and its §7 still said `check-claims` did not know record
+    type PARITY after the lead added `PARITY_REQUIRED`. Both corrected; `make check-claims` passes.
+  * **C7** ADR-0057's fifth declared difference (`folded_out_of_order`) was asserted by no test,
+    because every acceptance history is written in increasing event-time order. An eleventh test now
+    produces it and asserts the declared *direction*.
+  * **Checked and clean:** the quiescence lemma's property generators, the declared total order on
+    all three sides (Python, Gold, Redis, including Spark's binary collation), the outbox relay's
+    delivery watermark, Silver's pure dedup/supersede layer, and ground-truth isolation.
 * **Three findings from Step 8's parity work, resolved (2026-09-15).**
   * **F2, a defect, fixed: one undeliverable row starved the outbox, silently.** The relay claimed
     oldest-first and abandoned the pass at the first transient failure, so a single blocked row held

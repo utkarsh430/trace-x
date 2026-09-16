@@ -168,7 +168,12 @@ def unvouched(implementation: Observed | None, reference: Observed) -> bool:
     behind that serves absence and stops vouching for the window. The reference models no
     retention, so such a comparison measures how far the corpus reaches behind what the store still
     held -- not a divergence. It is excluded and counted, per feature and window, never dropped.
-    A value served while unvouched is still compared: serving a number is a claim."""
+    A value served while unvouched is still compared: serving a number is a claim.
+
+    **This is the AS_SERVED pairing's rule alone**, and `ParityTally.add` gates it on the pairing.
+    Both sides of the EVENT_TIME_COMPLETE pairing are built with `Observed.of`, which records no
+    lookback completeness, so the last condition below (`!= COMPLETE`) would hold for *every* Gold
+    absence -- silently excluding the missing-row defects ADR-0055 §3 rules out by construction."""
     return (
         absent_against_a_number(implementation, reference)
         and implementation is not None
@@ -262,7 +267,11 @@ class ParityTally:
             judgement = Judgement(Outcome.DIVERGENT, "not_reported")
         else:
             judgement = judge(spec.parity, self.pairing, implementation, reference)
-        if judgement.outcome is Outcome.DIVERGENT and unvouched(implementation, reference):
+        if (
+            judgement.outcome is Outcome.DIVERGENT
+            and self.pairing is Pairing.AS_SERVED
+            and unvouched(implementation, reference)
+        ):
             judgement = Judgement(Outcome.NOT_VOUCHED, judgement.reason)
         elif judgement.outcome is Outcome.DIVERGENT and excused(
             implementation, reference, declared

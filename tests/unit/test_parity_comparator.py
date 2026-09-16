@@ -192,3 +192,32 @@ def test_both_sides_absent_is_compared_even_when_unvouched() -> None:
     differ = tally.add("tx_2", spec, UNVOUCHED, Observed("UNAVAILABLE", None))
     assert (agree.outcome, differ.outcome) == (Outcome.EQUAL, Outcome.DIVERGENT)
     assert (tally.compared, tally.not_vouched_total) == (2, 0)
+
+
+def test_a_gold_absence_against_a_reference_number_is_a_divergence() -> None:
+    """The unvouched exclusion is the online store's, and must not reach the Gold pairing.
+
+    ADR-0046 §5 excludes an absence the *store* stopped vouching for, because the store has
+    retention and the reference does not. Gold models no retention and reports no lookback
+    completeness at all (both sides of this pairing are built with `Observed.of`, which leaves it
+    `None`), so it never makes a vouching claim that could be excluded. ADR-0055 §3 makes a Gold
+    window row exist exactly when the reference returns a state, so a Gold absence against a
+    reference number is a defect -- a dropped bucket join, a missing profile or previous row -- and
+    has to be counted as one.
+    """
+    spec = ONLINE_FEATURES.get("account_tx_count_1h")
+    tally = ParityTally(COMPLETE)
+    missing = tally.add("tx_1", spec, ABSENT, available(3.0))
+    assert missing.outcome is Outcome.DIVERGENT, (
+        "a Gold absence against a number must not be excluded as unvouched"
+    )
+    assert (tally.divergent_total, tally.not_vouched_total, tally.compared) == (1, 0, 1)
+
+
+def test_the_as_served_pairing_still_excludes_an_unvouched_absence() -> None:
+    """The companion to the above: gating on the pairing must not weaken §5 where it applies."""
+    spec = ONLINE_FEATURES.get("account_tx_count_1h")
+    tally = ParityTally(SERVED)
+    excluded = tally.add("tx_1", spec, UNVOUCHED, available(3.0, "COMPLETE"))
+    assert excluded.outcome is Outcome.NOT_VOUCHED
+    assert (tally.divergent_total, tally.not_vouched_total, tally.compared) == (0, 1, 0)
