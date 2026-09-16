@@ -143,8 +143,11 @@ means a new version and an ADR, never a response to a result.
   topic's Bronze table through `OpenedCheckpoint.delta_source` (loss-refusing), starting at Bronze
   version 0 on a new checkpoint version. A source offset naming a negative version is refused.
 - **Sink.** A `foreachBatch` sink makes one idempotent commit per target per batch, each through the
-  checkpoint's Delta app id and batch version. The targets: the canonical MERGE, the
-  `silver.duplicates` and quarantine appends, then the `late_events` MERGE.
+  checkpoint's Delta app id and batch version. The targets commit in this order, and the order is
+  load-bearing: the `silver.quarantine` append, the `silver.duplicates` append, the canonical
+  MERGE, then the `late_events` MERGE. A crash between two commits therefore leaves a *prefix* of
+  that sequence -- the five reachable states the Step 10 resume cases enumerate, never a state in
+  which the canonical MERGE landed alone.
 - **CLI.** `python -m services.stream.silver run` exits 3 when any query failed. It reads each
   query's liveness before its failure, because Spark records a failure before it marks the query
   terminated. A requested stop stops every query before judging them.

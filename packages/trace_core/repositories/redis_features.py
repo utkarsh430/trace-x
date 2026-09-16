@@ -73,7 +73,7 @@ import dataclasses
 import datetime as dt
 import json
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
@@ -791,6 +791,51 @@ end
 return redis.call('GET', ARGV[1])
 """
 
+HYDRATION_START_SCRIPT: Final = r"""#!lua
+-- Hydration's marker is created only on a store nothing has written: no epoch, no position
+-- (ADR-0057 §1). A store that holds a marker already reports it, so the caller can resume it.
+local marker = ARGV[1] .. ':hydration'
+if redis.call('EXISTS', marker) == 1 then
+  return {'marker', redis.call('HGETALL', marker)}
+end
+local epoch = redis.call('GET', ARGV[1] .. ':epoch')
+local position = redis.call('GET', ARGV[1] .. ':position')
+if epoch or position then
+  return {'occupied', {epoch or '', position or ''}}
+end
+local fields = cjson.decode(ARGV[2])
+for i = 1, #fields, 2 do redis.call('HSET', marker, fields[i], fields[i + 1]) end
+return {'created', redis.call('HGETALL', marker)}
+"""
+"""Create the hydration marker on an untouched store, or report what the store already holds."""
+
+HYDRATION_UPDATE_SCRIPT: Final = r"""#!lua
+-- Compare-and-set on the marker's run and state: a run that lost the marker writes nothing.
+local marker = ARGV[1] .. ':hydration'
+if redis.call('HGET', marker, 'run_id') ~= ARGV[2] then return 0 end
+if redis.call('HGET', marker, 'state') ~= ARGV[3] then return 0 end
+local fields = cjson.decode(ARGV[4])
+for i = 1, #fields, 2 do redis.call('HSET', marker, fields[i], fields[i + 1]) end
+return 1
+"""
+"""Update the marker only while `run_id` and `state` are still what the caller last saw."""
+
+HYDRATION_CLAIM_SCRIPT: Final = r"""#!lua
+-- The one place an epoch moves earlier (ADR-0057 §5): only out of hydration's own withdrawal
+-- marker B, only while the epoch is still exactly B and nothing else has written since.
+local marker = ARGV[1] .. ':hydration'
+if redis.call('HGET', marker, 'run_id') ~= ARGV[2] then return 'marker' end
+if redis.call('HGET', marker, 'state') ~= 'replaying' then return 'marker' end
+if redis.call('HGET', marker, 'begin_epoch_ms') ~= ARGV[3] then return 'marker' end
+if redis.call('GET', ARGV[1] .. ':epoch') ~= ARGV[3] then return 'epoch' end
+if (redis.call('GET', ARGV[1] .. ':position') or '0') ~= ARGV[4] then return 'position' end
+if tonumber(ARGV[5]) >= tonumber(ARGV[3]) then return 'not_earlier' end
+redis.call('SET', ARGV[1] .. ':epoch', ARGV[5])
+redis.call('HSET', marker, 'state', 'claimed', 'claimed_ms', ARGV[5])
+return 'claimed'
+"""
+"""Set the epoch to the claim iff the marker, the epoch (still B) and the position all match."""
+
 
 class RedisOnlineFeatureStore:
     """Reads and writes the online feature state for one Redis instance.
@@ -805,6 +850,9 @@ class RedisOnlineFeatureStore:
         self._write = client.register_script(WRITE_SCRIPT)
         self._read = client.register_script(READ_SCRIPT)
         self._withdraw = client.register_script(WITHDRAW_SCRIPT)
+        self._hydration_start = client.register_script(HYDRATION_START_SCRIPT)
+        self._hydration_update = client.register_script(HYDRATION_UPDATE_SCRIPT)
+        self._hydration_claim = client.register_script(HYDRATION_CLAIM_SCRIPT)
 
     @property
     def epoch_key(self) -> str:
@@ -824,6 +872,117 @@ class RedisOnlineFeatureStore:
             self._withdraw(args=[self.epoch_key, str(to_millis(resume_at))])
         except OutOfMemoryError as exc:
             raise FeatureWriteFailedError(str(exc)) from exc
+
+    # -- reconstruction (ADR-0057) ---------------------------------------------
+
+    @property
+    def hydration_key(self) -> str:
+        """Hydration's own marker: not a feature primitive, and read by no feature."""
+        return f"{self._ns}:hydration"
+
+    @property
+    def namespace(self) -> str:
+        return self._ns
+
+    def stored_epoch_ms(self) -> int | None:
+        """The epoch as stored, in event-time ms, or None."""
+        stored = self._redis.get(self.epoch_key)
+        return None if stored is None else int(_text(stored))
+
+    def stored_position(self) -> int:
+        """The store-wide observation counter as stored; 0 before the first recorded write."""
+        stored = self._redis.get(f"{self._ns}:position")
+        return 0 if stored is None else int(_text(stored))
+
+    def hydration_marker(self) -> dict[str, str]:
+        """The marker's fields; empty when there is none."""
+        stored: Mapping[Any, Any] = self._redis.hgetall(self.hydration_key)
+        return {_text(key): _text(value) for key, value in stored.items()}
+
+    def start_hydration(self, fields: Mapping[str, str]) -> tuple[str, dict[str, str]]:
+        """Create the marker on an untouched store.
+
+        Returns `("created", marker)`, `("marker", existing marker)` when one already exists, or
+        `("occupied", {"epoch": ..., "position": ...})` when something other than hydration has
+        written: nothing is created then.
+        """
+        flat = [item for pair in sorted(fields.items()) for item in pair]
+        try:
+            outcome, detail = self._hydration_start(args=[self._ns, json.dumps(flat)])
+        except OutOfMemoryError as exc:
+            raise FeatureWriteFailedError(str(exc)) from exc
+        kind = _text(outcome)
+        if kind == "occupied":
+            epoch, position = (_text(value) for value in detail)
+            return kind, {"epoch": epoch, "position": position}
+        return kind, _pairs(detail)
+
+    def update_hydration(self, *, run_id: str, state: str, fields: Mapping[str, str]) -> bool:
+        """Set `fields` on the marker iff it still belongs to `run_id` in `state`."""
+        flat = [item for pair in sorted(fields.items()) for item in pair]
+        try:
+            return bool(self._hydration_update(args=[self._ns, run_id, state, json.dumps(flat)]))
+        except OutOfMemoryError as exc:
+            raise FeatureWriteFailedError(str(exc)) from exc
+
+    def claim_completeness(
+        self, *, run_id: str, begin_epoch_ms: int, expected_position: int, since_ms: int
+    ) -> str:
+        """Move the epoch from hydration's own `begin_epoch_ms` to the earlier `since_ms`.
+
+        Returns `claimed`, or why not: `marker` (not this run's replaying marker), `epoch` (the
+        epoch is no longer B), `position` (another writer recorded something) or `not_earlier`.
+        """
+        try:
+            outcome = self._hydration_claim(
+                args=[
+                    self._ns,
+                    run_id,
+                    str(begin_epoch_ms),
+                    str(expected_position),
+                    str(since_ms),
+                ]
+            )
+        except OutOfMemoryError as exc:
+            raise FeatureWriteFailedError(str(exc)) from exc
+        return _text(outcome)
+
+    def discard_unfinished_hydration(self, *, run_id: str, begin_epoch_ms: int) -> int:
+        """Delete everything an unfinished hydration wrote, keeping only its marker and epoch B.
+
+        Allowed only while the marker is `run_id`'s and the epoch is still B. The marker is set to
+        `discarding` first, so a crash part-way leaves a state a re-run finishes, never a store
+        that looks resumable with primitives missing. Returns how many keys were deleted.
+        """
+        if self.stored_epoch_ms() != begin_epoch_ms:
+            return -1
+        if (
+            not self.update_hydration(
+                run_id=run_id, state="replaying", fields={"state": "discarding"}
+            )
+            and self.hydration_marker().get("state") != "discarding"
+        ):
+            return -1
+        if self.hydration_marker().get("run_id") != run_id:
+            return -1
+        keep = {self.hydration_key, self.epoch_key}
+        pattern = _glob_escape(self._ns) + ":*"
+        deleted = 0
+        batch: list[str] = []
+        for raw in self._redis.scan_iter(match=pattern, count=1000):
+            name = _text(raw)
+            if name in keep:
+                continue
+            batch.append(name)
+            if len(batch) >= 1000:
+                deleted += int(self._redis.unlink(*batch))
+                batch = []
+        if batch:
+            deleted += int(self._redis.unlink(*batch))
+        reset = {"state": "replaying", "cursor": "", "count": "0", "position": "0", "digest": ""}
+        if not self.update_hydration(run_id=run_id, state="discarding", fields=reset):
+            return -1
+        return deleted
 
     # -- writes ---------------------------------------------------------------
 
@@ -1413,12 +1572,20 @@ def _decode(text: str) -> Event:
     )
 
 
+def _glob_escape(text: str) -> str:
+    """`text` as a literal inside a Redis MATCH pattern."""
+    return "".join("\\" + ch if ch in "*?[]\\" else ch for ch in text)
+
+
 def _text(value: Any) -> str:
     return value.decode() if isinstance(value, bytes) else str(value)
 
 
 __all__ = [
     "BUCKET_TRIM_SWEEP",
+    "HYDRATION_CLAIM_SCRIPT",
+    "HYDRATION_START_SCRIPT",
+    "HYDRATION_UPDATE_SCRIPT",
     "IDENTITY_RAW_KEYS",
     "LAYOUT",
     "LIMBS",

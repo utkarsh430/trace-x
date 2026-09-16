@@ -1624,6 +1624,61 @@ both reports.
   * **Next:** the lead's measured runs on a clean commit, then `P3.feature-parity`.
   * **Debt recorded:** `eval/replay/faults.py` cannot build a conflicting duplicate for
     `tx.authorization.v1` (it reads `payload.score`), so that fault is excluded from parity overlays.
+* **Step 9 — Redis reconstruction: built and integrated** (ADR-0057, Proposed; `P3.redis-hydration`
+  awaits the lead's re-run of the acceptance command on this commit).
+  * **What it does.** Rebuilds a lost online store by replaying history through the store's own
+    idempotent Lua `record` — the path the gateway uses — under the ADR-0051 writer fence, and
+    claims completeness only by compare-and-set on the epoch, only with evidence. Primitives are
+    rebuilt, never values, so no second implementation of the online semantics exists.
+  * **Shape.** `stream/hydration.py` (pure claim rules, the evidence read, and the
+    Silver-to-observation projection built on Gold's own `observations`), `services/stream/hydrate.py`
+    with the Bronze/Silver/Gold exit codes, and `redis_features.py` extended *additively* — a
+    hydration marker plus start, update and compare-and-set claim scripts. No existing script or
+    read path changed.
+  * **Evidence (agent's run, at `3973c83`).** The ten cases ran together in one undivided session —
+    10 passed, 0 failed, 0 skipped, 295.23 s — against a throwaway Kafka broker, a real Redis, the
+    suite's own migrated PostgreSQL database and Delta 4.0.1 on Temurin 17: equality, all six
+    refusals, the lost observation, idempotence, and a child SIGKILLed between two `observe` calls
+    that resumes and converges. Plus 21 unit tests including three property tests for the
+    quiescence lemma, and a non-vacuity probe in which 279 of 400 generated quiescent histories
+    carry lost writes and every one still yields a claim.
+  * **The memory figure is a diagnostic, not a target.** The hydrated namespace holds 82 keys
+    against the live store's 81, and instance `used_memory` moved by under 100 KB. This does **not**
+    measure the spike ADR-0057's Negative consequences predict: that needs a history longer than the
+    widest retention, and this one spans ~37 hours, not 30 days. The instance-wide peak is since
+    server start, shared, and is not attributed to hydration. It belongs with the Step 12 memory
+    model.
+  * **Lead review.** `compute_claim` and `event_time_image` were read against ADR-0057 §4: the claim
+    is the `max` of independent lower bounds, an unbounded gap produces a *refusal* rather than
+    being skipped, and `FUTURE_SKEW`/`BACKDATE` derive from the ingress contract constants
+    (24 h / 90 d) rather than being re-declared, so they cannot drift from what the gateway
+    enforces. No Category-A defect found.
+* **Step 10 — checkpoint and resume under fault injection: built and integrated**
+  (`P3.checkpoint-resume` awaits one single-session run; see below).
+  * **Shape.** `tests/chaos/test_spark_resume.py` (7 injection cases), `spark_resume_harness.py`,
+    which drives the real `services.stream.bronze|silver` entrypoints and SIGKILLs its own process
+    group at exact commit points, and a directory-scoped collection guard. **No production code
+    changed and no defect found.**
+  * **Evidence.** 7 passed, 0 failed, 0 skipped across five `-k` splits, 1,365.6 s of pytest. Process
+    kills of both jobs landed inside a batch every time. A crash after the sink commit but before
+    Spark's commit entry resumed from byte-identical recorded offsets with Delta skipping the batch;
+    the same window with the offsets entry also lost refused to start (exit 2, nothing written).
+    Silver's five reachable per-target commit prefixes each resumed to exactly one commit per
+    target. A graceful broker restart (4.9 s) was ridden through; `docker kill` (19.0 s) stopped
+    loudly with `bronze_query_failed` (exit 3) and caught up. Replay from arbitrary offsets into a
+    fresh lake gave 46 byte-identical Bronze rows, with 13 identities wholly in range equal and 9
+    straddling ones correctly excluded — non-vacuous in both directions. The JVM-kill case ended in
+    a real Gold build: 135 `gold.observations` rows, equal to the 135 canonical outcomes the
+    published records imply, and `gold check` consistent.
+  * **Why the capability is not recorded yet.** All seven cases passed, but only ever in five
+    separate splits; the suite has never run as one session. CLAUDE.md §16.3 wants the command
+    actually executed, so the split results stand as what was measured and the capability waits.
+  * **ADR-0053 §4 corrected by this work.** The ADR gave the sink's targets as canonical first; the
+    code commits quarantine, duplicates, canonical, then `late_events`, and carries a comment that
+    the order matters for a replay between two commits. The ADR (Proposed) now states the real
+    order, so the state where the canonical MERGE landed alone is no longer implied to be reachable.
+  * **Debt.** `-m "chaos and not stream"` would arm the collection guard while deselecting every
+    injection case, a false failure; no repo command uses that form.
 * **Three findings from Step 8's parity work, resolved (2026-09-15).**
   * **F2, a defect, fixed: one undeliverable row starved the outbox, silently.** The relay claimed
     oldest-first and abandoned the pass at the first transient failure, so a single blocked row held

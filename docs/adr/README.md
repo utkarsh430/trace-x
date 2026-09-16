@@ -68,6 +68,7 @@ been thought through.
 | [0054](0054-online-store-memory-step1b-layout.md) | Online-store memory re-measured through the store for the Step 1b layout; the configured limit stays until the load gate re-runs | 3 | Proposed |
 | [0055](0055-gold-batch-build.md) | Gold is a batch build of primitive-shaped state and event-time-complete point-in-time context from Silver | 3 | Proposed |
 | [0056](0056-feature-parity-and-arrival-skew.md) | Feature parity: exact implementation parity on the store's own order, and arrival skew on a frozen partition | 3 | Proposed |
+| [0057](0057-redis-reconstruction.md) | Redis reconstruction: replay history through the store's own write path, and claim completeness by compare-and-set under the writer fence | 3 | Proposed |
 
 ## Notes on status
 
