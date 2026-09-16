@@ -67,6 +67,7 @@ been thought through.
 | [0053](0053-silver-canonical-events.md) | Silver: validated, exactly deduplicated, late-tagged canonical events, with quarantine and Bronze-to-Silver conservation | 3 | Proposed |
 | [0054](0054-online-store-memory-step1b-layout.md) | Online-store memory re-measured through the store for the Step 1b layout; the configured limit stays until the load gate re-runs | 3 | Proposed |
 | [0055](0055-gold-batch-build.md) | Gold is a batch build of primitive-shaped state and event-time-complete point-in-time context from Silver | 3 | Proposed |
+| [0056](0056-feature-parity-and-arrival-skew.md) | Feature parity: exact implementation parity on the store's own order, and arrival skew on a frozen partition | 3 | Proposed |
 
 ## Notes on status
 

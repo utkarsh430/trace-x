@@ -196,11 +196,44 @@ BENCHMARK_REQUIRED = (
     "measured",
 )
 
+# A parity run measures two IMPLEMENTATIONS against each other on one recorded stream, so its
+# provenance is the corpus and the overlay that produced the stream, the semantics both sides were
+# judged by, and the toolchain that ran them. `eval/parity/record.py` owns the full contract and
+# refuses a record missing any of it; these are the fields a published number needs to be
+# attributable (ADR-0056 §6).
+PARITY_REQUIRED = (
+    "run_id",
+    "record_type",
+    "track",
+    "git_commit_sha",
+    "dirty_worktree",
+    "env_lock_digest",
+    "python_version",
+    "started_at",
+    "finished_at",
+    "mode",
+    "publishable",
+    "parity_semantics_version",
+    "feature_set_version",
+    "partition",
+    "dataset",
+    "overlay",
+    "lateness_model",
+    "lateness_model_digest",
+    "toolchain",
+    "gateway",
+    "counts",
+    "results",
+    "guard",
+    "verdict",
+)
+
 REQUIRED_BY_TYPE: dict[str, tuple[str, ...]] = {
     "GENERATOR": GENERATOR_REQUIRED,
     "LOADTEST": LOADTEST_REQUIRED,
     "BENCHMARK": BENCHMARK_REQUIRED,
     "EVAL": EVAL_REQUIRED,
+    "PARITY": PARITY_REQUIRED,
 }
 
 

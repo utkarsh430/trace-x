@@ -31,7 +31,7 @@ JAVA_HOME := $(or $(shell $(PY) scripts/java_home.py 2>/dev/null),$(JAVA_HOME))
 export JAVA_HOME
 COMPOSE := docker compose -f deploy/compose.yml --env-file .env
 
-.PHONY: help doctor toolchain stream-jars setup up up-streaming up-full down ps logs test-fast test e2e lint typecheck \
+.PHONY: help doctor toolchain stream-jars setup up up-streaming up-full down ps logs test-fast test e2e parity lint typecheck \
         secrets audit audit-full migrate migrate-down migrate-status lock ci-status codegen \
         verify eval eval-external demo seed fetch-external pull-model bench-layout \
         codegen-openapi contracts-check contracts-self-test load-gateway \
@@ -202,6 +202,9 @@ eval-external:  ## [Phase 4B] Track B external validation (IEEE-CIS, E1-E5)
 	@$(PY) scripts/phase_guard.py eval-external 4B "external dataset validation"
 fetch-external: ## [Phase 4B] Download + SHA-256 verify the IEEE-CIS dataset
 	@$(PY) scripts/phase_guard.py fetch-external 4B "external dataset acquisition"
+parity:         ## [Phase 3] Feature parity: unit + mutation self-tests, then the end-to-end run
+	@$(VPY) -m pytest -m "parity and not integration and not stream"
+	@set -a; [ -f .env ] && . ./.env; set +a; $(VPY) -m pytest -m "integration and stream and parity"
 bench-layout:   ## [Phase 3] Delta layout benchmark backing ADR-0015
 	@$(PY) scripts/phase_guard.py bench-layout 3 "Delta layout benchmark"
 pull-model:     ## [Phase 6] Pull the local SMOKE-tier model via Ollama

@@ -151,13 +151,30 @@ def _conform(frame: DataFrame, schema: StructType) -> DataFrame:
     return frame.select(*[F.col(f.name).cast(f.dataType).alias(f.name) for f in schema.fields])
 
 
+GATEWAY_PRODUCER: Final = "trace-gateway"
+"""The producer name, before `@`, whose identity events the online store observes. Compared on the
+name alone, as Silver's content digest does, so a redeploy does not change what Gold reads."""
+
+
+def gateway_produced(producer: Column) -> Column:
+    """Whether a Silver row's `producer` is the gateway's, whatever its version."""
+    from pyspark.sql import functions as F  # noqa: N812
+
+    return F.substring_index(producer, "@", 1) == F.lit(GATEWAY_PRODUCER)
+
+
 def observations(spark: SparkSession, lake: LakeConfig, plan: BuildPlan) -> DataFrame:
     """Every observation once under its identity, as `features.observation.Event` holds it.
 
     - Transactions from `silver.tx_scored_v1`, whatever the store did with them (`observe_outcome`):
       a complete history holds every transaction the gateway accepted. Their own
       `authorization_outcome` field is not carried (ADR-0049 §3).
-    - Identity events from `silver.identity_events_v1` whose type feeds a stream.
+    - Identity events from `silver.identity_events_v1` whose type feeds a stream, produced by the
+      gateway. `identity.events.v1` has two kinds of producer: the generator publishes events
+      directly, and the gateway republishes what it ingests, carrying the online store's observation
+      id in `correlation_id`. The store observes only the gateway's, so Gold reads only those, under
+      that id: a directly produced event the store never saw would otherwise be counted, and a
+      replayed one counted twice under two identities.
     - Authorization outcomes from `silver.tx_authorization_v1`, with their verification against the
       complete history's transactions (ADR-0049 §2): VERIFIED, PENDING or REJECTED.
     """
@@ -215,8 +232,9 @@ def observations(spark: SparkSession, lake: LakeConfig, plan: BuildPlan) -> Data
         read_pinned(spark, lake, plan, IDENTITY_EVENTS)
         .withColumn("_stream", stream_of_type)
         .filter(F.col("_stream").isNotNull())
+        .filter(gateway_produced(F.col("producer")))
         .select(
-            *common(IDENTITY_EVENTS, F.col("_stream"), F.lit(namespaces.pop()), "event_id"),
+            *common(IDENTITY_EVENTS, F.col("_stream"), F.lit(namespaces.pop()), "correlation_id"),
             F.lit("").alias("currency"),
             F.lit(0).cast("long").alias("amount_minor"),
             null_string.alias("card_id"),

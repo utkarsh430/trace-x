@@ -59,6 +59,11 @@ def _prefixed(prefix: str, value: str | None) -> str | None:
     return None if value is None else prefix + value
 
 
+GATEWAY_PRODUCER: Final = "trace-gateway@0.1.0"
+GENERATOR_PRODUCER: Final = "trace-generator@1.0.0"
+"""A directly produced identity event: the online store never saw it, so Gold must not read it."""
+
+
 def silver_row(
     event: Event,
     *,
@@ -66,6 +71,8 @@ def silver_row(
     prefix: str = "",
     is_late: bool | None = False,
     identity_type: str | None = None,
+    producer: str = GATEWAY_PRODUCER,
+    correlation_id: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """`(topic, canonical row)` for one observation's first delivery."""
     topic = TOPIC_OF_STREAM[event.stream]
@@ -76,7 +83,7 @@ def silver_row(
         "schema_version": 1,
         "occurred_at": event.occurred_at,
         "ingested_at": event.occurred_at,
-        "producer": "trace-gateway@0.1.0",
+        "producer": producer,
         "trace_id": "0" * 32,
         "idempotency_key": "sha256:" + "0" * 64,
         "content_digest": "sha256:" + "1" * 64,
@@ -130,10 +137,12 @@ def silver_row(
             "store_epoch": None,
         }
     elif topic == IDENTITY_EVENTS_V1:
+        # Silver identifies a gateway identity event by its envelope id; the online store, and so
+        # Gold, by the observation id it carries as `correlation_id` (ADR-0055 §9).
         row = {
             **common,
             "event_id": event_id,
-            "correlation_id": event_id,
+            "correlation_id": correlation_id or event_id,
             "silver_identity": event_id,
             "account_id": account,
             "identity_event_type": identity_type or IDENTITY_TYPE_OF_STREAM[event.stream],

@@ -1584,6 +1584,46 @@ both reports.
       99 passed; Gold event-time-complete stream conformance 88 passed, none skipped.
   * **Consequence.** Parity (Step 8) and hydration (Step 9) build on 5.0.0, and a store that began
     recording inside a lifetime now says so instead of guessing.
+* **Step 8 — parity framework: built and integrated** (ADR-0056, Proposed; `P3.feature-parity` awaits
+  the lead's measured run).
+  * **What it compares.** Two comparisons, from one recorded stream over an eval-v2 slice with the
+    ADR-0047 fault overlay, published through Kafka and scored by a gateway.
+    * *Implementation parity, as served:* what the gateway served against the reference's AS_SERVED
+      reading of the same observations in the store's own order (epoch and position), verified
+      against the store and refused on disagreement.
+    * *Implementation parity, event-time-complete:* Gold against the reference's
+      EVENT_TIME_COMPLETE reading, with approximate features compared exactly, since neither side
+      estimates.
+    * *Arrival skew,* recorded separately, deliberately keeping retention-driven absences: excluding
+      them could only understate the gate.
+  * **Measurement rules the lead decided, now in the ADR.**
+    * A window is compared where the as-served read vouches for it, or where both sides are absent;
+      an unvouched absence against a number is excluded and counted per feature and window, and
+      reported as a fraction (ADR-0046 §5).
+    * §5's exclusion fires before §8's declared situations, because a capped absence always renders
+      INCOMPLETE; the situation is still counted, and absent-against-absent is still compared, so a
+      state mismatch cannot hide behind an exclusion.
+  * **Gold's identity source corrected** (lead decision): gateway-produced identity events only,
+    keyed by `correlation_id`. Gold had admitted by type alone, so it could have counted events the
+    online store never saw, and counted one replayed event twice under two identities. A stream
+    fixture pins that a generator event and the gateway's event for one activity yield exactly one
+    observation. ADR-0055 is amended at its next revision.
+  * **Frozen before measuring** (ADR-0056): the representative gated partition and the adversarial
+    recorded one, each with its slice, seed, fault rates in basis points, bands, dataset digest and
+    lateness-model digest, pinned by tests.
+  * **Evidence in the lead worktree:** 144 parity unit and mutation tests; 269 control-plane tests;
+    Gold stream 89 passed on Temurin 17.0.18, including the event-time-complete conformance suite
+    unmodified; the parity end-to-end integration run passed; ruff, mypy and check-claims clean.
+  * **The agent's diagnostic run is NOT publishable** (dirty worktree, synthetic partition) and no
+    measured run exists yet. It found 0 divergences on both sides across about 15,600 comparisons
+    each, Silver's observations exactly equal to the store's, and the guard firing only where a
+    stratum was genuinely under its minimum.
+  * **Lead-owned pieces added at integration:** the ADR-0056 index row, `make parity` (also phony),
+    and a `PARITY` entry in `scripts/check_claims.py` requiring every field the parity record's own
+    contract demands, so the linter cannot accept a record the record module would reject.
+  * **Next:** the lead's measured runs on a clean commit, then `P3.feature-parity`.
+  * **Debt recorded:** `eval/replay/faults.py` cannot build a conflicting duplicate for
+    `tx.authorization.v1` (it reads `payload.score`), so that fault is excluded from parity overlays.
 * **Three findings from Step 8's parity work, resolved (2026-09-15).**
   * **F2, a defect, fixed: one undeliverable row starved the outbox, silently.** The relay claimed
     oldest-first and abandoned the pass at the first transient failure, so a single blocked row held

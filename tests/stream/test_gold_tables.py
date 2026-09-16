@@ -15,7 +15,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from tests.stream.gold_silver_rows import rows_for_log, silver_row, write_silver
+from tests.stream.gold_silver_rows import (
+    GENERATOR_PRODUCER,
+    rows_for_log,
+    silver_row,
+    write_silver,
+)
 
 from trace_core.contracts.topics import IDENTITY_EVENTS_V1
 from trace_core.domain.enums import AuthorizationOutcome, TransactionChannel
@@ -137,6 +142,43 @@ def _silver(spark: Any, lake: LakeConfig, events: list[Event], **kwargs: Any) ->
 def _collect(spark: Any, lake: LakeConfig, ref: Any, version: int) -> list[tuple[Any, ...]]:
     frame = spark.read.format("delta").option("versionAsOf", str(version))
     return sorted(tuple(r) for r in frame.load(str(ref.local_path(lake))).collect())
+
+
+def test_only_the_gateways_identity_event_is_an_observation_and_it_counts_once(
+    spark: Any, tmp_path: Path
+) -> None:
+    """One activity, two producers: the generator published it and the gateway republished what it
+    ingested. The online store saw only the gateway's, under the observation id it carries as
+    `correlation_id` (ADR-0055 as amended). Gold reads that one, exactly once."""
+    lake = LakeConfig.at(tmp_path / "lake")
+    failed = _identity("idev_shared", -60, Stream.IDENTITY_FAILED_LOGIN)
+    topic, gateway = silver_row(failed, arrival=0, correlation_id="idev_shared")
+    assert topic == IDENTITY_EVENTS_V1
+    _, direct = silver_row(
+        failed, arrival=1, producer=GENERATOR_PRODUCER, correlation_id="idev_shared"
+    )
+    direct = {**direct, "event_id": "gen-evt-idev_shared", "silver_identity": "gen-evt-idev_shared"}
+    rows = rows_for_log([_tx("tx_a", -30)])
+    rows.setdefault(IDENTITY_EVENTS_V1, []).extend([gateway, direct])
+    write_silver(spark, lake, rows)
+
+    record = build_gold(spark, lake, git_sha=SHA, dirty_worktree=False, now=_now()).record
+    identities = [
+        (row["observation_identity"], row["correlation_id"], row["event_id"])
+        for row in _at_version(spark, lake, plan.OBSERVATIONS, record)
+        if row["stream"] == Stream.IDENTITY_FAILED_LOGIN.value
+    ]
+    assert identities == [("identity_event:idev_shared", "idev_shared", "idev_shared")]
+    assert check_gold(spark, lake).problems == ()
+
+
+def _at_version(spark: Any, lake: LakeConfig, ref: Any, record: Any) -> list[Any]:
+    return (
+        spark.read.format("delta")
+        .option("versionAsOf", str(record.target(ref).version))
+        .load(str(ref.local_path(lake)))
+        .collect()
+    )
 
 
 def test_gold_tables_are_created_from_their_declarations(spark: Any, tmp_path: Path) -> None:

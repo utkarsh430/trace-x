@@ -42,6 +42,7 @@ from trace_core.stream.checkpoints import DeltaSourceStart, OpenedCheckpoint, Sp
 from trace_core.stream.gold_features import (
     distinct_buckets,
     distinct_buckets_schema,
+    gateway_produced,
     minute_buckets,
     minute_buckets_schema,
     observations,
@@ -655,7 +656,8 @@ def check_gold(spark: SparkSession, lake: LakeConfig) -> GoldCheckReport:
     - every Gold table is still the table, at the version and row count, the build recorded;
     - every Silver source is still the table it pinned;
     - `gold.observations` holds exactly one row per Silver observation at the pins: every
-      transaction, every identity event whose type feeds a stream, every observed outcome;
+      transaction, every gateway-produced identity event whose type feeds a stream, every
+      observed outcome;
     - no Gold table holds a key twice;
     - every transaction has its context windows, and profiles and previous observations name only
       transactions.
@@ -701,6 +703,7 @@ def check_gold(spark: SparkSession, lake: LakeConfig) -> GoldCheckReport:
         Stream.TRANSACTION.value: transactions.count(),
         "identity_events": read_pinned(spark, lake, plan, IDENTITY_EVENTS)
         .filter(F.col("identity_event_type").isin(*IDENTITY_TYPE_STREAMS))
+        .filter(gateway_produced(F.col("producer")))
         .count(),
         Stream.AUTHORIZATION_OUTCOME.value: read_pinned(spark, lake, plan, AUTHORIZATIONS)
         .filter(F.col("authorization_outcome").isin(*OBSERVED_OUTCOMES))
