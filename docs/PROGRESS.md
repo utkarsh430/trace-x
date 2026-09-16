@@ -20,6 +20,75 @@ planning surfaced recorded under *What Phase 3 planning found in Phase 2's artef
 
 ### Phase 3
 
+### Phase 3 — HANDOFF (2026-09-15 ~11:00 UTC; session limit imminent). Read this first.
+
+**Committed through `6166c1b`:**
+- Steps 4, 5, 6 (Silver) and 7 (Gold);
+- Step 12's depth cap (ADR-0046 §8), its score-latency and memory re-runs;
+- CI provisioning;
+- the exit rule (P3.eval-v2 non-gating);
+- the Databricks strategy docs.
+
+**Three agents in flight, each in its own plain worktree under `.claude/worktrees/`.** Briefs are in the
+session scratchpad (`/private/tmp/claude-501/-Users-singh-Downloads-trace-x/b342966b-066f-48a1-b65e-5319fdbc026e/scratchpad/`),
+and the decisions are summarised here in case that is gone. None of their work is integrated yet.
+- **Step 8, parity** (`phase3-step8-parity`, base 633f1a0, told to fast-forward to 6166c1b).
+  - *Deliverables:* comparator, arrival skew, collection guard, mutation self-tests, PARITY record, and
+    a Proposed ADR (0056) with the lateness model and partition frozen.
+  - *Open:* its in-process run's relay published 0 of 78 outcomes, no cause classified yet. Relay silent
+    paths (`not handed over` / `delivery unconfirmed at flush`) are marked only in `app.outbox.last_error`.
+    Probe with a grouped `SELECT` on `app.outbox`.
+  - *Lead decision to apply BEFORE comparisons:* Gold's identity-event source is gateway-produced
+    events only (producer `trace-gateway`, keyed by `correlation_id`); direct generator identity events
+    are excluded (amend ADR-0055 at integration).
+  - *Declared as-served exceptions:* ADR-0046 §8's four cases, plus Step 9's D6.
+- **Step 9, Redis reconstruction** (`phase3-step9-hydration`, base f8c0573, told to fast-forward to
+  6166c1b). Its Proposed hydration ADR (number 0057) is drafted in that worktree, and is
+  not in this repository yet. Phase A was approved and Phase B is in progress.
+  - *Approved decisions:*
+    - D1: the input is Silver, not Gold (Gold's primitive tables are unused by hydration; debt).
+    - D2: the quiescence argument under the writer fence.
+    - D3: outcomes come from `app.authorization_outcomes`.
+    - D4: additive marker hash and compare-and-set claim script in `redis_features.py`.
+    - D5: it clears holes open at begin; it claims T below its own withdrawal marker B only.
+    - D6: a fifth declared difference.
+  - *Conditions:* property tests for D2, and a test that a lost write absent from history keeps T after
+    it. ADR-0046 §5's "never move a later epoch earlier" applies to foreign epochs; align the wording at
+    integration.
+- **Step 11, lake maintenance** (`phase3-step11-maintenance`, fast-forwarded to 633f1a0). Phase B is in
+  progress: the user chose Option A.
+  - *The design:*
+    - whole-file retention deletes, and `ignoreDeletes` on Bronze sources only;
+    - the floor lives in Bronze table properties;
+    - commit order: floor, then appendOnly off, then delete, then appendOnly on;
+    - an append-only audit table reconciled on re-run;
+    - required consumer positions: Bronze checkpoint, clean conservation, every Silver checkpoint's last
+      whole version;
+    - Silver resets start at the lowest version with a live file;
+    - 30 days of log and 7 days of deleted files;
+    - OPTIMIZE refused on Bronze.
+  - *Tests required:* a floor commit racing an append; `bronze_coverage.py` treating retired offsets as
+    neither present nor gaps.
+  - *Also:* its draft ADR-0052 amendment is in its worktree.
+
+**Queued (briefs in the scratchpad):**
+- **Step 10**, recovery chaos (worktree `phase3-step10-resume` at 86fabdb, with partial `tests/chaos` files).
+- **Step 13**, throughput: measured runs are the lead's, on a quiet machine.
+- **Step 14**, layout benchmark.
+Keep at most three agents active: four exhausted the session limit.
+
+**Lead work, done and committed:** the Category A tenure and negative-membership fix (see the entry
+below, feature set 5.0.0, ADR-0046 §3). Tell Steps 8, 9 and 11 to rebase onto it.
+
+**Other lead items:**
+- *The quiet Phase 2 load-gate re-run* (`scratchpad/quiet_load_gate.sh`: needs a clean tree, zero
+  test or Spark processes, load under 2.0). The previous attempt is recorded below as invalid.
+- *Debt:* relays run in-process without a recorder log nothing for failed passes.
+- *Bookkeeping:* P3.medallion's command, after Step 8; ADR numbering (0056 parity, 0057 hydration).
+- *Local stack:* the gateway was rebuilt from f8c0573 with the observation log on (`kafka:19092`),
+  relay off, rate limit 60000/min. The worker relay has run since 10:11Z.
+
+
 **Planning is complete and approved, and Step 0 (toolchain and dependency contract, ADR-0045) is
 complete locally** — `make verify`, the real-JVM stream tests on macOS, a hashed install in a Linux
 container, and a Linux build of the gateway image from its hashed runtime lock. Its first GitHub CI run
@@ -1491,6 +1560,30 @@ both reports.
   * **Not yet proven.** No GitHub Actions run of the new workflows exists: the branch is not pushed,
     and pushing is outward-facing. It is raised at Phase 3 exit.
 
+* **A Category A defect in the feature semantics, found and fixed (2026-09-15).** Found by the Step 9
+  hydration review, in live stores, not only hydrated ones.
+  * **The defect.** `account_tenure_days` and every negative membership (an unknown device, a
+    non-habitual merchant or category) were served COMPLETE when the store's completeness began
+    inside the account's lifetime. `_tenure_days` and `_membership` gated on
+    `ctx.completeness(horizon)` at `as_of`, which a store that started part-way through a lifetime
+    passes. It then served the time since it started as tenure, and a confident zero for "unknown
+    device": R008, R009 and R017 could fire on a device the account had used for years.
+  * **The rule now** (ADR-0046 §3, feature set 5.0.0). A claim about the whole lifetime needs the
+    store to vouch for the entire inactivity gap **before the earliest observation it holds** for the
+    account. Only then does the absence of earlier observations prove the lifetime began there.
+    Otherwise the feature is absent, INCOMPLETE and `history_incomplete`, never COMPLETE. ADR-0044's
+    gate is kept as well; both must hold.
+  * **How it is implemented.** A `LifetimeUnobserved` sentinel beside `DepthCapped`,
+    `FeatureContext.vouched_lifetime_start`, a `FeatureValue.lifetime_unobserved` flag through the
+    scored event and the gateway's degraded reasons. The shared definitions mean one fix covers the
+    reference, Redis and Gold.
+  * **Evidence.**
+    - The new conformance fixture failed on the pre-change code (reference, 2 failed), so it is not
+      vacuous.
+    - After the fix: conformance and the affected unit suites 332 passed; Redis as-served conformance
+      99 passed; Gold event-time-complete stream conformance 88 passed, none skipped.
+  * **Consequence.** Parity (Step 8) and hydration (Step 9) build on 5.0.0, and a store that began
+    recording inside a lifetime now says so instead of guessing.
 * **Phase 3 exit rule, decided by the user (2026-09-15).** "All REQUIRED Phase 3 exit capabilities
   must PASS."
   * *The tracker.* `P3.eval-v2` is a tracked, non-gating evaluation artifact, not a required exit

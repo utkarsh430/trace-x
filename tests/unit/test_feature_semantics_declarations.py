@@ -89,10 +89,12 @@ def _tx(event_id: str, seconds: int) -> Event:
 
 
 def test_the_feature_set_version_is_the_one_adr_0046_section_8_declares() -> None:
-    """4.0.0: past the score-time read cap, content features and the negative and sample-based
-    profile features are served absent (ADR-0046 §8). 3.0.0 moved `declined_ratio_1h` onto
-    authorization outcomes (ADR-0049)."""
-    assert FEATURE_SET_VERSION == "4.0.0"
+    """5.0.0: tenure and a negative membership are served absent unless the store watched the
+    inactivity gap before the lifetime's first observation, so a store that began recording inside a
+    lifetime no longer serves a truncated tenure, or an unknown device, as COMPLETE (ADR-0046 §3).
+    4.0.0 served content features absent past the score-time read cap (§8), and 3.0.0 moved
+    `declined_ratio_1h` onto authorization outcomes (ADR-0049)."""
+    assert FEATURE_SET_VERSION == "5.0.0"
 
 
 def test_every_identity_event_type_has_a_declared_stream() -> None:

@@ -93,6 +93,24 @@ class DepthCapped(InsufficientHistory):
 
 HISTORY_DEPTH_CAPPED: Final = DepthCapped()
 
+
+class LifetimeUnobserved(InsufficientHistory):
+    """Sentinel: the account's lifetime may have begun before the store could vouch for it.
+
+    Tenure and a negative membership are claims about the whole lifetime (ADR-0046 §3), which runs
+    back to the last inactivity gap. A store whose completeness begins inside the gap before the
+    first transaction it holds cannot tell whether the account was active earlier, so it says absent
+    rather than serving the time since it started, or calling a device unknown.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return "LIFETIME_UNOBSERVED"
+
+
+LIFETIME_UNOBSERVED: Final = LifetimeUnobserved()
+
 MIN_OBSERVATIONS_FOR_ROBUST_Z: Final = 8
 """Below this, a median and MAD describe the sample rather than the account.
 
@@ -237,6 +255,17 @@ class FeatureContext:
             if began.timestamp() >= self.complete_since.timestamp()
             else Completeness.INCOMPLETE
         )
+
+    def vouched_lifetime_start(self, first_seen: dt.datetime, gap_s: int) -> bool:
+        """Whether completeness covers the whole inactivity gap before `first_seen`.
+
+        Only then does the absence of earlier observations prove the lifetime began there, rather
+        than reflecting a store that started watching part-way through it.
+        """
+        if self.complete_since is None:
+            return False
+        began = first_seen - dt.timedelta(seconds=gap_s)
+        return self.complete_since.timestamp() <= began.timestamp()
 
     def window(
         self, entity: Entity, entity_id: str | None, stream: Stream, window_label: str

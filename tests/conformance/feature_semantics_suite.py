@@ -1589,6 +1589,49 @@ class FeatureSemanticsConformanceSuite(ABC):
             complete_since=WATCHED_ONE_HOUR,
         )
 
+    def test_tenure_and_an_unknown_device_need_the_store_to_have_watched_the_lifetimes_start(
+        self,
+    ) -> None:
+        """A store that started inside a lifetime cannot know when it began, or every device it
+        used.
+
+        Watched for 35 days, the store first saw this account 20 days ago. It cannot tell whether
+        the
+        account was active in the 30 days before that, so the lifetime may have begun long before
+        the
+        store did. Tenure and "unknown device" are unknowable there: never a truncated number or a
+        confident zero served as COMPLETE (ADR-0046 §3). Watched for 90 days, the same history
+        proves
+        the lifetime began 20 days ago.
+        """
+        history = [tx_event("tx_first", occurred_at=at(-20 * 86_400), device_id="dev_000009")]
+        started_inside = event_time(T0 - dt.timedelta(days=35))
+        self.check(
+            history,
+            transaction(device_id="dev_000123"),
+            [
+                Expectation("account_tenure_days", None, state=INSUFFICIENT),
+                Expectation("device_is_known_for_account", None, state=INSUFFICIENT),
+            ],
+            complete_since=started_inside,
+        )
+        self.check(
+            history,
+            transaction(device_id="dev_000123"),
+            [
+                Expectation("account_tenure_days", 20.0, tolerance=FLOAT),
+                Expectation("device_is_known_for_account", 0.0),
+            ],
+            complete_since=WATCHED_LONG_ENOUGH,
+        )
+        # A positive stays sound either way: the store saw this account use this device.
+        self.check(
+            history,
+            transaction(device_id="dev_000009"),
+            [Expectation("device_is_known_for_account", 1.0)],
+            complete_since=started_inside,
+        )
+
     # -- the whole feature set on an empty store --------------------------------
 
     def test_on_an_empty_store_every_value_is_the_scored_transaction_alone(self) -> None:

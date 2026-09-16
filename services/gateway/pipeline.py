@@ -396,6 +396,10 @@ def history_incomplete(features: dict[str, FeatureValue], context: FeatureContex
     for feature_id, value in features.items():
         if value.state is not FeatureState.INSUFFICIENT_HISTORY:
             continue
+        if value.lifetime_unobserved:
+            # The store began watching inside this account's lifetime, so it cannot vouch for the
+            # lifetime's start: a property of the deployment, not of the transaction (ADR-0046 §3).
+            return True
         lookback = PLAN.lookback_s.get(feature_id, 0)
         if lookback and context.completeness(lookback) is not Completeness.COMPLETE:
             return True

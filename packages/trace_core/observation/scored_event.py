@@ -151,7 +151,7 @@ def served_features(
         # age (ADR-0046 §8); tx.scored.v1's completeness enum already holds INCOMPLETE.
         entry["lookback_completeness"] = (
             Completeness.INCOMPLETE.value
-            if feature.depth_capped
+            if feature.depth_capped or feature.lifetime_unobserved
             else lookback_completeness(feature_id, context)
         )
         entries.append(entry)

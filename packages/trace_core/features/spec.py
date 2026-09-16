@@ -45,6 +45,7 @@ from trace_core.features.context import (
     DepthCapped,
     FeatureContext,
     InsufficientHistory,
+    LifetimeUnobserved,
 )
 from trace_core.features.semantics import (
     CurrentObservation,
@@ -53,7 +54,7 @@ from trace_core.features.semantics import (
     WindowedAggregate,
 )
 
-FEATURE_SET_VERSION: Final = "4.0.0"
+FEATURE_SET_VERSION: Final = "5.0.0"
 """Bumped whenever a feature's MEANING changes.
 
 Recorded on every `RiskDecision` and in every run manifest: a latency or quality
@@ -136,6 +137,9 @@ class FeatureValue:
     depth_capped: bool = False
     """Absent because the bounded score-time read did not reach it (ADR-0046 §8): its lookback was
     not vouched for, and the decision carries `history_depth_capped`. Never set on a value."""
+    lifetime_unobserved: bool = False
+    """Absent because the store's completeness began inside the account's lifetime (ADR-0046 §3), so
+    its start is unprovable: the lookback was not vouched for. Never set on a value."""
 
     @classmethod
     def of(
@@ -169,14 +173,23 @@ class FeatureValue:
         )
 
     @classmethod
-    def insufficient_history(cls, feature_id: str, *, depth_capped: bool = False) -> FeatureValue:
-        """The source supplies the inputs; this entity has too little history, or the bounded
-        score-time read did not reach it (`depth_capped`, ADR-0046 §8)."""
+    def insufficient_history(
+        cls,
+        feature_id: str,
+        *,
+        depth_capped: bool = False,
+        lifetime_unobserved: bool = False,
+    ) -> FeatureValue:
+        """The source supplies the inputs; this entity has too little history, the bounded
+        score-time read did not reach it (`depth_capped`, ADR-0046 §8), or the store cannot vouch
+        for
+        the lifetime's start (`lifetime_unobserved`, ADR-0046 §3)."""
         return cls(
             feature_id=feature_id,
             _value=None,
             state=FeatureState.INSUFFICIENT_HISTORY,
             depth_capped=depth_capped,
+            lifetime_unobserved=lifetime_unobserved,
         )
 
     @property
@@ -282,7 +295,9 @@ class FeatureSpec:
         result = self.compute(transaction, context)
         if isinstance(result, InsufficientHistory):
             return FeatureValue.insufficient_history(
-                self.feature_id, depth_capped=isinstance(result, DepthCapped)
+                self.feature_id,
+                depth_capped=isinstance(result, DepthCapped),
+                lifetime_unobserved=isinstance(result, LifetimeUnobserved),
             )
         return FeatureValue.of(
             self.feature_id,

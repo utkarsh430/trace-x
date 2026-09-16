@@ -140,6 +140,19 @@ sufficient; the literals are the oracle.
   scored transaction's currency.
 - **Tenure** is `as_of` minus the earliest observation in the lifetime, in days. The completeness gate
   ADR-0044 declared for negative answers is kept.
+- **A claim about the whole lifetime needs the lifetime's start to be provable** (found in Step 9's
+  review; feature set 5.0.0).
+  - *Which claims.* Tenure, and every negative membership: an unknown device, and a merchant or
+    category that is not habitual.
+  - *The rule.* The store must vouch for the whole inactivity gap **before the earliest observation it
+    holds for the account**, not merely for the horizon before `as_of`. Only then does the absence of
+    earlier observations prove the lifetime began there.
+  - *Otherwise.* They read absent, with `lookback_completeness = INCOMPLETE` and the degraded reason
+    `history_incomplete`. The gate ADR-0044 declared is kept as well, so both must hold.
+  - *The defect this fixes.* A store watching for its horizon but started **inside** an ongoing
+    lifetime served the time since it started as tenure, and "unknown device" as a confident zero,
+    both marked COMPLETE. That turned every long-standing customer into a new account after a
+    restart, and could fire R008, R009 and R017 on a device the account had used for years.
 - **Habitual merchant / category** needs at least three observations in the lifetime at that merchant
   or category. **Known device** needs at least one.
 - **Robust z-score** (Q4d) uses the median and MAD of `|amount_minor|` over the **last 128**
@@ -502,7 +515,9 @@ window, then decoded every observation (`run_id: bench-20260915-071647-score-lat
      accepted: R019 declares the dominant case, and adding a 25-hour count feature for this edge
      would be a new served feature.
 5. **Versions and layout migration.**
-   - `FEATURE_SET_VERSION` goes to 4.0.0, because served values change for capped accounts.
+   - `FEATURE_SET_VERSION` went to 4.0.0 for the cap, and is **5.0.0** with §3's lifetime-start rule,
+     because served values change again: a truncated tenure and an unprovable "unknown" become
+     absences.
    - An account's legacy single identity-event set is read as not held (`history_incomplete`) until
      it expires within 25 hours. It is not migrated inside the write script: moving a deep legacy set
      in one atomic script is itself the O(N) stall this section removes.

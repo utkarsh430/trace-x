@@ -38,6 +38,7 @@ from trace_core.domain.geo import GeoPoint, haversine_km, implied_speed_kmh
 from trace_core.features.context import (
     HISTORY_DEPTH_CAPPED,
     INSUFFICIENT_HISTORY,
+    LIFETIME_UNOBSERVED,
     MIN_OBSERVATIONS_FOR_ROBUST_Z,
     Completeness,
     FeatureContext,
@@ -398,6 +399,11 @@ def _tenure_days(spec: ProfileAttribute) -> Compute:
         # regular customer into a fresh account for the tenure rules.
         if ctx.completeness(spec.horizon.seconds) is not Completeness.COMPLETE:
             return INSUFFICIENT_HISTORY
+        # ...and watching since before the lifetime began, not merely for the horizon: a store that
+        # started INSIDE an ongoing lifetime would otherwise serve the time since it started, as
+        # COMPLETE, turning every long-standing customer into a new account (ADR-0046 §3).
+        if not ctx.vouched_lifetime_start(profile.first_seen_at, spec.horizon.seconds):
+            return LIFETIME_UNOBSERVED
         return max(0.0, (ctx.as_of - profile.first_seen_at).total_seconds() / 86_400.0)
 
     return compute
@@ -435,6 +441,13 @@ def _membership(spec: ProfileAttribute) -> Compute:
         # customer look like an account takeover in progress.
         if ctx.completeness(spec.horizon.seconds) is not Completeness.COMPLETE:
             return INSUFFICIENT_HISTORY
+        # The same asymmetry runs one step deeper: a negative is a claim about the WHOLE lifetime,
+        # so
+        # the store must also have been watching before that lifetime began (ADR-0046 §3).
+        if profile.first_seen_at is None or not ctx.vouched_lifetime_start(
+            profile.first_seen_at, spec.horizon.seconds
+        ):
+            return LIFETIME_UNOBSERVED
         return 0.0
 
     return compute
