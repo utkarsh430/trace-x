@@ -115,23 +115,34 @@ class OutboxRelay:
                 return RelayPass(claimed=0, published=0, failed=0, refused=0, deferred=0)
             refused: dict[int, str] = {}
             handed: list[tuple[int, str]] = []
-            failure: tuple[int, str] | None = None
+            failures: dict[int, str] = {}
+            blocked: set[tuple[str, str]] = set()
+            deferred_ids: list[int] = []
             before = self._publisher.report()
             for outbox_id, topic, stored_key, payload in rows:
+                lane = (str(topic), str(stored_key))
+                if lane in blocked:
+                    # Kafka orders within a partition key, so a row whose lane already failed this
+                    # pass waits: publishing it now would put it ahead of the row it must follow.
+                    deferred_ids.append(int(outbox_id))
+                    continue
                 verdict = self._hand_over(int(outbox_id), str(topic), str(stored_key), payload)
                 if verdict is None:
                     handed.append((int(outbox_id), str(topic)))
                 elif verdict.startswith(REFUSED_PREFIX):
                     refused[int(outbox_id)] = verdict
                 else:
-                    failure = (int(outbox_id), verdict)
-                    break
+                    # Transient: this lane stops here and every other lane keeps draining. Breaking
+                    # the pass let one undeliverable row starve the whole queue, across topics, for
+                    # as long as it kept failing -- and it was retried silently forever.
+                    failures[int(outbox_id)] = verdict
+                    blocked.add(lane)
             # Confirmed even after a failure: the handed-over rows are delivered regardless.
             confirmed = self._confirm(before, handed) if handed else False
             published_ids = [outbox_id for outbox_id, _ in handed] if confirmed else []
             unconfirmed_ids = [] if confirmed else [outbox_id for outbox_id, _ in handed]
-            failed_ids = [*unconfirmed_ids, *([failure[0]] if failure is not None else [])]
-            deferred = len(rows) - len(handed) - len(refused) - (failure is not None)
+            failed_ids = [*unconfirmed_ids, *failures]
+            deferred = len(deferred_ids)
             if published_ids:
                 conn.execute(
                     "UPDATE app.outbox SET published_at = now() WHERE outbox_id = ANY(%s)",
@@ -141,12 +152,27 @@ class OutboxRelay:
                 self._mark_failed(conn, [outbox_id], error)
             if unconfirmed_ids:
                 self._mark_failed(conn, unconfirmed_ids, "delivery unconfirmed at flush")
-            if failure is not None:
-                self._mark_failed(conn, [failure[0]], failure[1])
+            for outbox_id, error in failures.items():
+                self._mark_failed(conn, [outbox_id], error)
             # In the transaction that marks: the authorization delivery watermark moves only as far
             # as the marks now vouch, never past an unconfirmed, refused or uncommitted row.
             outbox_watermark.advance(conn)
         self._count(rows, published_ids, failed_ids, refused)
+        if failed_ids or refused:
+            # A queue that stops draining must never be invisible. The counters carry the tallies,
+            # but only a log line reaches an operator reading the worker's logs (OPERATIONS,
+            # "Outbox not draining"). The error's text is the relay's own, never a payload.
+            first = next(iter(failures.values()), "") or next(iter(refused.values()), "")
+            log.warning(
+                "outbox_relay_rows_not_published",
+                claimed=len(rows),
+                published=len(published_ids),
+                failed=len(failed_ids),
+                refused=len(refused),
+                deferred=deferred,
+                blocked_lanes=len(blocked),
+                first_error=first[:ERROR_MAX_CHARS],
+            )
         return RelayPass(
             claimed=len(rows),
             published=len(published_ids),

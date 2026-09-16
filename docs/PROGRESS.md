@@ -1584,6 +1584,29 @@ both reports.
       99 passed; Gold event-time-complete stream conformance 88 passed, none skipped.
   * **Consequence.** Parity (Step 8) and hydration (Step 9) build on 5.0.0, and a store that began
     recording inside a lifetime now says so instead of guessing.
+* **Three findings from Step 8's parity work, resolved (2026-09-15).**
+  * **F2, a defect, fixed: one undeliverable row starved the outbox, silently.** The relay claimed
+    oldest-first and abandoned the pass at the first transient failure, so a single blocked row held
+    back every later row, across topics, for as long as it kept failing. One such row starved 638
+    outcome rows in the agent's run. Nothing was logged: the counts went to the relay's counters, and
+    the reasons only to `app.outbox.last_error`.
+    * *Correctness was never at risk.* The delivery watermark never passes an undelivered row, so
+      nothing was claimed complete. It was a delivery stall, and an invisible one.
+    * *Now.* A failed row blocks only its own topic and partition key, which is the only ordering
+      Kafka guarantees; every other lane keeps draining. A pass that cannot publish everything it
+      claimed logs `outbox_relay_rows_not_published` with its counts, blocked lanes and first error.
+    * *Tests.* Three unit tests (`tests/unit/test_outbox_relay_lanes.py`): another lane drains, a
+      later row on the blocked lane waits rather than overtaking, and every claimed row is exactly
+      one outcome. One integration test fails a single partition key, as an unavailable partition
+      leader does, and runs under the heavy-suite lock.
+    * *Runbook.* OPERATIONS "Outbox not draining" now names the log line and the per-lane behaviour.
+  * **F1, not a defect: late reads behind the store's held history.** ADR-0046 §5 already declares it:
+    each structure keeps its widest window plus the late-arrival margin, and a read reaching behind
+    what is still held serves absence and stops vouching. The agent's 70-minute threshold is the card
+    window's retention. Parity's rule, recorded in its ADR: compare where the as-served read vouches,
+    or where both sides are absent; count and report the rest; never model trimming in the oracle.
+  * **F3, disproved: outcome ingress does bound future skew.** `POST /v1/events/authorization` runs
+    the same clock check transactions use and answers 422 beyond it.
 * **Phase 3 exit rule, decided by the user (2026-09-15).** "All REQUIRED Phase 3 exit capabilities
   must PASS."
   * *The tracker.* `P3.eval-v2` is a tracked, non-gating evaluation artifact, not a required exit

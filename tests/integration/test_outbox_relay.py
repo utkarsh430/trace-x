@@ -84,10 +84,30 @@ class OutboxProducer(FakeProducer):
         return FakeMetadata({name: FakeTopic() for name in self.topics})
 
 
-def _relay(pool: Any, **fake: Any) -> tuple[OutboxRelay, OutboxProducer, list[Any]]:
+class LaneProducer(OutboxProducer):
+    """Fails one partition key, as a partition whose leader is unavailable does.
+
+    The topic is fine and every other key publishes, which is what tells a lane-scoped block apart
+    from the old whole-batch stop.
+    """
+
+    def __init__(self, config: dict[str, Any], *, outcome: str = "deliver") -> None:
+        super().__init__(config, outcome=outcome)
+        self.fail_keys: set[str] = set()
+
+    def produce(self, topic: str, **kwargs: Any) -> None:
+        key = kwargs.get("key")
+        if key is not None and key.decode() in self.fail_keys:
+            raise RuntimeError("Local: Unknown partition")
+        super().produce(topic, **kwargs)
+
+
+def _relay(
+    pool: Any, producer_cls: type[OutboxProducer] = OutboxProducer, **fake: Any
+) -> tuple[OutboxRelay, OutboxProducer, list[Any]]:
     ledger = DeliveryLedger()
     config = producer_config(bootstrap_servers="127.0.0.1:9", client_id="relay-it", ledger=ledger)
-    producer = OutboxProducer(config, **fake)
+    producer = producer_cls(config, **fake)
     publisher = EventPublisher(producer, ledger, bootstrap_servers="127.0.0.1:9")
     tallies: list[Any] = []
     relay = OutboxRelay(
@@ -215,6 +235,29 @@ def test_a_missing_topic_is_retried_not_refused(pool: Any) -> None:
     assert error is not None and not error.startswith(REFUSED_PREFIX)
     retry, _, _ = _relay(pool)
     assert retry.run_once().published == 1
+
+
+def test_an_undeliverable_row_blocks_its_own_key_and_nothing_else(pool: Any) -> None:
+    """One undeliverable row used to starve the whole queue, across topics, silently.
+
+    The relay claims oldest-first and abandoned the pass at the first transient failure. Kafka
+    orders within a partition key, so that is the only ordering a relay owes.
+    """
+    stuck = _insert(pool, _event(1), key="acct_000001")
+    other = _insert(pool, _event(2), key="acct_000002")
+    behind = _insert(pool, _event(3), key="acct_000001")
+    relay, producer, _ = _relay(pool, producer_cls=LaneProducer)
+    assert isinstance(producer, LaneProducer)
+    producer.fail_keys = {"acct_000001"}
+    result = relay.run_once()
+    assert (result.published, result.failed, result.deferred) == (1, 1, 1)
+    rows = _rows(pool)
+    assert rows[other][0] is not None, "a healthy lane drained while another was blocked"
+    assert rows[stuck][0] is None and rows[stuck][1] == 1
+    assert rows[behind][0] is None and rows[behind][1] == 0, "a deferred row is not marked failed"
+    producer.fail_keys.clear()
+    again = relay.run_once()
+    assert again.published == 2, "both rows of the lane drain, in order, once it recovers"
 
 
 def test_two_relays_in_concurrent_passes_never_publish_the_same_row(pool: Any) -> None:

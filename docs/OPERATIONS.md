@@ -213,7 +213,9 @@ history coverage claims nothing for the time it runs. This is the default for a 
 **Detect:** `SELECT count(*), min(created_at) FROM app.outbox WHERE published_at IS NULL` growing;
 the `worker` container is not running, or logs `worker_refused_to_start` or
 `worker_outbox_relay_thread_died`. The worker has no `/metrics` endpoint yet: its row counts are logged
-as `worker_outbox_relay_rows`.
+as `worker_outbox_relay_rows`. A pass that could not publish everything it claimed logs
+`outbox_relay_rows_not_published` with the claimed, published, failed, refused and deferred counts, the
+number of blocked lanes, and the first error -- so a queue that stops draining is never silent.
 **Behaviour:** cases and authorization outcomes wait in PostgreSQL, and nothing is lost. A delivery
 failure is retried on the next pass. A row refused for its own content (`last_error` starting
 `refused: `) is never retried, because its content is immutable (migration 0007).
@@ -221,7 +223,9 @@ failure is retried on the next pass. A row refused for its own content (`last_er
 - Worker not running: the relay runs in `trace-worker` (ADR-0051 §7). Start it with
   `docker compose -f deploy/compose.yml --env-file .env --profile core --profile streaming up -d worker`.
   It exits and restarts when its relay thread dies, and refuses to start without a broker.
-- `failed`: restore the broker; the rows drain by themselves.
+- `failed`: restore the broker; the rows drain by themselves. A row that keeps failing blocks only
+  its own topic and partition key (`deferred` counts the rows waiting behind it); every other lane
+  keeps draining. Read its `last_error` before assuming the broker is at fault.
 - `refused`: read `last_error`. A refused row is a defect in the writer that produced it, and it
   stays in the table for that investigation. Never edit or delete it to clear the queue.
 
