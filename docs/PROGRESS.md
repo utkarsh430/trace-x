@@ -20,74 +20,87 @@ planning surfaced recorded under *What Phase 3 planning found in Phase 2's artef
 
 ### Phase 3
 
-### Phase 3 — HANDOFF (2026-09-15 ~11:00 UTC; session limit imminent). Read this first.
+### Phase 3 — HANDOFF (2026-09-16 ~23:20 UTC; development moving to a new machine). Read this first.
 
-**Committed through `6166c1b`:**
-- Steps 4, 5, 6 (Silver) and 7 (Gold);
-- Step 12's depth cap (ADR-0046 §8), its score-latency and memory re-runs;
-- CI provisioning;
-- the exit rule (P3.eval-v2 non-gating);
-- the Databricks strategy docs.
+**Why this handoff exists.** The machine this session ran on cannot carry Phase 3's heavy runs: the
+host was swapping ~3.7 GB, one background run was killed for memory pressure, a full
+`-m stream tests/stream` session died in a JVM GC death spiral (the session factory's 1 GB driver
+heap; old generation at 98.8%; 13,526 full GCs in 72 minutes) at collected position 132 without
+reaching the `resource_bounds` tests, and three lock-waiting jobs timed out behind it. Everything was
+stopped deliberately and pushed. Nothing below was lost.
 
-**Three agents in flight, each in its own plain worktree under `.claude/worktrees/`.** Briefs are in the
-session scratchpad (`/private/tmp/claude-501/-Users-singh-Downloads-trace-x/b342966b-066f-48a1-b65e-5319fdbc026e/scratchpad/`),
-and the decisions are summarised here in case that is gone. None of their work is integrated yet.
-- **Step 8, parity** (`phase3-step8-parity`, base 633f1a0, told to fast-forward to 6166c1b).
-  - *Deliverables:* comparator, arrival skew, collection guard, mutation self-tests, PARITY record, and
-    a Proposed ADR (0056) with the lateness model and partition frozen.
-  - *Open:* its in-process run's relay published 0 of 78 outcomes, no cause classified yet. Relay silent
-    paths (`not handed over` / `delivery unconfirmed at flush`) are marked only in `app.outbox.last_error`.
-    Probe with a grouped `SELECT` on `app.outbox`.
-  - *Lead decision to apply BEFORE comparisons:* Gold's identity-event source is gateway-produced
-    events only (producer `trace-gateway`, keyed by `correlation_id`); direct generator identity events
-    are excluded (amend ADR-0055 at integration).
-  - *Declared as-served exceptions:* ADR-0046 §8's four cases, plus Step 9's D6.
-- **Step 9, Redis reconstruction** (`phase3-step9-hydration`, base f8c0573, told to fast-forward to
-  6166c1b). Its Proposed hydration ADR (number 0057) is drafted in that worktree, and is
-  not in this repository yet. Phase A was approved and Phase B is in progress.
-  - *Approved decisions:*
-    - D1: the input is Silver, not Gold (Gold's primitive tables are unused by hydration; debt).
-    - D2: the quiescence argument under the writer fence.
-    - D3: outcomes come from `app.authorization_outcomes`.
-    - D4: additive marker hash and compare-and-set claim script in `redis_features.py`.
-    - D5: it clears holes open at begin; it claims T below its own withdrawal marker B only.
-    - D6: a fifth declared difference.
-  - *Conditions:* property tests for D2, and a test that a lost write absent from history keeps T after
-    it. ADR-0046 §5's "never move a later epoch earlier" applies to foreign epochs; align the wording at
-    integration.
-- **Step 11, lake maintenance** (`phase3-step11-maintenance`, fast-forwarded to 633f1a0). Phase B is in
-  progress: the user chose Option A.
-  - *The design:*
-    - whole-file retention deletes, and `ignoreDeletes` on Bronze sources only;
-    - the floor lives in Bronze table properties;
-    - commit order: floor, then appendOnly off, then delete, then appendOnly on;
-    - an append-only audit table reconciled on re-run;
-    - required consumer positions: Bronze checkpoint, clean conservation, every Silver checkpoint's last
-      whole version;
-    - Silver resets start at the lowest version with a live file;
-    - 30 days of log and 7 days of deleted files;
-    - OPTIMIZE refused on Bronze.
-  - *Tests required:* a floor commit racing an append; `bronze_coverage.py` treating retired offsets as
-    neither present nor gaps.
-  - *Also:* its draft ADR-0052 amendment is in its worktree.
+**Where the code is — all on `origin`.**
+- `phase/03-stream-medallion` = `f053faf`: the integrated Phase 3 line. **Clone this.**
+  (`worktree-agent-aae9faa608636c9c8` is the same commit under the lead worktree's branch name.)
+- `phase3-step11-maintenance` = `684eef9`: Step 11 as a labelled **unverified WIP snapshot**. Not
+  integrated; see below.
 
-**Queued (briefs in the scratchpad):**
-- **Step 10**, recovery chaos (worktree `phase3-step10-resume` at 86fabdb, with partial `tests/chaos` files).
-- **Step 13**, throughput: measured runs are the lead's, on a quiet machine.
-- **Step 14**, layout benchmark.
-Keep at most three agents active: four exhausted the session limit.
+**Committed this session on `phase/03-stream-medallion`, each gated on `make verify` (11 passed,
+0 failed, 0 skipped):**
+- `eef0d8a` Step 8, the parity framework (ADR-0056).
+- `f7fd9d5` Step 9, Redis reconstruction (ADR-0057) and Step 10, resume under fault injection; the
+  ADR-0053 §4 commit-order correction.
+- `4fc23de` the adversarial review's seven findings, three of them Category A (entry below).
+- `f053faf` `P3.redis-hydration` PASS.
 
-**Lead work, done and committed:** the Category A tenure and negative-membership fix (see the entry
-below, feature set 5.0.0, ADR-0046 §3). Tell Steps 8, 9 and 11 to rebase onto it.
+**Capability status** (`tests/acceptance/status.json`: `updated_at` 2026-09-16, `last_verified_commit`
+`4fc23de`).
+- PASS this session: `P3.redis-hydration` (11 passed, 0 skipped, 233.55 s on `4fc23de`).
+- **Not recorded, deliberately, each with its reason:**
+  - `P3.checkpoint-resume`: all seven injection cases passed, but only in five `-k` splits (Step 10
+    entry). CLAUDE.md §16.3 wants the command executed, and
+    `pytest -m chaos tests/chaos/test_spark_resume.py` has never run as **one session**. It was
+    started on `4fc23de` and stopped for the move before pytest began. Run it once, on a quiet host.
+  - `P3.feature-parity`: no measured run exists, and none could honestly have been made before
+    `4fc23de` — finding A1 had the comparator discarding every Gold-side absence. ADR-0056 §5's
+    declarations are frozen and the guard bound `MAX_NOT_VOUCHED_FRACTION_PER_FEATURE` (0.5) is
+    pre-registered. Run `make parity` on a quiet host.
+  - `P3.medallion`: its command still names a test that does not exist; repoint it after parity.
+  - `P3.stream-throughput` (Step 13) and `P3.layout-benchmark` (Step 14): **not started.** Both are
+    benchmarks and need a quiet host with real memory — the reason for this move. Their briefs lived
+    in the old machine's session scratchpad, not in the repository; derive them from
+    `docs/PHASE3_PLAN.md`.
+  - `P3.eval-v2`: FAIL and non-gating, by the user's decision (the exit-rule entry below).
 
-**Other lead items:**
-- *The quiet Phase 2 load-gate re-run* (`scratchpad/quiet_load_gate.sh`: needs a clean tree, zero
-  test or Spark processes, load under 2.0). The previous attempt is recorded below as invalid.
-- *Debt:* relays run in-process without a recorder log nothing for failed passes.
-- *Bookkeeping:* P3.medallion's command, after Step 8; ADR numbering (0056 parity, 0057 hydration).
-- *Local stack:* the gateway was rebuilt from f8c0573 with the observation log on (`kafka:19092`),
-  relay off, rate limit 60000/min. The worker relay has run since 10:11Z.
+**Step 11 — integrate from `phase3-step11-maintenance` (ADR-0052 Amendment 1).**
+- Proven there by the agent: 44 unit/integration (`-k resource_bounds`, 61 s); 14 `resource_bounds`
+  stream on Delta 4.0.1 / Temurin 17 (379 s); 9 Bronze+Silver Kafka regression (134 s); the full unit
+  suite 2139 passed, 1 loud skip; ruff, mypy clean.
+- Known to fail, class C:
+  `tests/stream/test_bronze_tables.py::test_coverage_rows_read_in_spark_equal_the_rows_that_were_written`.
+  `BronzeRecord` gained a tenth field, `topic_id`; add it to the eight expected records. Do not change
+  the adapter to satisfy the old expectation.
+- Not closed: its debt item 4, the full stream regression run solo. **Run it split by file, one JVM
+  per file** (`for f in tests/stream/test_*.py; do pytest -m stream "$f"; done`), never as one
+  session — see "why this handoff exists".
+- The amendment: `docs/adr/0052-bronze-ingest-topology.md` lines 169–515, lifted verbatim. Its point
+  6 changes ADR-0053 §7 (Silver resets no longer start at version 0 once floors exist); the lead
+  amends ADR-0053 (Proposed) at integration.
+- Amendment 1 §2 closes Step 9's recorded debt "retired Bronze offsets read as coverage gaps": a
+  retired region is one gap, and hydration refuses to claim before the floor. Re-run the hydration
+  suite after integration to show the two agree.
 
+**Operating notes a cold session would otherwise get wrong.**
+- Environment: Temurin 17 (`/usr/libexec/java_home -v 17` on macOS); `.env` from `.env.example`
+  (gitignored — regenerate, never commit); `set -a; . ./.env; set +a`; `PYTHONPATH=packages:.`;
+  `make setup`, `python scripts/stream_jars.py fetch`, `make up`, `alembic upgrade head`.
+- Heavy runs (Spark, Kafka, chaos, benchmarks, `make verify` when anything else is running)
+  serialise on one lock directory (`mkdir` plus an owner file naming the pid). Release only when the
+  owner file names your own pid. An `EXIT` trap in a `zsh -c` wrapper does **not** fire on SIGTERM;
+  the pid check is what makes release safe. A lock whose owner pid is dead may be reclaimed, loudly.
+- Never two Spark/Kafka suites at once; never a benchmark beside anything.
+- Wrappers must propagate `make`'s exit code (`rc=$?; ...; exit $rc`), not a trailing `echo`'s —
+  that mistake was made once this session and caught by gating the commit on the log.
+- Lint with the gate's exact invocation, `ruff format --check . && ruff check .`; `ruff format`
+  does not reflow docstrings, so a per-file check after formatting can pass what the gate fails.
+- The Claude Code memory directory is per-machine and will not exist on the new one. The operating
+  model in force (the lead owns implementation and sequencing; escalation only for material
+  architecture, contracts, security boundaries or accepted criteria, always with a recommendation;
+  failure classes A–F; the IMPLEMENTED / EVIDENCE / DECISIONS / DEBT / NEXT / ESCALATION report) was a
+  user instruction and should be re-issued.
+
+**Superseded:** the 2026-09-15 handoff that stood here. Its Step 8/9/11 decisions are recorded in
+the Step 8, 9 and 10 entries below and in ADRs 0056, 0057 and 0052 Amendment 1.
 
 **Planning is complete and approved, and Step 0 (toolchain and dependency contract, ADR-0045) is
 complete locally** — `make verify`, the real-JVM stream tests on macOS, a hashed install in a Linux
@@ -295,6 +308,11 @@ afterwards as `trace_eval`: known fraud triaged at **37.3%** against **0.0%** fo
 ---
 
 ## LAST VERIFIED COMMIT
+
+**Phase 3:** `f053faf` on `phase/03-stream-medallion` is the last commit whose `make verify` was green
+(11 passed, 0 failed, 0 skipped), and the commit carrying this handoff is gated the same way.
+`tests/acceptance/status.json` records `last_verified_commit` `4fc23de`, the commit its evidence was
+measured on.
 
 Phase 2's acceptance evidence was recorded at `c86c6cd` (`run_id: load-20260913-gateway-c86c6cdd`).
 The CI fix described under CURRENT STATUS is the commit that immediately follows this file; it changes
