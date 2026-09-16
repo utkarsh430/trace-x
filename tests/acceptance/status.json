@@ -3,8 +3,8 @@
   "project": "TRACE-X",
   "current_phase": "3",
   "current_phase_name": "Streaming & Medallion",
-  "updated_at": "2026-09-15",
-  "last_verified_commit": "c86c6cd",
+  "updated_at": "2026-09-16",
+  "last_verified_commit": "4fc23de",
   "legend": {
     "NOT_STARTED": "No implementation exists.",
     "IN_PROGRESS": "Implementation started; acceptance evidence incomplete.",
@@ -326,11 +326,11 @@
       "id": "P3.redis-hydration",
       "phase": "3",
       "name": "Redis reconstruction reaches completeness only through evidence, never across a gap",
-      "status": "NOT_STARTED",
+      "status": "PASS",
       "evidence": {
         "command": "pytest -m 'stream and integration' tests/integration/test_redis_hydration.py",
-        "verified_at": null,
-        "result": null
+        "verified_at": "2026-09-16",
+        "result": "11 passed, 0 failed, 0 skipped in 233.55 s at commit 4fc23de, one undivided session against a throwaway Kafka broker, a real Redis, the suite's own migrated PostgreSQL database and Delta 4.0.1 on Temurin 17. Equality against the live store; all six refusals (a store another writer touched, a held fence, a withdrawal mid-run, a foreign write mid-run, an unknown session, Silver behind the evidence); the lost observation whose hole is withdrawn while the claim still starts after it; idempotence; a child SIGKILLed between two observe calls that resumes and converges; and the fifth declared difference (folded_out_of_order), which executed rather than passing vacuously. The memory spike ADR-0057 predicts remains unmeasured and is not claimed here."
       }
     },
     {

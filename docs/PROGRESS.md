@@ -1624,8 +1624,8 @@ both reports.
   * **Next:** the lead's measured runs on a clean commit, then `P3.feature-parity`.
   * **Debt recorded:** `eval/replay/faults.py` cannot build a conflicting duplicate for
     `tx.authorization.v1` (it reads `payload.score`), so that fault is excluded from parity overlays.
-* **Step 9 — Redis reconstruction: built and integrated** (ADR-0057, Proposed; `P3.redis-hydration`
-  awaits the lead's re-run of the acceptance command on this commit).
+* **Step 9 — Redis reconstruction: complete** (ADR-0057, Proposed; `P3.redis-hydration` PASS,
+  2026-09-16, on `4fc23de`).
   * **What it does.** Rebuilds a lost online store by replaying history through the store's own
     idempotent Lua `record` — the path the gateway uses — under the ADR-0051 writer fence, and
     claims completeness only by compare-and-set on the epoch, only with evidence. Primitives are
@@ -1642,6 +1642,13 @@ both reports.
     that resumes and converges. Plus 21 unit tests including three property tests for the
     quiescence lemma, and a non-vacuity probe in which 279 of 400 generated quiescent histories
     carry lost writes and every one still yields a claim.
+  * **Acceptance, on the integrated and fixed commit.** The same command on `4fc23de`, after
+    the adversarial review's three Category A fixes landed: **11 passed, 0 failed, 0 skipped,
+    233.55 s**. The eleventh case is the fifth declared difference (`folded_out_of_order`) the
+    review added, and it executed — 18.23 s setup, 8.91 s call — rather than passing
+    vacuously. The agent's earlier run at `3973c83` is kept above as what was measured then,
+    and is **not** the evidence for the capability: it predates the two defects in the
+    hydrator that the review found.
   * **The memory figure is a diagnostic, not a target.** The hydrated namespace holds 82 keys
     against the live store's 81, and instance `used_memory` moved by under 100 KB. This does **not**
     measure the spike ADR-0057's Negative consequences predict: that needs a history longer than the
