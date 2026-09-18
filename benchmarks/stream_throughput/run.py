@@ -24,6 +24,14 @@ harness could not measure (refused preflight, a producer or consumer refusal, an
 or any unexpected exception -- the run is INVALID, its record says `publishable: false`, and no
 report is written); 3 a valid run on a dirty worktree (recorded, not publishable, no report).
 
+**A consumer that dies while it should be running** (an OutOfMemoryError, a failed query) is the
+system under test missing its target, not the harness failing to measure: the run is FAIL (exit 1)
+provided every integrity check that can be evaluated passes, and the record carries the consumer's
+exit code and the first error line of its log (`consumer_survived`, `measured.consumer_crash`).
+The clock offset is required only when a lag the run judges depends on it (a completed measured
+window, or an observed recovery); the bound itself streams from the producer workers every second,
+so a run that ends early still has one.
+
 Nothing here needs more than the local `streaming` profile: `make up-streaming`, then
 `make kafka-topics`.
 """
@@ -35,6 +43,7 @@ import datetime as dt
 import json
 import multiprocessing as mp
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -42,13 +51,13 @@ import sys
 import threading
 import time
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Final
 
 from benchmarks.stream_throughput import delta_log, record, verdict
-from benchmarks.stream_throughput.clock import OffsetBounds
+from benchmarks.stream_throughput.clock import fleet_bounds
 from benchmarks.stream_throughput.lag import (
     LagSample,
     LagTracker,
@@ -72,6 +81,8 @@ KAFKA_BOOTSTRAP_ENV: Final = "TRACE_KAFKA_BOOTSTRAP"
 LAKE_ROOT_ENV: Final = "TRACE_DELTA_ROOT"
 READY_TIMEOUT_S: Final = 180.0
 RESOURCE_EVERY_S: Final = 5.0
+ERROR_LINE_MAX_CHARS: Final = 500
+_ERROR_LINE: Final = re.compile(r"\bERROR\b|Exception\b|Error\b")
 GOLD_EXIT_REFUSED: Final = 2
 
 _log = get_logger(__name__)
@@ -202,9 +213,12 @@ class ConsumerProcess:
             args += ["--topic", topic]
         return args
 
+    def log_path(self) -> Path:
+        return self.logs / f"consumer-{self.generation}.log"
+
     def start(self) -> int:
         self.generation += 1
-        log = (self.logs / f"consumer-{self.generation}.log").open("ab")
+        log = self.log_path().open("ab")
         env = {
             **os.environ,
             LAKE_ROOT_ENV: str(self.lake_root),
@@ -428,6 +442,8 @@ class ProducerFleet:
         self.ready: set[int] = set()
         self.buckets: dict[float, int] = {}
         self.behind: dict[float, float] = {}
+        self.clocks: dict[int, dict[str, Any]] = {}
+        """Each worker's latest streamed clock bound, so a bound exists however the run ends."""
         self.finals: dict[int, dict[str, Any]] = {}
         self.errors: list[str] = []
         self._drainer = threading.Thread(target=self._drain, name="producer-drain", daemon=True)
@@ -456,6 +472,8 @@ class ProducerFleet:
                     key = round(bucket, 3)
                     self.buckets[key] = self.buckets.get(key, 0) + sum(counts.values())
                     self.behind[key] = max(self.behind.get(key, 0.0), behind)
+                    if len(message) > 5 and isinstance(message[5], dict):
+                        self.clocks[worker] = message[5]
                 elif kind == "final":
                     self.finals[worker] = message[2]
                 elif kind == "error":
@@ -497,6 +515,11 @@ class ProducerFleet:
     def snapshot(self) -> tuple[dict[float, int], dict[float, float], list[str]]:
         with self._lock:
             return dict(self.buckets), dict(self.behind), list(self.errors)
+
+    def reports(self) -> tuple[dict[int, dict[str, Any]], dict[int, dict[str, Any]]]:
+        """(final reports, latest streamed clock bounds), by worker."""
+        with self._lock:
+            return dict(self.finals), dict(self.clocks)
 
 
 def _worker_entry(*args: Any) -> None:
@@ -679,6 +702,7 @@ def _run(argv: Sequence[str] | None) -> int:
     sampler: ResourceSampler | None = None
     phases: dict[str, int | None] = {}
     consumer_failure: str | None = None
+    consumer_crash: dict[str, Any] | None = None
     outage_timing: OutageTiming | None = None
     harness_error: str | None = None
     broker: dict[str, dict[str, Any]] = {}
@@ -746,7 +770,7 @@ def _run(argv: Sequence[str] | None) -> int:
         monitor.start()
 
         def check() -> None:
-            nonlocal consumer_failure
+            nonlocal consumer_failure, consumer_crash
             _, _, errors = fleet.snapshot() if fleet is not None else ({}, {}, [])
             if errors:
                 raise HarnessError(f"a producer worker failed: {errors[0]}")
@@ -756,10 +780,10 @@ def _run(argv: Sequence[str] | None) -> int:
             if code is not None:
                 if code == _consumer_refused_code():
                     raise HarnessError(f"the consumer refused to start (exit {code}); see {logs}")
-                consumer_failure = (
-                    f"the consumer exited with code {code} while it should have been running "
-                    f"(a failed query exits 3); see {logs}"
+                consumer_crash = crash_record(
+                    code, consumer.log_path(), generation=consumer.generation
                 )
+                consumer_failure = crash_detail(consumer_crash)
                 raise _ConsumerDiedError(consumer_failure)
             if gold is not None and gold.refused is not None:
                 raise HarnessError(gold.refused)
@@ -882,6 +906,7 @@ def _run(argv: Sequence[str] | None) -> int:
         gold=gold,
         sampler=sampler,
         consumer_failure=consumer_failure,
+        consumer_crash=consumer_crash,
         outage_timing=outage_timing,
         harness_error=harness_error,
         notes=notes,
@@ -896,6 +921,49 @@ def _gold_sources_outside(mix: Mapping[str, int]) -> list[str]:
 
     produced = {str(silver_topic(topic).table) for topic in mix}
     return sorted(str(ref) for ref in GOLD_SOURCES if str(ref) not in produced)
+
+
+def first_error_line(lines: Iterable[str]) -> str | None:
+    """The line that best names why a JVM consumer died: the first `OutOfMemoryError` if any
+    (Spark wraps it in several layers of other exceptions, logged first), else the first line
+    naming an ERROR, Exception or Error. Spark's console progress bar shares lines with log
+    output through carriage returns, so each line is split on them; stack frames are skipped."""
+    fallback: str | None = None
+    for raw in lines:
+        for part in raw.split("\r"):
+            text = part.strip()
+            if not text or text.startswith("at "):
+                continue
+            if "OutOfMemoryError" in text:
+                return text[:ERROR_LINE_MAX_CHARS]
+            if fallback is None and _ERROR_LINE.search(text):
+                fallback = text[:ERROR_LINE_MAX_CHARS]
+    return fallback
+
+
+def crash_record(exit_code: int, log: Path, *, generation: int) -> dict[str, Any]:
+    """What the harness knows about a consumer that exited while it should have been running."""
+    try:
+        with log.open(encoding="utf-8", errors="replace") as handle:
+            line = first_error_line(handle)
+    except OSError as exc:
+        line = f"<the consumer log could not be read: {exc}>"
+    return {
+        "exit_code": exit_code,
+        "generation": generation,
+        "first_error_line": line,
+        "log": str(log),
+    }
+
+
+def crash_detail(crash: Mapping[str, Any]) -> str:
+    line = crash.get("first_error_line")
+    return (
+        f"the consumer (generation {crash.get('generation')}) exited with code "
+        f"{crash.get('exit_code')} while it should have been running, so it did not sustain the "
+        f"offered rate; first error in its log: {line if line else '<none found>'}; "
+        f"log: {crash.get('log')}"
+    )
 
 
 class _ConsumerDiedError(Exception):
@@ -959,6 +1027,7 @@ def _evaluate_and_record(
     gold: GoldLoop | None,
     sampler: ResourceSampler | None,
     consumer_failure: str | None,
+    consumer_crash: Mapping[str, Any] | None,
     outage_timing: OutageTiming | None,
     harness_error: str | None,
     notes: list[str],
@@ -969,8 +1038,17 @@ def _evaluate_and_record(
     measured: dict[str, Any] = {"phases": dict(phases), "notes": notes}
     if harness_error is not None:
         verdicts.append(Verdict("harness", verdict.INTEGRITY, False, harness_error))
+    if consumer_crash is not None:
+        measured["consumer_crash"] = dict(consumer_crash)
     try:
         if expected and lake_root.exists():
+            if consumer_crash is not None:
+                # The system under test failed: a missed target, recorded with its evidence. The
+                # run is FAIL if every integrity check that can be evaluated passes; INVALID stays
+                # reserved for the harness failing to measure.
+                verdicts.append(
+                    Verdict("consumer_survived", verdict.TARGET, False, consumer_failure or "")
+                )
             tables = delta_log.watched_tables(lake_root, topics)
             commits = delta_log.read_all(tables)
             samples, tracker = lag_samples(commits, expected)
@@ -1081,18 +1159,22 @@ def _measure(
 ) -> dict[str, Any]:
     out: dict[str, Any] = {"silver_commits": commits}
     buckets, behind, errors = fleet.snapshot() if fleet is not None else ({}, {}, [])
-    finals = list(fleet.finals.values()) if fleet is not None else []
+    by_worker, streamed = fleet.reports() if fleet is not None else ({}, {})
+    finals = list(by_worker.values())
 
-    # Producers and clocks.
-    bounds = OffsetBounds()
+    # Producers and clocks. The offset bound comes from every delivery report the workers
+    # summarised, final or streamed, so a run that ends early still has one.
+    bounds = fleet_bounds(by_worker, streamed)
+    start, end = phases.get("measured_start_ms"), phases.get("measured_end_ms")
+    restored, observed = phases.get("restored_ms"), phases.get("observed_until_ms")
+    # A lag this run judges depends on the offset: the measured window's, or the recovery's.
+    offset_required = (start is not None and end is not None) or (
+        restored is not None and observed is not None
+    )
     problems: list[str] = []
     not_lat = 0
     delivered_partitions: set[PartitionKey] = set()
     for final in finals:
-        clock = final.get("clock", {})
-        bounds = bounds.merge(
-            OffsetBounds(clock.get("lower_ms"), clock.get("upper_ms"), int(clock.get("samples", 0)))
-        )
         problems.extend(final.get("delivery_problems", []))
         not_lat += int(final.get("not_log_append_time", 0))
         for key in final.get("delivered_by_partition", {}):
@@ -1100,7 +1182,7 @@ def _measure(
             delivered_partitions.add(PartitionKey(topic, int(partition.rstrip("]"))))
     if fleet is not None and len(finals) < len(fleet.processes):
         problems.append(f"{len(fleet.processes) - len(finals)} worker(s) sent no final report")
-    verdicts.append(verdict.clock_verdict(bounds))
+    verdicts.append(verdict.clock_verdict(bounds, required=offset_required))
     verdicts.extend(
         verdict.delivery_verdicts(
             problems=problems,
@@ -1110,11 +1192,15 @@ def _measure(
             worker_errors=errors,
         )
     )
-    out["clock_offset"] = bounds.as_record()
+    out["clock_offset"] = {
+        **bounds.as_record(),
+        "required": offset_required,
+        "workers_final": sorted(by_worker),
+        "workers_streamed": sorted(streamed),
+    }
     out["producers"] = finals
 
     # Phase 1.
-    start, end = phases.get("measured_start_ms"), phases.get("measured_end_ms")
     if start is not None and end is not None:
         stats = window_stats(samples, start, end)
         offered = verdict.offered_load(buckets, behind, start / 1000, end / 1000)
@@ -1134,7 +1220,6 @@ def _measure(
         )
 
     # Phase 2.
-    restored, observed = phases.get("restored_ms"), phases.get("observed_until_ms")
     outage_start = phases.get("outage_start_ms")
     recovery = None
     if restored is not None and observed is not None:
@@ -1195,6 +1280,7 @@ def _measure(
             broker_end_offsets=ends,
             run_started_ms=int(started.timestamp() * 1000),
             run_finished_ms=int(finished.timestamp() * 1000),
+            consumer_failed=consumer_failure is not None,
         )
     )
     out["broker_end_offsets"] = {str(k): v for k, v in ends.items()}

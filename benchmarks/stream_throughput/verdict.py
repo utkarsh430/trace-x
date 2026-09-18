@@ -387,7 +387,20 @@ def gold_verdicts(
 # -------------------------------------------------------------- integrity ---
 
 
-def clock_verdict(bounds: OffsetBounds) -> Verdict:
+def clock_verdict(bounds: OffsetBounds, *, required: bool = True) -> Verdict:
+    """The offset must be bounded within tolerance whenever a lag the run judges depends on it
+    (`required`: a completed measured window, or an observed recovery). When nothing judged
+    depends on it and no delivery report arrived, there is nothing to bound and nothing it could
+    invalidate. Any report that did arrive is still judged: a clock outside tolerance or one that
+    stepped is evidence against the whole run, needed or not."""
+    if not required and bounds.samples == 0:
+        return Verdict(
+            "clock_offset_bounded",
+            INTEGRITY,
+            True,
+            "not required: no lag measurement this run judges depends on the broker-to-host "
+            "clock offset, and no delivery report bounded it (0 reports)",
+        )
     return Verdict(
         "clock_offset_bounded",
         INTEGRITY,
@@ -443,8 +456,16 @@ def authenticity_verdicts(
     broker_end_offsets: Mapping[PartitionKey, int],
     run_started_ms: int,
     run_finished_ms: int,
+    consumer_failed: bool = False,
 ) -> list[Verdict]:
     """The samples must describe records the broker actually held during this run.
+
+    When the consumer failed (`consumer_failed`), coverage cannot be expected of it -- it may die
+    before its first commit, or before every partition committed -- so "no sample" and "a
+    partition never or only stale-committed" are recorded in the detail but do not fail the check;
+    that failure is the consumer's, and a target verdict already says so. Everything that detects
+    a *fabricated* sample (outside the run, before the broker stamp, beyond the broker's end
+    offset, identical values) is judged exactly as always.
 
     A lag series cannot be fabricated past these: every committed offset must be below the
     broker's end offset for its partition; every partition must have committed a record appended
@@ -452,8 +473,9 @@ def authenticity_verdicts(
     broker stamped it (beyond the clock tolerance); and a series of identical values is not a
     measurement."""
     problems: list[str] = []
+    coverage: list[str] = []
     if not samples:
-        problems.append("no Silver commit was sampled")
+        coverage.append("no Silver commit was sampled")
     outside = [
         s.at_ms
         for s in samples
@@ -475,18 +497,21 @@ def authenticity_verdicts(
     stale = sorted(str(k) for k, v in committed_newest.items() if v < run_started_ms)
     missing = sorted(str(k) for k in broker_end_offsets if k not in committed_newest)
     if stale or missing:
-        problems.append(
+        coverage.append(
             f"partitions whose newest committed record predates the run: {stale}; never "
             f"committed: {missing}"
         )
     defined = [s.lag_ms for s in samples if s.lag_ms is not None]
     if len(defined) >= MIN_SAMPLES_PER_WINDOW and len(set(defined)) == 1:
         problems.append(f"all {len(defined)} lag samples are identical ({defined[0]} ms)")
-    return [
-        Verdict(
-            "samples_authentic",
-            INTEGRITY,
-            not problems,
-            "; ".join(problems) if problems else "every sample is anchored to broker records",
-        )
-    ]
+    if not consumer_failed:
+        problems = [*coverage, *problems]
+    if problems:
+        detail = "; ".join(problems)
+    else:
+        detail = "every sample is anchored to broker records"
+        if coverage:
+            detail += "; not held against the run because the consumer failed: " + "; ".join(
+                coverage
+            )
+    return [Verdict("samples_authentic", INTEGRITY, not problems, detail)]

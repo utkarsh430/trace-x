@@ -20,7 +20,9 @@ is unknown.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +76,15 @@ class OffsetBounds:
             and self.upper_ms <= tolerance_ms
         )
 
+    @classmethod
+    def from_record(cls, record: Mapping[str, Any]) -> OffsetBounds:
+        lower, upper = record.get("lower_ms"), record.get("upper_ms")
+        return cls(
+            None if lower is None else float(lower),
+            None if upper is None else float(upper),
+            int(record.get("samples", 0)),
+        )
+
     def as_record(self) -> dict[str, float | int | bool | None]:
         return {
             "lower_ms": self.lower_ms,
@@ -82,3 +93,23 @@ class OffsetBounds:
             "samples": self.samples,
             "consistent": self.consistent,
         }
+
+
+def fleet_bounds(
+    finals: Mapping[int, Mapping[str, Any]], streamed: Mapping[int, Mapping[str, Any]]
+) -> OffsetBounds:
+    """The fleet's bound: per worker, the most complete bound it sent -- its final report's, or
+    the latest it streamed if the final is missing or covers fewer reports. A worker's bound only
+    narrows as reports accumulate, so one worker's snapshots are never merged with each other
+    (that would count its reports twice). Workers that sent neither contribute nothing; the count
+    of reports says how much evidence there is."""
+    bounds = OffsetBounds()
+    for worker in sorted(set(finals) | set(streamed)):
+        final = finals.get(worker)
+        clock = final.get("clock") if final is not None else None
+        candidates = [
+            OffsetBounds.from_record(r) for r in (clock, streamed.get(worker)) if r is not None
+        ]
+        if candidates:
+            bounds = bounds.merge(max(candidates, key=lambda b: b.samples))
+    return bounds

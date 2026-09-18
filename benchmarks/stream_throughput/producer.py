@@ -8,15 +8,25 @@ Python process a fraction of a millisecond and 5,000 of them a second do not fit
 catches up rather than skipping: the offered rate is never lowered. How far behind schedule a worker
 ever was is reported, and the run is INVALID if that exceeded `MAX_SCHEDULE_LAG_S`.
 
-**Delivery reports are evidence.** Each record carries its send time (`trace-bench-sent-us`
-header); the delivery callback bounds the broker-to-host clock offset from it (`clock`), confirms
-the broker stamped LogAppendTime, and tracks per partition how many records were delivered and the
-highest offset. `EventPublisher.close` vouches for everything accepted, or the worker reports its
-problems.
+**Delivery reports are evidence.** The worker notes each record's send time (`TimedLedger.expect`)
+just before handing it over; the delivery callback bounds the broker-to-host clock offset from it
+(`clock`), confirms the broker stamped LogAppendTime, and tracks per partition how many records were
+delivered and the highest offset. `EventPublisher.close` vouches for everything accepted, or the
+worker reports its problems.
+
+The send time is looked up by the record's value, never carried in a header: confluent-kafka's
+delivery report hands back the key and the value but **not the headers** (`msg.headers()` is None
+in every report, confirmed against confluent-kafka 2.15.1). A header-borne send time left every
+report unstamped and the offset unbounded (run bench-20260918-133511, 185,206 of 185,206 reports
+unstamped). Each value names its own `event_id`, so it identifies its record.
+
+**The clock bound streams.** Every stats message carries the worker's running intersection
+(`OffsetBounds`, which already summarises every report served so far), so the harness holds a bound
+however the run ends -- a worker that never sends its final report still contributed one.
 
 Messages on the result queue, as tuples:
     ("ready", worker)
-    ("stats", worker, bucket_start_s, {topic: produced}, max_behind_s)
+    ("stats", worker, bucket_start_s, {topic: produced}, max_behind_s, OffsetBounds-as-record)
     ("final", worker, WorkerFinal-as-dict)
     ("error", worker, message)
 """
@@ -36,7 +46,6 @@ from benchmarks.stream_throughput.spec import RunConfig
 
 from trace_core.contracts.publish import DeliveryLedger, EventPublisher, build_producer
 
-SENT_HEADER: Final = "trace-bench-sent-us"
 LOG_APPEND_TIME_TYPE: Final = 2
 """confluent-kafka's `TIMESTAMP_LOG_APPEND_TIME`."""
 STATS_EVERY_S: Final = 1.0
@@ -55,9 +64,27 @@ class TimedLedger(DeliveryLedger):
         self.max_offset: dict[str, int] = {}
         self.max_log_append_ms: dict[str, int] = {}
         self.max_delivery_ms = 0.0
+        self.duplicate_values = 0
+        self._sent_us: dict[bytes, int] = {}
+
+    def expect(self, value: bytes, sent_us: int) -> None:
+        """Note when `value` was handed to the producer (host clock, microseconds). Called before
+        the publish, so a report served inside it finds the entry. A repeated value keeps the
+        earlier time: the interval it yields is wider, never wrong."""
+        if value in self._sent_us:
+            self.duplicate_values += 1
+            return
+        self._sent_us[value] = sent_us
+
+    @property
+    def awaiting(self) -> int:
+        """Send times noted and not yet matched by a delivery report."""
+        return len(self._sent_us)
 
     def on_delivery(self, err: Any, msg: Any) -> None:
         super().on_delivery(err, msg)
+        value = msg.value()
+        sent = self._sent_us.pop(value, None) if isinstance(value, bytes) else None
         if err is not None:
             return
         acked_ms = time.time_ns() / 1_000_000
@@ -69,11 +96,10 @@ class TimedLedger(DeliveryLedger):
         self.delivered_by_partition[key] += 1
         self.max_offset[key] = max(self.max_offset.get(key, -1), int(msg.offset()))
         self.max_log_append_ms[key] = max(self.max_log_append_ms.get(key, 0), int(stamp))
-        sent = dict(msg.headers() or ()).get(SENT_HEADER)
         if sent is None:
             self.unstamped += 1
             return
-        sent_ms = int(sent) / 1000
+        sent_ms = sent / 1000
         self.max_delivery_ms = max(self.max_delivery_ms, acked_ms - sent_ms)
         self.bounds = self.bounds.observe(
             sent_ms=sent_ms, acked_ms=acked_ms, log_append_ms=float(stamp)
@@ -91,6 +117,7 @@ class WorkerFinal:
     failed: dict[str, int] = field(default_factory=dict)
     not_log_append_time: int = 0
     unstamped: int = 0
+    duplicate_values: int = 0
     delivered_by_partition: dict[str, int] = field(default_factory=dict)
     max_offset: dict[str, int] = field(default_factory=dict)
     max_log_append_ms: dict[str, int] = field(default_factory=dict)
@@ -160,25 +187,44 @@ def _run_worker(
         now = time.time()
         while now >= next_stats:
             # Each bucket is [next_stats - 1 s, next_stats): flushed before an event past it.
-            out.put(("stats", worker, next_stats - STATS_EVERY_S, dict(second), second_behind))
+            out.put(
+                (
+                    "stats",
+                    worker,
+                    next_stats - STATS_EVERY_S,
+                    dict(second),
+                    second_behind,
+                    ledger.bounds.as_record(),
+                )
+            )
             second.clear()
             second_behind = 0.0
             next_stats += STATS_EVERY_S
         due = t0 + k * period + offset
         if due > now:
-            time.sleep(min(due - now, 0.005))
+            # Serve delivery reports while waiting (returns early when one is served), so each
+            # report's acknowledgement time is taken close to the real one.
+            producer.poll(min(due - now, 0.005))
             continue
         behind = now - due
         second_behind = max(second_behind, behind)
         max_behind = max(max_behind, behind)
         topic, value = factory.build(pattern[k % len(pattern)], int(now * 1000))
-        publisher.publish(
-            topic, value, headers=[(SENT_HEADER, str(time.time_ns() // 1000).encode())]
-        )
+        ledger.expect(value, time.time_ns() // 1000)
+        publisher.publish(topic, value)
         produced[topic] += 1
         second[topic] += 1
         k += 1
-    out.put(("stats", worker, next_stats - STATS_EVERY_S, dict(second), second_behind))
+    out.put(
+        (
+            "stats",
+            worker,
+            next_stats - STATS_EVERY_S,
+            dict(second),
+            second_behind,
+            ledger.bounds.as_record(),
+        )
+    )
     final = WorkerFinal(worker, dict(produced), factory.substituted, max_behind)
     try:
         report = publisher.close(CLOSE_TIMEOUT_S)
@@ -189,6 +235,7 @@ def _run_worker(
         final.delivered, final.failed = dict(partial.delivered), dict(partial.failed)
     final.not_log_append_time = ledger.not_log_append_time
     final.unstamped = ledger.unstamped
+    final.duplicate_values = ledger.duplicate_values
     final.delivered_by_partition = dict(ledger.delivered_by_partition)
     final.max_offset = dict(ledger.max_offset)
     final.max_log_append_ms = dict(ledger.max_log_append_ms)

@@ -295,6 +295,175 @@ def test_a_consumer_that_died_is_a_failure_not_an_invalid_run() -> None:
     assert verdict.overall([*died, _passing_target()]) is Status.FAIL
 
 
+def test_the_first_error_line_names_the_out_of_memory_error_under_spark_s_wrappers() -> None:
+    from benchmarks.stream_throughput.run import first_error_line
+
+    log = [
+        "26/09/18 13:35:12 INFO SparkContext: Running Spark version 4.0.1\n",
+        "[Stage 799:>   (0 + 4) / 5]\r26/09/18 13:37:39 WARN BlockManager: Putting block failed\n",
+        "26/09/18 13:37:40 ERROR Executor: Exception in task 0.0 in stage 799.0 (TID 8990)\n",
+        "\tat org.apache.spark.sql.errors.QueryExecutionErrors.cannotReadFilesError(x.scala:856)\n",
+        "Caused by: java.lang.OutOfMemoryError: Java heap space\n",
+    ]
+    assert first_error_line(log) == "Caused by: java.lang.OutOfMemoryError: Java heap space"
+    assert first_error_line(log[:4]) == (
+        "26/09/18 13:37:40 ERROR Executor: Exception in task 0.0 in stage 799.0 (TID 8990)"
+    )
+    assert first_error_line(log[:2]) is None
+
+
+class _StubFleet:
+    """What `_measure` reads from the producer fleet, as a run whose consumer died leaves it."""
+
+    def __init__(
+        self, finals: dict[int, dict[str, Any]], streamed: dict[int, dict[str, Any]]
+    ) -> None:
+        self.finals, self.clocks = finals, streamed
+        self.processes = [object()] * max(len(finals), len(streamed), 1)
+
+    def snapshot(self) -> tuple[dict[float, int], dict[float, float], list[str]]:
+        return {}, {}, []
+
+    def reports(self) -> tuple[dict[int, dict[str, Any]], dict[int, dict[str, Any]]]:
+        return dict(self.finals), dict(self.clocks)
+
+
+def _worker_final(
+    worker: int, clock: OffsetBounds, partitions: list[PartitionKey]
+) -> dict[str, Any]:
+    return {
+        "worker": worker,
+        "clock": clock.as_record(),
+        "delivery_problems": [],
+        "not_log_append_time": 0,
+        "delivered_by_partition": {str(p): 10 for p in partitions},
+    }
+
+
+def _record_crashed_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fleet: _StubFleet
+) -> tuple[int, dict[str, Any]]:
+    """`_evaluate_and_record` for a run whose consumer died before the measured window: a real,
+    empty lake (the consumer committed nothing), no broker (its end offsets are stubbed), a clean
+    worktree."""
+    import argparse
+
+    from benchmarks.stream_throughput import run
+    from benchmarks.stream_throughput.spec import RunConfig
+
+    lake = tmp_path / "lake"
+    lake.mkdir(parents=True)
+    log = tmp_path / "consumer-1.log"
+    log.write_text(
+        "26/09/18 13:37:40 ERROR Executor: Exception in task 0.0\n"
+        "Caused by: java.lang.OutOfMemoryError: Java heap space\n"
+    )
+    crash = run.crash_record(1, log, generation=1)
+    monkeypatch.setattr(run, "watermarks", lambda _b, keys: dict.fromkeys(keys, 100))
+    monkeypatch.setattr(run.record, "git_facts", lambda: ("a" * 40, False, "sha256:lock"))
+    started = dt.datetime.fromtimestamp(T0 / 1000, dt.UTC)
+    code = run._evaluate_and_record(
+        config=RunConfig(),
+        args=argparse.Namespace(bootstrap="localhost:9092", record_dir=tmp_path / "records"),
+        run_id="bench-test-crash",
+        started=started,
+        finished=started + dt.timedelta(minutes=3),
+        lake_root=lake,
+        logs=tmp_path,
+        topics=["tx.scored.v1"],
+        expected=[PartitionKey("tx.scored.v1", 0)],
+        broker={},
+        starting_low={},
+        starting_end={},
+        phases={"producers_started_ms": T0, "observed_until_ms": T0 + 150_000},
+        fleet=fleet,  # type: ignore[arg-type]
+        consumer=None,
+        gold=None,
+        sampler=None,
+        consumer_failure=run.crash_detail(crash),
+        consumer_crash=crash,
+        outage_timing=None,
+        harness_error=None,
+        notes=[],
+        toolchain_record=[],
+        provenance_at_start=("a" * 40, False, "sha256:lock"),
+    )
+    written = json.loads((tmp_path / "records" / "bench-test-crash.json").read_text())
+    return code, written
+
+
+def test_a_consumer_crash_with_every_evaluable_integrity_check_passing_is_a_recorded_fail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from benchmarks.stream_throughput import run
+
+    partitions = [PartitionKey("tx.scored.v1", 0)]
+    clock = OffsetBounds().observe(sent_ms=1_000.0, acked_ms=1_004.0, log_append_ms=1_002.0)
+    fleet = _StubFleet({0: _worker_final(0, clock, partitions)}, {0: clock.as_record()})
+    code, written = _record_crashed_run(tmp_path, monkeypatch, fleet)
+    assert written["status"] == "FAIL" and written["publishable"] is True
+    assert code == run.EXIT_TARGET_MISSED == 1
+    failed = {v["name"]: v for v in written["verdicts"] if not v["passed"]}
+    assert failed and all(v["kind"] == verdict.TARGET for v in failed.values())
+    survived = failed["consumer_survived"]["detail"]
+    assert "exited with code 1" in survived
+    assert "java.lang.OutOfMemoryError: Java heap space" in survived
+    assert written["measured"]["consumer_crash"]["exit_code"] == 1
+    assert "OutOfMemoryError" in written["measured"]["consumer_crash"]["first_error_line"]
+    assert "OutOfMemoryError" in failed["throughput_sustained"]["detail"]
+    assert written["measured"]["clock_offset"]["samples"] == 1
+
+
+def test_a_consumer_crash_does_not_hide_a_genuine_integrity_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A clock outside tolerance still makes the run INVALID, crash or not; so does a worker
+    that never confirmed its deliveries."""
+    partitions = [PartitionKey("tx.scored.v1", 0)]
+    skewed = OffsetBounds().observe(sent_ms=1_000.0, acked_ms=1_005.0, log_append_ms=3_002.0)
+    fleet = _StubFleet({0: _worker_final(0, skewed, partitions)}, {})
+    _code, written = _record_crashed_run(tmp_path / "skew", monkeypatch, fleet)
+    assert written["status"] == "INVALID"
+    assert _failed_integrity(written) == ["clock_offset_bounded"]
+    fine = OffsetBounds().observe(sent_ms=1_000.0, acked_ms=1_004.0, log_append_ms=1_002.0)
+    no_final = _StubFleet({}, {0: fine.as_record()})
+    _code, written = _record_crashed_run(tmp_path / "nofinal", monkeypatch, no_final)
+    assert written["status"] == "INVALID"
+    assert _failed_integrity(written) == ["deliveries_confirmed", "partitions_offered"]
+    assert written["measured"]["clock_offset"]["samples"] == 1, "the streamed bound is kept"
+
+
+def _failed_integrity(written: dict[str, Any]) -> list[str]:
+    return [
+        v["name"] for v in written["verdicts"] if v["kind"] == verdict.INTEGRITY and not v["passed"]
+    ]
+
+
+def test_a_crashed_consumer_s_missing_coverage_is_noted_but_fabrication_is_still_caught() -> None:
+    lenient = verdict.authenticity_verdicts(
+        [],
+        committed_offsets={},
+        committed_newest={},
+        broker_end_offsets={A0: 100},
+        run_started_ms=T0,
+        run_finished_ms=T0 + 600_000,
+        consumer_failed=True,
+    )[0]
+    assert lenient.passed and "consumer failed" in lenient.detail
+    strict = _authentic([], committed_offsets={}, committed_newest={})
+    assert not strict.passed
+    beyond = verdict.authenticity_verdicts(
+        [_sample(T0 + 20_000, 400)],
+        committed_offsets={A0: 5_000},
+        committed_newest={A0: T0 + 10_000},
+        broker_end_offsets={A0: 100},
+        run_started_ms=T0,
+        run_finished_ms=T0 + 600_000,
+        consumer_failed=True,
+    )[0]
+    assert not beyond.passed and "broker's end" in beyond.detail
+
+
 def _timing(*, stop_ms: int = 5_000, restarted: int = T0) -> verdict.OutageTiming:
     """An outage the harness can produce: signalled, exited `stop_ms` later, and restarted when
     `restart_due_ms` says, ending at `restarted` (the recovery's `restored_ms`)."""
@@ -518,6 +687,39 @@ def test_a_clock_that_stepped_leaves_no_consistent_offset() -> None:
     assert not bounds.within(10_000.0)
     merged = OffsetBounds(-1.0, 2.0, 5).merge(OffsetBounds(-3.0, 1.0, 5))
     assert (merged.lower_ms, merged.upper_ms, merged.samples) == (-1.0, 1.0, 10)
+
+
+def test_the_fleet_offset_comes_from_a_partial_set_of_reports() -> None:
+    """A worker that sent its final report contributes it; one that only streamed contributes its
+    latest streamed bound; one that sent nothing contributes nothing. No worker is counted twice."""
+    from benchmarks.stream_throughput.clock import fleet_bounds
+
+    finals = {0: {"clock": OffsetBounds(-2.0, 4.0, 1_000).as_record()}}
+    streamed = {
+        0: OffsetBounds(-3.0, 6.0, 400).as_record(),  # older than worker 0's final: not reused
+        1: OffsetBounds(-1.0, 5.0, 250).as_record(),
+    }
+    bounds = fleet_bounds(finals, streamed)
+    assert (bounds.lower_ms, bounds.upper_ms, bounds.samples) == (-1.0, 4.0, 1_250)
+    assert verdict.clock_verdict(bounds).passed
+    only_streamed = fleet_bounds({}, {1: OffsetBounds(-1.0, 5.0, 250).as_record()})
+    assert only_streamed.samples == 250 and only_streamed.within(500.0)
+    # A final that somehow covers fewer reports than the worker already streamed loses to it.
+    stale_final = fleet_bounds({2: {"clock": OffsetBounds().as_record()}}, {2: streamed[1]})
+    assert stale_final.samples == 250
+    assert fleet_bounds({}, {}).samples == 0
+
+
+def test_zero_reports_invalidate_a_run_only_when_a_judged_lag_needs_the_offset() -> None:
+    empty = OffsetBounds()
+    needed = verdict.clock_verdict(empty, required=True)
+    assert not needed.passed and needed.kind == verdict.INTEGRITY
+    assert verdict.overall([needed, _passing_target()]) is Status.INVALID
+    unneeded = verdict.clock_verdict(empty, required=False)
+    assert unneeded.passed and "not required" in unneeded.detail
+    # Reports that arrived are judged whether or not a lag needed them.
+    skewed = OffsetBounds().observe(sent_ms=1_000.0, acked_ms=1_005.0, log_append_ms=3_002.0)
+    assert not verdict.clock_verdict(skewed, required=False).passed
 
 
 # ---------------------------------------------------- the rate is never lowered ---
@@ -819,11 +1021,15 @@ def test_every_report_section_is_scoped_to_the_run_id() -> None:
 
 
 class _Delivered:
-    """A delivery report as confluent-kafka hands one to `on_delivery` (its read-only accessors)."""
+    """A delivery report as confluent-kafka hands one to `on_delivery` (its read-only accessors).
 
-    def __init__(self, *, kind: int, stamp: int, sent_us: int | None, partition: int = 0) -> None:
-        self._kind, self._stamp, self._partition = kind, stamp, partition
-        self._headers = [] if sent_us is None else [("trace-bench-sent-us", str(sent_us).encode())]
+    Like the real one it carries the value but NOT the headers: confluent-kafka 2.15.1 returns
+    None from `headers()` in every delivery report (see the real-client test below). An earlier
+    fake returned the produced headers, which is how a send time carried in a header passed here
+    and left every real report unstamped (bench-20260918-133511)."""
+
+    def __init__(self, *, kind: int, stamp: int, value: bytes = b"v0", partition: int = 0) -> None:
+        self._kind, self._stamp, self._partition, self._value = kind, stamp, partition, value
 
     def topic(self) -> str:
         return "tx.scored.v1"
@@ -834,11 +1040,14 @@ class _Delivered:
     def offset(self) -> int:
         return 41
 
+    def value(self) -> bytes:
+        return self._value
+
     def timestamp(self) -> tuple[int, int]:
         return self._kind, self._stamp
 
-    def headers(self) -> list[tuple[str, bytes]]:
-        return self._headers
+    def headers(self) -> None:
+        return None
 
 
 def test_a_delivery_report_bounds_the_clock_and_records_the_partition() -> None:
@@ -848,17 +1057,81 @@ def test_a_delivery_report_bounds_the_clock_and_records_the_partition() -> None:
 
     ledger = TimedLedger()
     now_ms = time.time_ns() // 1_000_000
-    ledger.on_delivery(
-        None, _Delivered(kind=LOG_APPEND_TIME_TYPE, stamp=now_ms, sent_us=(now_ms - 5) * 1000)
-    )
+    ledger.expect(b"v0", (now_ms - 5) * 1000)
+    ledger.on_delivery(None, _Delivered(kind=LOG_APPEND_TIME_TYPE, stamp=now_ms, value=b"v0"))
     assert ledger.bounds.samples == 1
     assert ledger.bounds.upper_ms == pytest.approx(6.0)
     assert ledger.delivered_by_partition == {"tx.scored.v1[0]": 1}
     assert ledger.max_offset == {"tx.scored.v1[0]": 41}
-    ledger.on_delivery(None, _Delivered(kind=1, stamp=now_ms, sent_us=now_ms * 1000))
+    assert ledger.awaiting == 0
+    ledger.expect(b"v1", now_ms * 1000)
+    ledger.on_delivery(None, _Delivered(kind=1, stamp=now_ms, value=b"v1"))
     assert ledger.not_log_append_time == 1
-    ledger.on_delivery(None, _Delivered(kind=LOG_APPEND_TIME_TYPE, stamp=now_ms, sent_us=None))
+    assert ledger.awaiting == 0, "a report of any kind releases its send time"
+    ledger.on_delivery(None, _Delivered(kind=LOG_APPEND_TIME_TYPE, stamp=now_ms, value=b"nope"))
     assert ledger.unstamped == 1
+
+
+def test_every_report_is_stamped_although_reports_carry_no_headers() -> None:
+    """The regression: a stream of header-less reports, as the real client delivers them, all
+    bound the clock."""
+    import time
+
+    from benchmarks.stream_throughput.producer import LOG_APPEND_TIME_TYPE, TimedLedger
+
+    ledger = TimedLedger()
+    now_ms = time.time_ns() // 1_000_000
+    for i in range(100):
+        ledger.expect(f"event-{i}".encode(), (now_ms - 3) * 1000)
+    for i in range(100):
+        ledger.on_delivery(
+            None, _Delivered(kind=LOG_APPEND_TIME_TYPE, stamp=now_ms, value=f"event-{i}".encode())
+        )
+    assert (ledger.bounds.samples, ledger.unstamped, ledger.awaiting) == (100, 0, 0)
+    assert ledger.bounds.within(500.0)
+    ledger.expect(b"event-0", now_ms * 1000)
+    ledger.expect(b"event-0", now_ms * 1000 + 7)
+    assert ledger.duplicate_values == 1 and ledger.awaiting == 1
+
+
+def test_a_failed_delivery_releases_its_send_time_without_bounding_the_clock() -> None:
+    from benchmarks.stream_throughput.producer import LOG_APPEND_TIME_TYPE, TimedLedger
+
+    class _Err:
+        def name(self) -> str:
+            return "_MSG_TIMED_OUT"
+
+        def str(self) -> str:
+            return "timed out"
+
+    ledger = TimedLedger()
+    ledger.expect(b"v0", 1_000_000)
+    ledger.on_delivery(_Err(), _Delivered(kind=LOG_APPEND_TIME_TYPE, stamp=2_000, value=b"v0"))
+    assert (ledger.awaiting, ledger.bounds.samples) == (0, 0)
+
+
+def test_the_real_client_hands_back_the_value_the_send_time_is_found_by() -> None:
+    """Against confluent-kafka itself, no broker: a record to an unreachable address times out,
+    and its delivery report still carries the exact value produced -- what `TimedLedger` looks
+    the send time up by. (Its `headers()` is None, which is why no header is relied on.)"""
+    confluent_kafka = pytest.importorskip("confluent_kafka", reason="confluent-kafka not installed")
+    reports: list[tuple[Any, Any, Any]] = []
+
+    def on_delivery(err: Any, msg: Any) -> None:
+        reports.append((err, msg.value(), msg.headers()))
+
+    producer = confluent_kafka.Producer(
+        {
+            "bootstrap.servers": "127.0.0.1:1",
+            "message.timeout.ms": 200,
+            "log_level": 0,
+            "on_delivery": on_delivery,
+        }
+    )
+    producer.produce("t", value=b"the-value", key=b"k", headers=[("h", b"1")])
+    assert producer.flush(10) == 0
+    ((err, value, _headers),) = reports
+    assert err is not None and value == b"the-value"
 
 
 def test_the_events_are_valid_released_events_that_refer_to_each_other() -> None:
