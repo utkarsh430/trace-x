@@ -356,6 +356,31 @@ def _postgres_pool(pool_class: Any, settings: GatewaySettings) -> Any:
     )
 
 
+POOL_READY_WAIT_S: Final = 10.0
+"""How long start-up waits for a first connection before serving not-ready."""
+
+
+def open_pool(pool: Any, ready_wait_s: float = POOL_READY_WAIT_S) -> bool:
+    """Open the pool so that it can never be closed by a late database; True when a connection
+    was served within `ready_wait_s`.
+
+    psycopg_pool's `open(wait=True)` CLOSES the pool when its wait expires, and a closed pool cannot
+    be reopened. A database that was not ready within the wait -- on a first `make up`, `make
+    migrate` creates `trace_app` after the gateway starts -- therefore left the gateway unready
+    until it was restarted (PROGRESS D20). Opened without waiting, the pool's workers keep
+    reconnecting; one bounded checkout, whose timeout closes nothing, reports whether it is ready.
+    """
+    pool.open(wait=False)
+    try:
+        with pool.connection(timeout=ready_wait_s):
+            return True
+    except Exception as exc:
+        # Not fatal: readiness reports the instance as not ready until the pool connects. A crash
+        # loop here would make a slow database into an outage.
+        log.warning("postgres_pool_not_ready", error=type(exc).__name__)
+        return False
+
+
 def build_state(settings: GatewaySettings | None = None) -> GatewayState:
     """Resolve dependencies. Raises if the gateway cannot serve correctly.
 
@@ -511,13 +536,7 @@ def create_app(state: GatewayState | None = None) -> FastAPI:
         # first: a pool that is still closed reads as an unreadable ledger, which cannot vouch
         # for the absence of a hole (ADR-0046 §5).
         if resolved.pool is not None:
-            try:
-                resolved.pool.open(wait=True, timeout=10)
-            except Exception as exc:
-                # Not fatal at start-up: Postgres may come up after the gateway,
-                # and readiness already reports the instance as not ready. A
-                # crash loop here would make a slow database into an outage.
-                log.warning("postgres_pool_not_ready", error=type(exc).__name__)
+            open_pool(resolved.pool)
 
         # The start-up writes to online state run only in the fenced writer (ADR-0051 §2): the
         # supervisor acquires the session, runs them, and only then reports ready. Its first step

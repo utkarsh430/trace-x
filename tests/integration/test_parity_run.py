@@ -141,7 +141,7 @@ def postgres() -> Iterator[dict[str, str]]:
         assert migrated.returncode == 0, f"alembic failed:\n{migrated.stdout}\n{migrated.stderr}"
         yield env
     finally:
-        _docker("rm", "-f", name)
+        _docker("rm", "-f", "-v", name)
 
 
 @pytest.fixture(scope="module")
@@ -166,7 +166,7 @@ def redis_port() -> Iterator[int]:
             pytest.fail("Redis never answered")
         yield port
     finally:
-        _docker("rm", "-f", name)
+        _docker("rm", "-f", "-v", name)
 
 
 @pytest.fixture(scope="module")

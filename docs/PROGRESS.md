@@ -98,17 +98,33 @@ planning surfaced recorded under *What Phase 3 planning found in Phase 2's artef
     synthetic Bronze rows (D23).
   - One JVM per file is required: the same three stream files in one session hit the GC death spiral
     earlier on 2026-09-18.
-- **Found, not fixed:** D20 (gateway unready on fresh volumes), D21 and D23, in *KNOWN TECHNICAL DEBT*.
+- **D20 fixed (class B).**
+  - *Cause.* The gateway opened its pool with `pool.open(wait=True, timeout=10)`. psycopg_pool's `wait()`
+    **closes the pool** when it times out, and a closed pool cannot be reopened. So any start where
+    PostgreSQL, or the `trace_app` role, was not ready within 10 s left the gateway unready for good.
+    That contradicted the code's own comment, which said a late database is not fatal.
+  - *Fix.* `services.gateway.app.open_pool` opens the pool without waiting and makes one bounded
+    checkout, whose timeout closes nothing. The pool's workers keep reconnecting.
+  - *Tests.* A unit test runs against a port nothing listens on, and pins the library's close-on-timeout
+    behaviour. An integration test opens a pool for a role that does not exist yet, creates the role,
+    and requires the same pool to serve.
+  - *End to end.* With fresh volumes and a rebuilt image, `make up` logged `postgres_pool_not_ready`
+    and 24 authentication failures, then `/readyz` was ready with `postgres: ok` and no restart.
+- **Test-harness volume leak fixed (class D).** Five fixtures start `--rm` containers and removed them
+  with `docker rm -f`. A force-remove skips `--rm`'s cleanup of anonymous volumes, so each run of the
+  parity run, ground-truth isolation, write-path and capacity tests left a PostgreSQL or Redis data
+  volume behind. This explains the dangling volumes found at the start of the day. The fixtures now use
+  `rm -f -v`. After a ground-truth isolation run (23 passed), 0 dangling volumes remained.
+- **Found, not fixed:** D21 and D23, in *KNOWN TECHNICAL DEBT*.
 - **Branches.** §7 step 7 is done: the three leftover remote branches were deleted after the landing was
   on origin.
 - **Next.**
-  1. D20 fix, which the measured parity run and the load gate need.
-  2. `P3.feature-parity`, measured.
-  3. The Phase 2 load-gate re-run.
-  4. Step 13 (`P3.stream-throughput`).
-  5. Step 14 (`P3.layout-benchmark`).
-  6. First GitHub CI runs.
-  7. The exit review.
+  1. `P3.feature-parity`, measured.
+  2. The Phase 2 load-gate re-run.
+  3. Step 13 (`P3.stream-throughput`).
+  4. Step 14 (`P3.layout-benchmark`).
+  5. First GitHub CI runs.
+  6. The exit review.
 
 ### Phase 3 — HANDOFF (2026-09-18; continuing on a Mac Pro with Docker).
 
@@ -1936,7 +1952,7 @@ both reports.
 | **D17** | **The API accepts an unbounded `amount_minor`.** The observation log bounds it at a signed 64-bit integer, the width consumers parse, so a wider amount is scored but refused by the log | That transaction is missing from history and its writer session cannot close: detectable, never silent | The next breaking API revision; narrowing v1 is a breaking change |
 | **D18** | **Local `tx.scored.v1` retention is capped per partition** so the measured record size fits the local disk cap (`deploy/kafka/topics.yaml`) | A run that writes more before Bronze reads it trims unread segments, and Bronze stops loudly (`failOnDataLoss`) | Step 5 Bronze and the streaming throughput evidence: run Bronze during a load, or size the run |
 | **D19** | **A reused identity-event key with a different event time, while the replay cache is down,** gets a new envelope `event_id` on the log while the store records a conflict under one observation id (ADR-0051 risks) | History and the online store disagree about that one event | Step 6 exact dedup and conflicts |
-| **D20** | **The gateway is permanently unready after `make up` on fresh volumes.** `make up` waits on the gateway's liveness check, then runs `make migrate`. The gateway's first connections as `trace_app` fail authentication because the role does not exist yet, and its pool closes and never reopens (`/readyz`: `postgres: unreachable: PoolClosed`). Reproduced on a clean environment on 2026-09-18; a gateway restart clears it | Anything driving the gateway after a fresh `make up` (parity, load gate) sees 5xx or refusals until it is restarted. The workaround is in `PHASE3_HANDOFF.md` §7 A.4 | Before the measured parity run and the load-gate re-run: the pool must recover once the role exists, or `make up` must migrate before the gateway starts |
+| ~~D20~~ | **Resolved 2026-09-18 (`open_pool`, see CURRENT STATUS).** ~~The gateway is permanently unready after `make up` on fresh volumes.~~ `make up` waits on the gateway's liveness check, then runs `make migrate`. The gateway's first connections as `trace_app` fail authentication because the role does not exist yet, and its pool closes and never reopens (`/readyz`: `postgres: unreachable: PoolClosed`). Reproduced on a clean environment on 2026-09-18; a gateway restart clears it | Anything driving the gateway after a fresh `make up` (parity, load gate) sees 5xx or refusals until it is restarted. The workaround is in `PHASE3_HANDOFF.md` §7 A.4 | Before the measured parity run and the load-gate re-run: the pool must recover once the role exists, or `make up` must migrate before the gateway starts |
 | **D21** | **ADR-0052 Amendment 1 Risks 1–3 are open.** (1) A DELETE losing to a concurrent append is inferred, never constructed. (2) Gold is refused by VACUUM, not vacuumed, so its disk use is unbounded locally. (3) The Spark half of the coverage rule is proved with a stub ledger | Each is an untested path or an unbounded local resource | Phase 3 exit review decides: build the test or accept with the ADR |
 | ~~D22~~ | **Resolved 2026-09-18: the capability's evidence now names both commands.** `P3.resource-bounds`'s command does not select the 14 Step 11 stream tests. `tests/stream/test_resource_bounds_maintenance.py` is marked `stream` only, so the crash, reset, VACUUM and race tests run outside `-m 'unit or integration'` | The recorded command under-reports what the capability rests on | done |
 | **D23** | **Three Silver tables are never produced from real Kafka input.** `silver.tx_raw_v1`, `silver.device_events_v1` and `silver.investigation_requested_v1` are built and checked only from hand-built Bronze rows (`tests/stream/test_silver_tables.py`). Their Bronze tables are produced from a real broker | A Kafka-to-Silver defect specific to those topics would not be caught end-to-end | Phase 3 exit review decides: add a Kafka-driven Silver test for them, or accept |

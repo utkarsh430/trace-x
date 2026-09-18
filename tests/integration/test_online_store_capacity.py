@@ -94,7 +94,7 @@ def tiny_noeviction_redis() -> Iterator[Any]:
     try:
         yield client
     finally:
-        _docker("rm", "-f", name)
+        _docker("rm", "-f", "-v", name)
 
 
 def _event(i: int) -> Event:

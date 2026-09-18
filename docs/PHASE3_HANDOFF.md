@@ -27,7 +27,8 @@
 > `docs/PROGRESS.md`, *Phase 3 — Mac validation and Step 11 landed*. **Not true as written above:** the
 > "Mac Pro" is the same Mac where a session on 2026-09-16/17 made four commits that were never pushed
 > (`075f713`, `b5c830a`, `a1403ca`, `471d8ba`); they are preserved on the local-only branch
-> `backup/mac-phase3-471d8ba` and were **not** used as evidence. Next: §7 step 7, then §7 C.
+> `backup/mac-phase3-471d8ba` and were **not** used as evidence. Since then: §7 step 7 done,
+> `P3.checkpoint-resume` and `P3.medallion` PASS, D20 fixed. The live next list is in PROGRESS.
 
 ---
 
@@ -204,10 +205,8 @@ Use the repository's commands; `docs/LOCAL_DEVELOPMENT.md` is the bootstrap auth
    Kafka is **not** needed as a compose service for the tests: the Kafka-backed tests start their own
    throwaway brokers. `make up-streaming` + `make kafka-topics` are for manual runs and benchmarks.
    Before running `pytest` or `alembic` directly, load the environment: `set -a; . ./.env; set +a`.
-   **On fresh volumes the gateway comes up unready** (PROGRESS debt D20): `/readyz` reports
-   `postgres: unreachable: PoolClosed` because it started before `make migrate` created `trace_app`.
-   Its liveness healthcheck still says healthy. Restart it once after `make up`:
-   `docker compose -f deploy/compose.yml --env-file .env --profile core restart gateway`.
+   (Fixed 2026-09-18, D20: on fresh volumes the gateway used to stay unready until restarted; it now
+   recovers by itself once `make migrate` creates `trace_app`.)
 5. `make verify` — must be **11 passed, 0 failed, 0 skipped** before any other work. If red, classify
    (A–F, see `CLAUDE.md` §18) and fix the root cause first.
 

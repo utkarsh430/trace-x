@@ -121,7 +121,7 @@ def migrated_db(repo_root, docker_available):
         assert mig.returncode == 0, f"alembic upgrade failed:\n{mig.stdout}\n{mig.stderr}"
         yield name, env
     finally:
-        _docker("rm", "-f", name)
+        _docker("rm", "-f", "-v", name)
 
 
 def _as(container: str, role: str, sql: str) -> subprocess.CompletedProcess[str]:
