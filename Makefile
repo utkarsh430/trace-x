@@ -34,7 +34,7 @@ COMPOSE := docker compose -f deploy/compose.yml --env-file .env
 .PHONY: help doctor toolchain stream-jars setup up up-streaming up-full down ps logs test-fast test e2e parity lint typecheck \
         secrets audit audit-full migrate migrate-down migrate-status lock ci-status codegen \
         verify eval eval-external demo seed fetch-external pull-model bench-layout \
-        codegen-openapi contracts-check contracts-self-test load-gateway \
+        codegen-openapi contracts-check contracts-self-test load-gateway load-stream \
         bench-features \
         check-claims acceptance clean not-implemented
 
@@ -179,6 +179,9 @@ acceptance: ## Render the machine-readable acceptance status
 load-gateway: ## Measure the gateway against the Phase 2 targets (needs a running gateway)
 	@set -a; [ -f .env ] && . ./.env; set +a; $(VPY) scripts/load_gateway.py $(ARGS)
 
+load-stream: ## [Phase 3] Stream throughput + 2-min outage benchmark (needs up-streaming + kafka-topics)
+	@set -a; [ -f .env ] && . ./.env; set +a; $(VPY) -m benchmarks.stream_throughput $(ARGS)
+
 bench-features: ## Measure the hybrid distinct-cardinality strategy (ADR-0034)
 	@$(VPY) benchmarks/features/bench_cardinality.py \
 	  --host $${REDIS_HOST:-localhost} --port $${REDIS_PORT:-6389}
@@ -207,8 +210,8 @@ fetch-external: ## [Phase 4B] Download + SHA-256 verify the IEEE-CIS dataset
 parity:         ## [Phase 3] Feature parity: unit + mutation self-tests, then the end-to-end run
 	@$(VPY) -m pytest -m "parity and not integration and not stream"
 	@set -a; [ -f .env ] && . ./.env; set +a; $(VPY) -m pytest -m "integration and stream and parity"
-bench-layout:   ## [Phase 3] Delta layout benchmark backing ADR-0015
-	@$(PY) scripts/phase_guard.py bench-layout 3 "Delta layout benchmark"
+bench-layout:   ## [Phase 3] Delta layout benchmark backing ADR-0015 (heavy: Spark; ARGS="--rows 200000 --reps 2" smokes)
+	@set -a; [ -f .env ] && . ./.env; set +a; $(VPY) benchmarks/delta_layout/run.py $(ARGS)
 pull-model:     ## [Phase 6] Pull the local SMOKE-tier model via Ollama
 	@$(PY) scripts/phase_guard.py pull-model 6 "local LLM runtime"
 

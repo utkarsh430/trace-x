@@ -241,10 +241,18 @@ Databricks answers are permitted to differ because the runtimes differ in capabi
 | `CLUSTER BY (…)` liquid | **supported**; manual `OPTIMIZE` | supported |
 | `CLUSTER BY AUTO` + predictive optimization | **not available** (needs Unity Catalog) | **candidate default** |
 
-`benchmarks/delta_layout/` runs the **real Gold query mix** — point lookup by `account_id`, time-range
-scan, training-set extract — at ≥ 10 M rows, recording **files scanned, bytes scanned, wall-clock and
-`OPTIMIZE` cost**. ADR-0015 is finalized from those numbers and cites them. A CI check asserts the ADR
-references non-empty benchmark output, so it cannot be accepted before its evidence exists.
+`benchmarks/delta_layout/` (`make bench-layout`) runs the **real Gold query mix** at ≥ 10 M rows
+shaped like `gold.observations`: the two `gold.read_context_rows` reads (one transaction's subject row
+by id, and the full context extract parity and training read) and ADR-0015's two further shapes that
+no Gold reader issues yet (point lookup by `account_id`, 24-hour time-range scan). It builds a no-layout
+control, a compacted control, `event_date` partitioning (a generated column, so readers keep filtering
+on `occurred_at`), partitioning plus `ZORDER BY (account_id)`, `stream` partitioning and liquid
+`CLUSTER BY (account_id, occurred_at)`, each filled by the MERGE Gold's writer issues. It records
+**files and bytes selected, bytes and records read (ADR-0048 §8), wall-clock, and write and
+`OPTIMIZE` cost**, refuses a missing metric or any difference in results between layouts, and ranks
+by a rule declared before measurement (`benchmarks/delta_layout/spec.py`). ADR-0015 is finalized from
+those numbers and cites them. A unit test keeps the ADR Proposed until `benchmarks/delta_layout/REPORT.md`
+cites a committed, publishable run of at least ten million rows.
 
 Nothing in the streaming code hardcodes a layout.
 

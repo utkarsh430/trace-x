@@ -367,6 +367,44 @@ docker exec tracex-redis-1 redis-cli -n 0 FLUSHDB
   add `--withhold-outcomes --base-url http://localhost:8011`. Outcomes are still derived and then
   withheld, so both runs see the same events and time shift.
 
+## Stream throughput and outage benchmark
+
+`make load-stream` measures `P3.stream-throughput` against the ROADMAP Phase 3 targets: the target
+rate offered throughout (fixed before measurement, never lowered: the harness refuses a lower
+`--rate-events-per-s`), consumer lag below the 10 s target while it is offered, and recovering
+below it after a 2-minute outage, plus PHASE3_PLAN §4.3 Gold freshness. It is a heavy run: never
+start it beside another Spark, Kafka, chaos or benchmark job (CLAUDE.md §18).
+
+```bash
+make up-streaming && make kafka-topics      # the broker, and the declared topics
+make load-stream                            # the declared defaults; ARGS=... passes options
+make load-stream ARGS="--help"              # every option, each recorded in the run manifest
+```
+
+What it runs, all on the host: producer worker processes publishing the declared mix
+(`benchmarks/stream_throughput/spec.py`) through `EventPublisher` at a fixed schedule; one consumer
+process running the real Bronze and Silver queries in one JVM on `processingTime` triggers
+(`--master`, `--driver-memory`, `--shuffle-partitions` and the trigger intervals are options);
+and Gold builds back to back through `services.stream.gold build`. The **outage** stops the
+consumer process (its queries stop cleanly) and restarts it from its checkpoints 120 s later, while
+the producers keep publishing to the live broker: the target names consumer lag, and it must keep
+offering the rate during the outage, which a broker outage could not.
+
+- **Consumer lag is read from Silver's Delta log** after the run (`delta_log.py`): at every Silver
+  commit, the commit time minus the oldest of each partition's newest committed LogAppendTime. The
+  broker-to-host clock offset is bounded from delivery reports and recorded; a run whose offset
+  bound is wider than its declared tolerance is INVALID.
+- **Each run gets a fresh lake**, outside the repository (`--lake-parent`, default
+  `$TMPDIR/trace-x-load-stream/<run_id>`), with the consumer and Gold logs beside it. The lake is
+  kept as evidence; delete it when you are done with it. Records already on the topics are read too
+  (Bronze starts from earliest): the harness reports how many, and the warm-up absorbs them.
+- **Exit codes:** 0 every target met; 1 a target missed (record and `benchmarks/stream_throughput/
+  REPORT.md` written, as found); 2 the harness could not measure, so the run is INVALID (record
+  kept, no report); 3 a valid run on a dirty worktree (record kept, not publishable, no report).
+- **Local limits that can decide the result:** the tx topics' byte caps (`deploy/kafka/topics.yaml`)
+  bound how much unread backlog a 2-minute outage may leave; if the cap evicts unread records,
+  Bronze stops on `failOnDataLoss` and the outage target is recorded as failed, not skipped.
+
 ## Regenerating event models
 
 Event models are generated from the committed JSON Schemas, never hand-edited (ADR-0028):

@@ -7,6 +7,7 @@ it looks like coverage.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -132,14 +133,35 @@ def test_delta_layout_adr_is_not_accepted_before_its_benchmark() -> None:
     """ADR-0015 exists precisely to prevent writing the conventional answer first."""
     adr = next(p for p in ADR_FILES if p.name.startswith("0015"))
     text = adr.read_text()
-    bench = ROOT / "benchmarks" / "delta_layout"
-    has_evidence = bench.is_dir() and any(
-        f.stat().st_size > 0 for f in bench.rglob("*") if f.is_file()
+    # Evidence is a committed report citing a publishable run of at least ten million rows, not
+    # merely a non-empty file: the benchmark's own source lives in the same directory, so "any
+    # file" would have let the ADR be accepted the moment the harness was written.
+    report = ROOT / "benchmarks" / "delta_layout" / "REPORT.md"
+    manifests = ROOT / "eval" / "manifest"
+    cited = re.compile(r"run_id: (bench-[\w.-]+-delta-layout-[0-9a-f]{8})")
+    runs = set(cited.findall(report.read_text())) if report.is_file() else set()
+    evidence = set()
+    for run_id in runs:
+        path = manifests / f"{run_id}.json"
+        if not path.is_file():
+            continue
+        record = json.loads(path.read_text())
+        if (
+            record.get("subject") == "delta-layout"
+            and int(record.get("row_count", 0)) >= 10_000_000
+            and record.get("publishable") is True
+            and record.get("dirty_worktree") is False
+        ):
+            evidence.add(run_id)
+    if "Status:** **Proposed**" in text or "Status:** Proposed" in text:
+        return
+    assert evidence, (
+        "ADR-0015 must remain Proposed until benchmarks/delta_layout/REPORT.md cites a publishable "
+        "run of at least ten million rows whose manifest is committed"
     )
-    if not has_evidence:
-        assert "**Status:** **Proposed**" in text or "Status:** Proposed" in text, (
-            "ADR-0015 must remain Proposed until benchmarks/delta_layout/ has committed output"
-        )
+    assert any(run_id in text for run_id in evidence), (
+        f"ADR-0015 is no longer Proposed but cites none of the benchmark's runs {sorted(evidence)}"
+    )
 
 
 # ------------------------------------------------------------- referential --

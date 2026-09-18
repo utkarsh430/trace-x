@@ -23,6 +23,7 @@ build/
 data/external/
 data/generated/
 data/lake/
+data/bench/
 *.parquet
 *.csv
 !tests/**/*.csv
