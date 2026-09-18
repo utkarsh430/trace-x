@@ -257,6 +257,8 @@ def test_a_start_above_zero_is_reported_as_started_after_trim_without_failing() 
             "out_of_range": 0,
             "skipped": [],
             "other_topic_id": 0,
+            "floor": 0,
+            "retired_present": 0,
         }
     }
 

@@ -19,6 +19,16 @@
 | Last commit with acceptance evidence | `4fc23de` (`tests/acceptance/status.json` `last_verified_commit`) |
 | Working tree at handoff | Clean. Step 11 (`684eef9`) plus the h3noyce edits is preserved, unvalidated, on branch **`phase3-step11-integration-prep`** (§3); nothing remains only on h3noyce |
 
+> **Progress since this handoff (2026-09-18, on the Mac).** §7 A is done: a clean TraceX Docker
+> environment was rebuilt from the Makefile, `make doctor` PASS, `make verify` 11/0/0 on `c4912d6`.
+> §7 B step 6 is done: the Docker-backed runs found one Step 11 defect (the retention floor key refused
+> the `+`/`/` that confluent-kafka puts in about half of all topic ids), fixed, and Step 11 is landed on
+> `phase/03-stream-medallion` with a hydration-versus-floor test. Details, evidence and new debt:
+> `docs/PROGRESS.md`, *Phase 3 — Mac validation and Step 11 landed*. **Not true as written above:** the
+> "Mac Pro" is the same Mac where a session on 2026-09-16/17 made four commits that were never pushed
+> (`075f713`, `b5c830a`, `a1403ca`, `471d8ba`); they are preserved on the local-only branch
+> `backup/mac-phase3-471d8ba` and were **not** used as evidence. Next: §7 step 7, then §7 C.
+
 ---
 
 ## 0. Standing user instructions for the rest of Phase 3
@@ -104,7 +114,7 @@ Four changes were made on top of `684eef9` and are in that WIP commit:
    `# nosec B608` beside the existing `# noqa: S608`. **Why:** `make verify`'s bandit gate failed on
    the staged tree (B608, f-string SQL) — `684eef9` never ran bandit. Classified **D** after checking
    that every interpolated value is validated (`AppId.parse` for checkpoint ids;
-   `retention_floor_key`'s `[A-Za-z0-9_-]{1,64}` for topic ids; ints for partition, offset, batch id;
+   `retention_floor_key`'s `[A-Za-z0-9+/_-]{1,64}` for topic ids (widened on the Mac, see PROGRESS); ints for partition, offset, batch id;
    identifier from the table registry). Bandit and `ruff format --check . && ruff check .` then clean.
 2. `docs/adr/0053-silver-canonical-events.md` §7: the "Starting from version 0" limit rewritten as
    amended by ADR-0052 Amendment 1 point 6 (after retention a new Silver checkpoint starts at
@@ -194,6 +204,10 @@ Use the repository's commands; `docs/LOCAL_DEVELOPMENT.md` is the bootstrap auth
    Kafka is **not** needed as a compose service for the tests: the Kafka-backed tests start their own
    throwaway brokers. `make up-streaming` + `make kafka-topics` are for manual runs and benchmarks.
    Before running `pytest` or `alembic` directly, load the environment: `set -a; . ./.env; set +a`.
+   **On fresh volumes the gateway comes up unready** (PROGRESS debt D20): `/readyz` reports
+   `postgres: unreachable: PoolClosed` because it started before `make migrate` created `trace_app`.
+   Its liveness healthcheck still says healthy. Restart it once after `make up`:
+   `docker compose -f deploy/compose.yml --env-file .env --profile core restart gateway`.
 5. `make verify` — must be **11 passed, 0 failed, 0 skipped** before any other work. If red, classify
    (A–F, see `CLAUDE.md` §18) and fix the root cause first.
 

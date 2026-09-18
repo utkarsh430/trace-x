@@ -19,6 +19,15 @@ ADR-0053 §5. For one topic and the current version of its Silver checkpoint:
   a batch it has committed. A batch still being written is left out, so a running query is never
   judged on half a batch; duplicates and quarantine rows are per checkpoint version, so a reset
   version accounts for Bronze again from its own rows.
+- **Retention** (ADR-0052 amendment 1). A Silver checkpoint starts at Bronze version 0 until
+  Bronze has retention floors; after that, a new checkpoint starts at the first version whose files
+  are all live, so a start at `version:N` is judged only when floors exist. Coordinates below their
+  floor are retired: they are left out of the Bronze side and the accounted side alike. The floors
+  come from a Bronze snapshot taken after the checkpoint's offsets were read, so that snapshot is at
+  or after
+  every version judged, and a floor only rises. A row retired after Silver read it is excluded from
+  both sides; an unretired row is still in Bronze at the version judged, because maintenance deletes
+  only retired rows.
 - **Conserved** when there is no problem and every consumed Bronze coordinate (topic id, partition,
   offset) is accounted exactly once, nothing is accounted that Bronze did not hold, and no
   coordinate Bronze holds twice. And the tables agree with each other:
@@ -30,10 +39,11 @@ ADR-0053 §5. For one topic and the current version of its Silver checkpoint:
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
-from dataclasses import dataclass, field
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final
 
 from trace_core.domain.errors import CheckpointRefusedError, LakeContractError
 from trace_core.observability import get_logger
@@ -47,7 +57,13 @@ from trace_core.stream.silver_rules import (
     DuplicateKind,
     silver_topic,
 )
-from trace_core.stream.tables import DeltaSourceOffset, snapshot_facts
+from trace_core.stream.tables import (
+    DeltaSourceOffset,
+    FloorKey,
+    floor_column,
+    retention_floors,
+    snapshot_facts,
+)
 
 if TYPE_CHECKING:
     from pyspark.sql import DataFrame, SparkSession
@@ -60,9 +76,11 @@ class ConsumedBronze:
     """How far a Silver checkpoint has read its Bronze table."""
 
     through_version: int | None
-    """Bronze versions `0..through_version` were read whole; None when nothing was committed."""
+    """Bronze versions `start..through_version` were read whole; None when nothing was committed."""
     last_committed_batch: int | None
     problems: tuple[str, ...] = ()
+    start_version: int | None = None
+    """The Bronze version the checkpoint started at; None when it is not a version."""
 
 
 def through_version(
@@ -105,29 +123,52 @@ def data_files_in_commit(table_path: Path, version: int) -> int:
     return count
 
 
+START_WITHOUT_FLOORS: Final = (
+    "not at Bronze version 0; only a Bronze table with retention floors is read from a later "
+    "version (ADR-0052 amendment 1)"
+)
+
+
+def start_problem(start: str, *, floors_exist: bool) -> str | None:
+    """Why a Silver checkpoint's recorded Bronze start cannot be judged, or None."""
+    if not start.startswith("version:"):
+        return f"the checkpoint starts at {start}, not at a Bronze version"
+    if start != "version:0" and not floors_exist:
+        return f"the checkpoint starts at {start}, {START_WITHOUT_FLOORS}"
+    return None
+
+
 def consumed_bronze(
-    directory: Path, identity: checkpoints.CheckpointIdentity, source_key: str, table_path: Path
+    directory: Path,
+    identity: checkpoints.CheckpointIdentity,
+    source_key: str,
+    table_path: Path,
+    *,
+    floors_exist: bool = False,
 ) -> ConsumedBronze:
     progress = checkpoints.SparkProgress.read(directory)
     record = identity.sources.get(source_key)
     if record is None or record.kind != "delta":
         raise CheckpointRefusedError(f"{source_key} is not a Delta source of {identity.query}")
-    if record.start != "version:0":
-        return ConsumedBronze(
-            None,
-            progress.last_committed,
-            (f"the checkpoint starts at {record.start}, not at Bronze version 0",),
-        )
+    start = int(record.start.split(":", 1)[1]) if record.start.startswith("version:") else None
+    problem = start_problem(record.start, floors_exist=floors_exist)
+    if problem is not None:
+        return ConsumedBronze(None, progress.last_committed, (problem,), start)
     if progress.last_committed is None:
-        return ConsumedBronze(None, None)
+        return ConsumedBronze(None, None, (), start)
     offsets = checkpoints.committed_source_offsets(directory)
     if len(offsets) != 1 or offsets[0] is None:
         return ConsumedBronze(
-            None, progress.last_committed, (f"expected one Delta source offset, got {offsets}",)
+            None,
+            progress.last_committed,
+            (f"expected one Delta source offset, got {offsets}",),
+            start,
         )
     offset = DeltaSourceOffset.parse(offsets[0])
     through, problem = through_version(offset, lambda v: data_files_in_commit(table_path, v))
-    return ConsumedBronze(through, progress.last_committed, () if problem is None else (problem,))
+    return ConsumedBronze(
+        through, progress.last_committed, () if problem is None else (problem,), start
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,6 +194,10 @@ class SilverConservationReport:
     late_missing: int = 0
     """Late canonical rows without their `late_events` row."""
     problems: tuple[str, ...] = field(default=())
+    bronze_version: int | None = None
+    """The Bronze snapshot the retention floors were read from."""
+    floors: Mapping[FloorKey, int] = field(default_factory=lambda: MappingProxyType({}))
+    """Retention floors: coordinates below them were left out of both sides."""
 
     @property
     def conserved(self) -> bool:
@@ -187,6 +232,8 @@ class SilverConservationReport:
             "dangling_duplicates": self.dangling_duplicates,
             "late_mismatched": self.late_mismatched,
             "late_missing": self.late_missing,
+            "bronze_version": self.bronze_version,
+            "floors": {f"{tid}.{p}": floor for (tid, p), floor in sorted(self.floors.items())},
             "problems": list(self.problems),
         }
 
@@ -245,9 +292,19 @@ def check_silver_conservation(
         raise CheckpointRefusedError(f"{spec.query}: no checkpoint identity, so nothing to judge")
     directory = checkpoints.query_directory(lake, spec.query) / f"v{state.identity.version}"
     bronze_path = source.local_path(lake)
-    consumed = consumed_bronze(directory, state.identity, f"delta:{source}", bronze_path)
-    if snapshot_facts(spark, bronze_path) is None:
+    # Offsets first, then the snapshot the floors come from: see the module docstring.
+    consumed = consumed_bronze(
+        directory, state.identity, f"delta:{source}", bronze_path, floors_exist=True
+    )
+    facts = snapshot_facts(spark, bronze_path)
+    if facts is None:
         raise LakeContractError(f"{source} does not exist at {bronze_path}")
+    floors = retention_floors(facts.properties)
+    record = state.identity.sources[f"delta:{source}"]
+    problem = start_problem(record.start, floors_exist=bool(floors))
+    if problem is not None and problem not in consumed.problems:
+        consumed = replace(consumed, through_version=None, problems=(*consumed.problems, problem))
+    kept = F.col("kafka_offset") >= floor_column(floors)
     coords = [F.col(c) for c in _COORDS]
     if consumed.through_version is None:
         bronze = spark.read.format("delta").load(str(bronze_path)).select(*coords).limit(0)
@@ -256,6 +313,7 @@ def check_silver_conservation(
             spark.read.format("delta")
             .option("versionAsOf", str(consumed.through_version))
             .load(str(bronze_path))
+            .filter(kept)
             .select(*coords)
         )
     app_id = state.identity.app_id
@@ -278,6 +336,7 @@ def check_silver_conservation(
         canonical.select(*coords, F.lit("canonical").alias("source"))
         .unionByName(duplicates.select(*coords, F.lit("duplicates").alias("source")))
         .unionByName(quarantine.select(*coords, F.lit("quarantine").alias("source")))
+        .filter(kept)
     )
     counts = _judge(bronze, accounted)
 
@@ -310,6 +369,8 @@ def check_silver_conservation(
         late_mismatched=late_mismatched.count(),
         late_missing=late_missing.count(),
         problems=consumed.problems,
+        bronze_version=facts.version,
+        floors=MappingProxyType(dict(floors)),
         **counts,
     )
     (_log.info if report.conserved else _log.error)("silver_conservation", **report.summary())
@@ -317,10 +378,12 @@ def check_silver_conservation(
 
 
 __all__ = [
+    "START_WITHOUT_FLOORS",
     "ConsumedBronze",
     "SilverConservationReport",
     "check_silver_conservation",
     "consumed_bronze",
     "data_files_in_commit",
+    "start_problem",
     "through_version",
 ]

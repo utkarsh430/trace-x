@@ -20,7 +20,64 @@ planning surfaced recorded under *What Phase 3 planning found in Phase 2's artef
 
 ### Phase 3
 
-### Phase 3 — HANDOFF (2026-09-18; continuing on a Mac Pro with Docker). Read this first.
+### Phase 3 — Mac validation and Step 11 landed (2026-09-18). Read this first, then the handoff below.
+
+- **Environment.** The Mac is an M3 Pro with 12 cores and 18 GiB, running Docker Desktop 29.8 (17.5
+  GiB) and Compose v5.5. Temurin 17.0.20.1 is the only JDK. Every TraceX container, volume (named and
+  anonymous), network and the old `tracex-gateway:dev` image were removed; nothing else in Docker was
+  touched. The environment was then rebuilt from scratch: `make setup`, `make doctor` (PASS; warnings
+  only for k6 not pulled and Ollama absent), `make up` (core profile, migrations 0001–0008 on a fresh
+  database).
+- **Divergent history, preserved and not used as evidence.** An earlier session on this Mac
+  (2026-09-16/17) made four commits that were never pushed: `075f713` checkpoint-resume, `b5c830a`
+  Step 11, `a1403ca` eval-v2 manifest, and `471d8ba` lowering `MIN_WARMUP_POSTS_PER_S` from 20 to 10.
+  The local branch was later reset to origin. The commits are kept on the local-only branch
+  `backup/mac-phase3-471d8ba`. Their PASS claims were **not** carried over:
+  - `075f713`'s resume run predates Step 11.
+  - `b5c830a` differs from the landed tree.
+  - That session had also edited `status.json` to `P3.medallion` PASS *before* its run finished. The
+    run then hit a GC death spiral (old generation 99.96% full, about 22,600 full GCs) and was killed.
+    The edit was discarded.
+- **Validation of `c4912d6` (the WIP), one heavy job at a time, clean tree checked before each step:**
+  - `make verify` 11/0/0 (twice).
+  - The `P3.resource-bounds` command: **43 passed, 1 FAILED** (below).
+  - `tests/stream/test_resource_bounds_maintenance.py`: 14/14.
+  - Bronze Kafka integration: 8/8.
+  - Silver Kafka integration: 1/1.
+  - `test_redis_hydration.py`: 11/11.
+  - Stream suites, one JVM per file: bronze 5, silver 12, gold 7, delta capabilities 42,
+    feature-semantics Gold 82, session 8 + 1 loud skip (no second JDK), worker 1.
+  - These counts are session evidence for `c4912d6`. The acceptance evidence is recorded against the
+    landed commit.
+- **Step 11 defect found and fixed (class A).**
+  - *Cause.* `fetch_topic_identity` records `str(TopicDescription.topic_id)`. confluent-kafka 2.15.1
+    renders that in **standard** base64: of 2,000 random ids, 49.3% contain `+` or `/`.
+    `retention_floor_key` accepted only `[A-Za-z0-9_-]`, so `advance_retention` raised
+    `TableDeclarationError` for about half of real topics. It failed closed, so nothing was lost, but
+    retention was impossible for those topics.
+  - *Why it passed before.* Every test used a hand-written URL-safe id, which the client never
+    produces. The earlier passing runs happened to get broker ids without `+` or `/`.
+  - *Fix (user-approved option A).* The floor-key segment now admits `[A-Za-z0-9+/_-]`: the alphabet
+    Bronze already stores. It still cannot close a SQL string literal or cross a `.` segment, so the
+    `# nosec B608` argument holds. ADR-0052's key definition now says so.
+  - *Tests.* The unit and stream fixtures now use a `+`/`/` id. A new unit test builds 200 ids through
+    the real client. Rejection of `'`, `"`, `\`, `=`, `.` and space is asserted. Normalising ids to
+    Kafka's URL-safe form was rejected: it changes a persisted identifier. So was a key-only mapping,
+    which ADR-0048 U9 forbids.
+- **Hydration versus the retention floor is now tested.** A new unit test passes real
+  `coverage_from_bronze` output into the real `compute_claim`:
+  - no floor: the claim equals the ledger origin;
+  - a bounded retired region: the claim moves to just past the floor, and the retired span is the
+    deciding component;
+  - an unbounded region: no claim, with an "open gap" reason.
+
+  Removing the retired span at runtime makes this test fail (checked by mutation). This closes Step 9's
+  recorded debt on the question.
+- **Found, not fixed: D20** (gateway unready on fresh volumes), and D21–D22 in *KNOWN TECHNICAL DEBT*.
+- **Next.** `PHASE3_HANDOFF.md` §7 step 7 (branch deletion, after this is on origin), then §7 C,
+  starting with `P3.checkpoint-resume` on the landed code.
+
+### Phase 3 — HANDOFF (2026-09-18; continuing on a Mac Pro with Docker).
 
 **The operational continuation document is `docs/PHASE3_HANDOFF.md`**: status by step and capability,
 the Step 11 WIP branch and its changes, the evidence gathered, the validation matrix and the
@@ -52,7 +109,7 @@ into `docs/PHASE3_HANDOFF.md` or recorded in the step entries below.
 complete locally** — `make verify`, the real-JVM stream tests on macOS, a hashed install in a Linux
 container, and a Linux build of the gateway image from its hashed runtime lock. Its first GitHub CI run
 (including the new `test-stream` job) is still pending. Wave B (Steps 1, 2, 3 and E) is under way; see
-*WORK IN PROGRESS*. Three Phase 3 capabilities are PASS: `P3.pin-failfast`, `P3.semantics-hardening` and `P3.observation-log`. The plan was built by six specialist reviews whose load-bearing claims were
+*WORK IN PROGRESS*. Phase 3 capability status is `tests/acceptance/status.json` (not repeated here). The plan was built by six specialist reviews whose load-bearing claims were
 checked against the code, by experiment in a throwaway container, or against cited upstream
 documentation — claims resting only on documentation are re-verified by the step that depends on
 them. The architecture that
@@ -255,10 +312,10 @@ afterwards as `trace_eval`: known fraud triaged at **37.3%** against **0.0%** fo
 
 ## LAST VERIFIED COMMIT
 
-**Phase 3:** `aca29b0` on `phase/03-stream-medallion`, the 2026-09-16 handoff commit, is the last
-commit gated on a green `make verify` (11 passed, 0 failed, 0 skipped, on the old laptop); `f053faf`
-before it was gated the same way. Nothing was committed on h3noyce, where `make verify` could not be
-green (no Docker; `docs/PHASE3_HANDOFF.md` §4).
+**Phase 3:** the Step 11 landing commit (2026-09-18, the commit that adds this sentence) is gated on
+`make verify` 11/0/0 on the Mac. Before it, `aca29b0` (the 2026-09-16 handoff) was the last gated
+commit. `9bd99b6` was committed on h3noyce under a user-approved exception with verify 10/11 (no
+Docker; `docs/PHASE3_HANDOFF.md` §4).
 `tests/acceptance/status.json` records `last_verified_commit` `4fc23de`, the commit its evidence was
 measured on.
 
@@ -1179,8 +1236,9 @@ both reports.
         ADR-0053 §7 change);
       - retention of 30 days of log and 7 days of deleted files, declared per table.
   * **Phase B:** implemented by the agent and pushed as the unverified WIP snapshot `684eef9`
-    (`phase3-step11-maintenance`); not yet integrated. Integration state and remaining evidence:
-    `docs/PHASE3_HANDOFF.md` §3, §5 and §7 B.
+    (`phase3-step11-maintenance`). **Landed 2026-09-18** as one squashed commit on this branch, with the
+    floor-key alphabet fix and the hydration-versus-floor test (*Phase 3 — Mac validation and Step 11
+    landed*, above). Still open: Amendment 1 *Risks* 1–3 (D21).
   * **B6, decided by the user (2026-09-15):** an audited local Bronze retention floor, recorded in
     ADR-0052's open questions and implemented in Step 11.
     * The retirement state is authoritative in the Bronze table or its own commit log, never in a
@@ -1845,6 +1903,9 @@ both reports.
 | **D17** | **The API accepts an unbounded `amount_minor`.** The observation log bounds it at a signed 64-bit integer, the width consumers parse, so a wider amount is scored but refused by the log | That transaction is missing from history and its writer session cannot close: detectable, never silent | The next breaking API revision; narrowing v1 is a breaking change |
 | **D18** | **Local `tx.scored.v1` retention is capped per partition** so the measured record size fits the local disk cap (`deploy/kafka/topics.yaml`) | A run that writes more before Bronze reads it trims unread segments, and Bronze stops loudly (`failOnDataLoss`) | Step 5 Bronze and the streaming throughput evidence: run Bronze during a load, or size the run |
 | **D19** | **A reused identity-event key with a different event time, while the replay cache is down,** gets a new envelope `event_id` on the log while the store records a conflict under one observation id (ADR-0051 risks) | History and the online store disagree about that one event | Step 6 exact dedup and conflicts |
+| **D20** | **The gateway is permanently unready after `make up` on fresh volumes.** `make up` waits on the gateway's liveness check, then runs `make migrate`. The gateway's first connections as `trace_app` fail authentication because the role does not exist yet, and its pool closes and never reopens (`/readyz`: `postgres: unreachable: PoolClosed`). Reproduced on a clean environment on 2026-09-18; a gateway restart clears it | Anything driving the gateway after a fresh `make up` (parity, load gate) sees 5xx or refusals until it is restarted. The workaround is in `PHASE3_HANDOFF.md` §7 A.4 | Before the measured parity run and the load-gate re-run: the pool must recover once the role exists, or `make up` must migrate before the gateway starts |
+| **D21** | **ADR-0052 Amendment 1 Risks 1–3 are open.** (1) A DELETE losing to a concurrent append is inferred, never constructed. (2) Gold is refused by VACUUM, not vacuumed, so its disk use is unbounded locally. (3) The Spark half of the coverage rule is proved with a stub ledger | Each is an untested path or an unbounded local resource | Phase 3 exit review decides: build the test or accept with the ADR |
+| **D22** | **`P3.resource-bounds`'s command does not select the 14 Step 11 stream tests.** `tests/stream/test_resource_bounds_maintenance.py` is marked `stream` only, so the crash, reset, VACUUM and race tests run outside `-m 'unit or integration'` | The recorded command under-reports what the capability rests on | When `P3.resource-bounds` is recorded: name both commands in its evidence |
 | **D14** | CI provisions no Redis or PostgreSQL, so the Redis conformance suite, the Redis store tests, the hole-ledger tests and the other service-backed integration tests skip there, loudly. Their evidence is local runs | CI cannot catch a regression in the online store or the ledger | Before Phase 3 exit: provision the services in `test-integration.yml`, or start throwaway containers in those fixtures as the capacity test does |
 
 ---

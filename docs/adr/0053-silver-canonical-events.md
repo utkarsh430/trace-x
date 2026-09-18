@@ -178,9 +178,17 @@ A check, as Bronze's is (`python -m services.stream.silver conservation`).
 Known and not solved in Step 6:
 - **Partly consumed Bronze version.** A micro-batch that stops inside one Bronze version cannot be
   conserved exactly; the check fails closed rather than passing.
-- **Starting from version 0.** This needs Bronze's Delta log back to version 0. Once log cleanup
-  removes it, a new checkpoint version fails loudly at start. The Step 11 local retention floor
-  (ADR-0052, Q8 decision) must account for this.
+- **Starting from version 0 — amended by ADR-0052 Amendment 1, point 6 (Step 11).** Before any
+  retention floor exists, a new Silver checkpoint starts at Bronze version 0, as above. Once the
+  audited local retention floor has run, it does not: `tables.retention_start` gives the lowest
+  Bronze version that added a data file still live, read from one snapshot, and refuses when a live
+  file was added before the retained log or by a `dataChange=false` rewrite. A resumed checkpoint
+  keeps its recorded start (`silver.silver_start_version`); a reset publishes the new start
+  (`maintenance.reset_silver`). `delta_source` refuses a Bronze reader that has committed no batch
+  when floors exist and its start is any other version, so version 0 is then refused, as is a start
+  that would skip live rows. A Silver checkpoint must exist before any floor advances. Silver's
+  Bronze reader sets `ignoreDeletes=true` (Amendment 1, point 5), which passes removes-only commits
+  and never a rewrite.
 - **Boundary-dependent canonical row.** Outside `tx.scored.v1`, an identity's canonical row
   depends on micro-batch boundaries when its deliveries land on different partitions. Topic keys
   put a retry on its original's partition, so this needs a producer that changed the key.

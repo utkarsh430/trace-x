@@ -47,6 +47,7 @@ from trace_core.stream.checkpoints import KafkaSourceStart
 from trace_core.stream.lake import AppId, LakeConfig
 from trace_core.stream.tables import (
     BASELINE_FEATURES,
+    DECLARED_RETENTION,
     CommitProvenance,
     create_table,
     snapshot_facts,
@@ -138,7 +139,7 @@ def test_every_bronze_table_is_created_at_the_minimum_protocol_and_refuses_rewri
         live = _create(spark, lake, topic)
         assert (live.min_reader_version, live.min_writer_version) == (1, 2)
         assert live.table_features == BASELINE_FEATURES
-        assert dict(live.properties) == {"delta.appendOnly": "true"}
+        assert dict(live.properties) == {**DECLARED_RETENTION, "delta.appendOnly": "true"}
         assert _create(spark, lake, topic).table_id == live.table_id, "created once, then checked"
     identifier = BRONZE_TOPICS[TX_RAW_V1].table.path_identifier(lake)
     with pytest.raises(Exception, match="DELTA_CANNOT_MODIFY_APPEND_ONLY"):
@@ -314,16 +315,16 @@ def test_coverage_rows_read_in_spark_equal_the_rows_that_were_written(
     gw, gen = "trace-gateway@0.1.0", "data.generator@1.0.0"
     expected = {
         scored: [
-            BronzeRecord(scored, 0, 0, AT_US, 1, (b"s1",), (b"1",), gw, stamp),
-            BronzeRecord(scored, 0, 1, AT_US, 1, (), (), None, None),
-            BronzeRecord(scored, 0, 2, AT_US, 1, (b"s1", b"s2"), (None,), None, None),
+            BronzeRecord(scored, 0, 0, AT_US, 1, (b"s1",), (b"1",), gw, stamp, TOPIC_ID),
+            BronzeRecord(scored, 0, 1, AT_US, 1, (), (), None, None, TOPIC_ID),
+            BronzeRecord(scored, 0, 2, AT_US, 1, (b"s1", b"s2"), (None,), None, None, TOPIC_ID),
         ],
         identity: [
-            BronzeRecord(identity, 1, 0, AT_US, 1, (b"s1",), (b"2",), gw, stamp),
-            BronzeRecord(identity, 1, 1, AT_US, 1, (), (), gw, stamp),
-            BronzeRecord(identity, 1, 2, AT_US, 1, (), (), gen, stamp),
-            BronzeRecord(identity, 1, 3, AT_US, 1, (), (), None, None),
-            BronzeRecord(identity, 1, 4, AT_US, 1, (), (), None, None),
+            BronzeRecord(identity, 1, 0, AT_US, 1, (b"s1",), (b"2",), gw, stamp, TOPIC_ID),
+            BronzeRecord(identity, 1, 1, AT_US, 1, (), (), gw, stamp, TOPIC_ID),
+            BronzeRecord(identity, 1, 2, AT_US, 1, (), (), gen, stamp, TOPIC_ID),
+            BronzeRecord(identity, 1, 3, AT_US, 1, (), (), None, None, TOPIC_ID),
+            BronzeRecord(identity, 1, 4, AT_US, 1, (), (), None, None, TOPIC_ID),
         ],
     }
     for topic, rows in written.items():

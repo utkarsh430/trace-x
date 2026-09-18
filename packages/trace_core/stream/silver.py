@@ -76,6 +76,7 @@ from trace_core.stream.tables import (
     TableLayout,
     TableRef,
     create_table,
+    retention_start,
     snapshot_facts,
 )
 
@@ -1027,10 +1028,24 @@ def create_silver_tables(
         create_table(spark, declaration, lake, provenance)
 
 
-def silver_sources(topic: str) -> list[DeltaSourceStart]:
-    """From Bronze version 0, not a snapshot: commit-log offsets are what conservation can judge
-    exactly (`silver_conservation`). A reset uses the same start."""
-    return [DeltaSourceStart(bronze_topic(topic).table, starting_version=0)]
+def silver_sources(topic: str, starting_version: int = 0) -> list[DeltaSourceStart]:
+    """From a Bronze version, never a snapshot: commit-log offsets are what conservation can judge
+    exactly (`silver_conservation`). Version 0, until Bronze has retention floors (ADR-0052
+    amendment 1); see `silver_start_version`."""
+    return [DeltaSourceStart(bronze_topic(topic).table, starting_version=starting_version)]
+
+
+def silver_start_version(spark: SparkSession, lake: LakeConfig, topic: str) -> int:
+    """The Bronze version the topic's Silver checkpoint starts at: the one its current version
+    recorded, or, for a new checkpoint, Bronze's retention start -- version 0 without retention
+    floors, else the first version whose files are all live (`tables.retention_start`)."""
+    spec = silver_topic(topic)
+    source = bronze_topic(topic).table
+    state = checkpoints.read_state(lake, spec.query)
+    record = None if state.identity is None else state.identity.sources.get(f"delta:{source}")
+    if record is not None and record.start.startswith("version:"):
+        return int(record.start.split(":", 1)[1])
+    return retention_start(spark, source.local_path(lake)).start_version
 
 
 def silver_targets(topic: str) -> list[TableRef]:
@@ -1060,7 +1075,7 @@ def start_silver_query(
         lake,
         spec.query,
         targets=silver_targets(topic),
-        sources=silver_sources(topic),
+        sources=silver_sources(topic, silver_start_version(spark, lake, topic)),
         git_sha=git_sha,
         dirty_worktree=dirty_worktree,
         now=now,
@@ -1114,6 +1129,7 @@ __all__ = [
     "silver_declaration",
     "silver_sink",
     "silver_sources",
+    "silver_start_version",
     "silver_targets",
     "start_silver_query",
 ]

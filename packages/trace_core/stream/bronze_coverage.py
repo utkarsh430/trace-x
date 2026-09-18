@@ -33,8 +33,25 @@ for nothing, when a checkpoint reports a problem, records no partition, or a par
 holds no row. A hole in Bronze (a conservation failure) leaves numbers missing, so it is reported as
 gaps, never vouched for.
 
+**Retired offsets** (ADR-0052 amendment 1). Local retention deletes Bronze rows below a committed
+floor. Their sequence numbers are neither present nor gaps: a deleted row is not evidence of loss,
+and it is not evidence of coverage either.
+- The floors are read from the same pinned snapshot as the rows, so a floor never applies to rows
+  read at another version.
+- A row below its (topic id, partition) floor is left out of the observations and counted
+  (`retired`), whether or not it still exists: what conservation calls RETIRED, coverage does too.
+- **A retired region is not evidence FOR completeness.** Every row below a floor arrived at or
+  before the oldest row above it (LogAppendTime does not decrease along a partition), so
+  `retired_through` is the newest such arrival over every floored partition. The verdict carries
+  one gap from the epoch to it, so no session vouches across the retired region, and hydration
+  refuses to claim before the floor. The gaps that lie entirely inside it are reported separately
+  (`retired_gaps`) rather than as losses.
+- A floored partition with no row above its floor has nothing to bound the region: the gap is left
+  open (`retired_open`), and the log then vouches for nothing.
+
 **Order of reads.** Bronze first: each table at a pinned snapshot version, and from it the
-high-water arrival time. The ledger after, in one statement that also returns the time it read at.
+high-water arrival time and the retention floors. The ledger after, in one statement that also
+returns the time it read at.
 """
 
 from __future__ import annotations
@@ -49,7 +66,7 @@ from typing import TYPE_CHECKING, Any, Final, LiteralString, Protocol
 from trace_core.contracts.topics import IDENTITY_EVENTS_V1, TX_SCORED_V1
 from trace_core.domain.errors import ContractError, LakeContractError, NaiveDatetimeError
 from trace_core.observability import get_logger
-from trace_core.observation.coverage import Coverage, Observed, SessionRow, assess
+from trace_core.observation.coverage import Coverage, Gap, Observed, SessionRow, assess
 from trace_core.observation.log import SEQ_HEADER, SESSION_HEADER
 from trace_core.observation.supervisor import LEASE_S, TAKEOVER_MARGIN_S
 from trace_core.repositories.triage_event import PRODUCER_NAME as GATEWAY_PRODUCER
@@ -57,7 +74,13 @@ from trace_core.stream import checkpoints
 from trace_core.stream.bronze import SPARK_LOG_APPEND_TIME, bronze_declaration, bronze_topic
 from trace_core.stream.bronze_conservation import consumed_ranges
 from trace_core.stream.lake import LakeConfig
-from trace_core.stream.tables import describe_live_table, require_no_drift, snapshot_facts
+from trace_core.stream.tables import (
+    describe_live_table,
+    floor_column,
+    require_no_drift,
+    retention_floors,
+    snapshot_facts,
+)
 
 if TYPE_CHECKING:
     from pyspark.sql import SparkSession
@@ -102,6 +125,19 @@ class BronzeRecord:
     """The envelope's `producer`, extracted in Spark; None when absent or the value is not JSON."""
     ingested_at: str | None
     """The envelope's `ingested_at`, extracted in Spark: the writer's stamp, as text."""
+    topic_id: str | None = None
+    """The broker's topic id the row carries; None when the caller does not judge retirement."""
+
+
+type RetiredKey = tuple[str, str, int]
+"""(topic, Kafka topic id, partition), the key a retention floor is judged by."""
+
+
+def is_retired(record: BronzeRecord, floors: Mapping[RetiredKey, int]) -> bool:
+    """Whether the row's offset is below its (topic, topic id, partition) retention floor."""
+    if record.topic_id is None:
+        return False
+    return record.offset < floors.get((record.topic, record.topic_id, record.partition), 0)
 
 
 def logged_at(microseconds: int) -> dt.datetime:
@@ -207,6 +243,51 @@ class BronzeCoverage:
     table_versions: Mapping[str, int]
     high_water_withheld: tuple[str, ...] = ()
     """Why the mark was withheld, when it was."""
+    retired: int = 0
+    """Rows below their retention floor: neither observations nor gaps."""
+    retired_through: dt.datetime | None = None
+    """Nothing written at or before this is vouched for: its record may have been retired."""
+    retired_open: bool = False
+    """A floored partition holds no row above its floor, so the retired region has no end."""
+    retired_gaps: tuple[Gap, ...] = ()
+    """Gaps that lie entirely inside the retired region: reported, never counted as losses."""
+    retired_reasons: tuple[str, ...] = ()
+
+
+def _with_retired_span(
+    coverage: Coverage,
+    *,
+    through: dt.datetime | None,
+    open_ended: bool,
+    margin: dt.timedelta,
+) -> tuple[Coverage, tuple[Gap, ...]]:
+    """The verdict with one gap over the retired region, and the gaps that lie inside it.
+
+    A gap inside the region may be a retired row rather than a lost write, so it is reported apart
+    from the losses; the region's own gap keeps anything before the floor from being vouched for."""
+    if through is None and not open_ended:
+        return coverage, ()
+    boundary = None if open_ended else through
+
+    def split(gaps: tuple[Gap, ...]) -> tuple[tuple[Gap, ...], tuple[Gap, ...]]:
+        if boundary is None:
+            return (), gaps
+        inside = tuple(g for g in gaps if g.end is not None and g.end <= boundary + margin)
+        return tuple(g for g in gaps if g not in inside), inside
+
+    retired: list[Gap] = []
+    sessions = {}
+    for session_id, session in coverage.sessions.items():
+        kept, inside = split(session.gaps)
+        retired.extend(inside)
+        sessions[session_id] = replace(session, gaps=kept)
+    kept_unknown, inside_unknown = split(coverage.unknown)
+    retired.extend(inside_unknown)
+    span = Gap(None, _EPOCH, None if boundary is None else boundary + margin)
+    return (
+        replace(coverage, sessions=MappingProxyType(sessions), unknown=(*kept_unknown, span)),
+        tuple(retired),
+    )
 
 
 def coverage_from_bronze(
@@ -220,6 +301,10 @@ def coverage_from_bronze(
     takeover_margin_s: float = TAKEOVER_MARGIN_S,
     table_versions: Mapping[str, int] | None = None,
     high_water_withheld: tuple[str, ...] = (),
+    floors: Mapping[RetiredKey, int] | None = None,
+    retired_through: dt.datetime | None = None,
+    retired_open: bool = False,
+    retired_reasons: tuple[str, ...] = (),
 ) -> BronzeCoverage:
     """The single call site of `assess` for Bronze. Bronze rows and ledger rows in, coverage out.
 
@@ -235,10 +320,14 @@ def coverage_from_bronze(
     if bronze_high_water is not None and high_water_withheld:
         raise LakeContractError("a withheld high-water mark cannot also be given")
     read_through = None if bronze_high_water is None else bronze_high_water - _ONE_MICROSECOND
-    counts = {"observations": 0, "not_observations": 0, "beyond_high_water": 0}
+    counts = {"observations": 0, "not_observations": 0, "beyond_high_water": 0, "retired": 0}
+    below = dict(floors or {})
 
     def observed() -> Iterator[Observed]:
         for record in records:
+            if is_retired(record, below):
+                counts["retired"] += 1
+                continue
             item = observation_from_record(record)
             if item is None:
                 counts["not_observations"] += 1
@@ -260,6 +349,12 @@ def coverage_from_bronze(
     if read_through is None:
         # Nothing bounds what Bronze has yet to deliver: the gaps are reported, nothing is vouched.
         coverage = replace(coverage, through=_EPOCH)
+    coverage, retired_gaps = _with_retired_span(
+        coverage,
+        through=retired_through,
+        open_ended=retired_open,
+        margin=dt.timedelta(seconds=clock_margin_s),
+    )
     return BronzeCoverage(
         coverage=coverage,
         bronze_high_water=bronze_high_water,
@@ -270,6 +365,11 @@ def coverage_from_bronze(
         beyond_high_water=counts["beyond_high_water"],
         table_versions=MappingProxyType(dict(table_versions or {})),
         high_water_withheld=high_water_withheld,
+        retired=counts["retired"],
+        retired_through=retired_through,
+        retired_open=retired_open,
+        retired_gaps=retired_gaps,
+        retired_reasons=retired_reasons,
     )
 
 
@@ -339,6 +439,7 @@ def _bronze_records(
         .load(str(path))
         .select(
             "kafka_topic",
+            "kafka_topic_id",
             "kafka_partition",
             "kafka_offset",
             F.unix_micros("kafka_timestamp").alias("logged_at_us"),
@@ -360,6 +461,7 @@ def _bronze_records(
             seqs=tuple(None if v is None else bytes(v) for v in row["seqs"] or ()),
             producer=None if row["producer"] is None else str(row["producer"]),
             ingested_at=None if row["ingested_at"] is None else str(row["ingested_at"]),
+            topic_id=str(row["kafka_topic_id"]),
         )
 
 
@@ -382,6 +484,10 @@ def assess_bronze_coverage(
     newest: dict[tuple[str, int], int] = {}
     consumed: set[tuple[str, int]] = set()
     withheld: list[str] = []
+    floors: dict[RetiredKey, int] = {}
+    retired_through: dt.datetime | None = None
+    retired_open = False
+    retired_reasons: list[str] = []
     for topic in COVERED_TOPICS:
         spec = bronze_topic(topic)
         state = checkpoints.read_state(lake, spec.query)
@@ -396,6 +502,39 @@ def assess_bronze_coverage(
             bronze_declaration(topic), describe_live_table(spark, spec.table.path_identifier(lake))
         )
         versions[topic] = facts.version
+        # The floors come from the same snapshot as the rows, so a floor never applies to another
+        # version's rows (ADR-0052 amendment 1).
+        topic_floors = {
+            key: floor for key, floor in retention_floors(facts.properties).items() if floor > 0
+        }
+        for (floor_topic_id, floor_partition), floor in topic_floors.items():
+            floors[(topic, floor_topic_id, floor_partition)] = floor
+        if topic_floors:
+            oldest = {
+                (str(row["kafka_topic_id"]), int(row["kafka_partition"])): int(row["first_us"])
+                for row in (
+                    spark.read.format("delta")
+                    .option("versionAsOf", str(facts.version))
+                    .load(str(path))
+                    .filter(F.col("kafka_offset") >= floor_column(topic_floors))
+                    .groupBy("kafka_topic_id", "kafka_partition")
+                    .agg(F.min(F.unix_micros("kafka_timestamp")).alias("first_us"))
+                    .collect()
+                )
+            }
+            for key, floor in sorted(topic_floors.items()):
+                if key not in oldest:
+                    retired_open = True
+                    retired_reasons.append(
+                        f"{topic}[{key[1]}] of topic id {key[0]}: every row below its floor "
+                        f"{floor} is retired and none above it remains, so the retired region has "
+                        f"no end"
+                    )
+                else:
+                    arrival = logged_at(oldest[key])
+                    retired_through = (
+                        arrival if retired_through is None else max(retired_through, arrival)
+                    )
         directory = checkpoints.query_directory(lake, spec.query) / f"v{state.identity.version}"
         ranges = consumed_ranges(
             topic=topic,
@@ -437,6 +576,10 @@ def assess_bronze_coverage(
         takeover_margin_s=takeover_margin_s,
         table_versions=versions,
         high_water_withheld=tuple(withheld),
+        floors=floors,
+        retired_through=retired_through,
+        retired_open=retired_open,
+        retired_reasons=tuple(retired_reasons),
     )
     _log.info(
         "bronze_coverage_assessed",
@@ -449,6 +592,9 @@ def assess_bronze_coverage(
         observations=result.observations,
         not_observations=result.not_observations,
         beyond_high_water=result.beyond_high_water,
+        retired=result.retired,
+        retired_through=None if retired_through is None else retired_through.isoformat(),
+        retired_open=retired_open,
         gaps=len(result.coverage.gaps),
         anomalies=len(result.coverage.anomalies),
     )
@@ -461,9 +607,11 @@ __all__ = [
     "BronzeCoverage",
     "BronzeRecord",
     "LedgerConnection",
+    "RetiredKey",
     "assess_bronze_coverage",
     "coverage_from_bronze",
     "high_water_arrival",
+    "is_retired",
     "logged_at",
     "observation_from_record",
     "read_ledger",

@@ -206,9 +206,16 @@ def bronze_schema() -> StructType:
 
 
 def bronze_declaration(topic: str) -> TableDeclaration:
-    """Unpartitioned and unclustered: layout is decided by the Step 14 benchmark (ADR-0015)."""
+    """Unpartitioned and unclustered: layout is decided by the Step 14 benchmark (ADR-0015).
+
+    `retention_floors`: the local retention floor's properties are Bronze's own state (ADR-0052
+    amendment 1). Maintenance lifts `appendOnly` only for the length of one delete, and the drift
+    check refuses the table while it is lifted."""
     return TableDeclaration(
-        ref=bronze_topic(topic).table, schema=bronze_schema(), properties=dict(BRONZE_PROPERTIES)
+        ref=bronze_topic(topic).table,
+        schema=bronze_schema(),
+        properties=dict(BRONZE_PROPERTIES),
+        retention_floors=True,
     )
 
 

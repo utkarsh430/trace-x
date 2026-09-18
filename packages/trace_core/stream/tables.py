@@ -12,7 +12,13 @@ builds it. What lives here is what every one of them must satisfy:
    commit, and a live table is compared with its declaration before any job writes to it.
 4. **`CommitProvenance`** -- the `userMetadata` on every commit: code, query, checkpoint, batch.
 5. **Source safety** -- settings whose purpose is to tolerate loss are refused, and a
-   restart whose checkpoint needs log versions the source no longer retains is refused.
+   restart whose checkpoint needs log versions the source no longer retains is refused. The one
+   exception, `ignoreDeletes` on a Bronze source, exists for the audited retention floor (ADR-0052
+   amendment 1) and is granted only by the checkpoint convention.
+7. **Retention** -- every table's `delta.logRetentionDuration` and
+   `delta.deletedFileRetentionDuration` are declared (a declaration's own value, or
+   `DECLARED_RETENTION`), and Bronze's `trace_x.retention_floor.<topic id>.<partition>` properties
+   are parsed and validated here.
 6. **`measure_scans`** -- what a query's file scans selected, and what their tasks read.
 
 Every Delta behaviour relied on here was observed on the pinned Delta 4.0.1 and is asserted
@@ -45,6 +51,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from trace_core.domain.errors import (
@@ -209,6 +216,115 @@ def _property_problem(key: str, value: str, opt_in: frozenset[str]) -> str | Non
     )
 
 
+# ------------------------------------------------------------------ retention ---
+
+LOG_RETENTION_PROPERTY: Final = "delta.logRetentionDuration"
+DELETED_FILE_RETENTION_PROPERTY: Final = "delta.deletedFileRetentionDuration"
+
+DECLARED_RETENTION: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        LOG_RETENTION_PROPERTY: "interval 30 days",
+        DELETED_FILE_RETENTION_PROPERTY: "interval 7 days",
+    }
+)
+"""Every table's retention unless its declaration states its own (ADR-0052 amendment 1, §7).
+
+CHOSEN, not derived: no longest expected consumer outage is declared anywhere in the plan. They
+are Delta 4.0.1's own defaults (observed by the stream test
+`test_resource_bounds_delta_default_retention_is_the_declared_retention`), so a table created
+before retention was declared behaves exactly as declared:
+- 30 days of log: a stopped Silver query restarts within it, and `require_source_retained`
+  refuses a restart beyond it;
+- 7 days of deleted files: a Gold build planned against Silver, and any reader positioned before a
+  removal, must finish within it, and the VACUUM tooling refuses to shorten it."""
+
+DELTA_DEFAULT_RETENTION: Final[Mapping[str, str]] = DECLARED_RETENTION
+"""What a table without either property retains (observed on Delta 4.0.1, see above). The drift
+check treats an absent retention property as this value, and only this one."""
+
+_INTERVAL: Final = re.compile(r"interval\s+([1-9][0-9]{0,6})\s+(hour|hours|day|days)")
+
+
+def retention_hours(value: str) -> int:
+    """`interval <n> hours|days` in hours; anything else is refused rather than guessed."""
+    match = _INTERVAL.fullmatch(value.strip().lower())
+    if match is None:
+        raise TableDeclarationError(
+            f"retention {value!r} is not 'interval <n> hours' or 'interval <n> days'; other "
+            f"spellings are refused so a declared retention is never misread"
+        )
+    amount = int(match.group(1))
+    return amount * 24 if match.group(2).startswith("day") else amount
+
+
+RETENTION_FLOOR_PREFIX: Final = "trace_x.retention_floor."
+# A topic id is spelled as Bronze records it: confluent-kafka's `str(Uuid)`, which is STANDARD
+# base64 (`+` and `/`), not Kafka's URL-safe form. Both alphabets are accepted; neither can carry
+# a quote, a backslash or the `.` that separates the key's segments.
+_FLOOR_KEY: Final = re.compile(
+    r"trace_x\.retention_floor\.([A-Za-z0-9+/_-]{1,64})\.(0|[1-9][0-9]{0,9})"
+)
+_FLOOR_VALUE: Final = re.compile(r"0|[1-9][0-9]{0,18}")
+
+type FloorKey = tuple[str, int]
+"""(Kafka topic id, partition)."""
+
+
+def retention_floor_key(topic_id: str, partition: int) -> str:
+    key = f"{RETENTION_FLOOR_PREFIX}{topic_id}.{partition}"
+    if _FLOOR_KEY.fullmatch(key) is None or partition < 0:
+        raise TableDeclarationError(
+            f"({topic_id!r}, {partition}) cannot name a retention floor: a topic id is 1-64 of "
+            f"[A-Za-z0-9+/_-] and a partition a non-negative integer"
+        )
+    return key
+
+
+def retention_floor_problem(key: str, value: str) -> str | None:
+    """Why `key=value` is not a well-formed retention floor, or None."""
+    if _FLOOR_KEY.fullmatch(key) is None:
+        return (
+            f"property {key!r} carries the retention floor prefix but names no "
+            f"(topic id, partition)"
+        )
+    if _FLOOR_VALUE.fullmatch(value) is None:
+        return f"retention floor {key!r} is {value!r}, not a non-negative integer offset"
+    return None
+
+
+def floor_column(floors: Mapping[FloorKey, int]) -> Any:
+    """A Spark column: the retention floor of each row's (kafka_topic_id, kafka_partition), or 0."""
+    from pyspark.sql import functions as F  # noqa: N812
+
+    column: Any = None
+    for (topic_id, partition), value in sorted(floors.items()):
+        on = (F.col("kafka_topic_id") == F.lit(topic_id)) & (
+            F.col("kafka_partition") == F.lit(partition)
+        )
+        column = F.when(on, F.lit(value)) if column is None else column.when(on, F.lit(value))
+    return F.lit(0) if column is None else column.otherwise(F.lit(0))
+
+
+def retention_floors(properties: Mapping[str, str]) -> dict[FloorKey, int]:
+    """Every retention floor a table's properties hold. A malformed one is `TableDriftError`: a
+    floor that cannot be read must never read as no floor."""
+    floors: dict[FloorKey, int] = {}
+    problems: list[str] = []
+    for key, value in sorted(properties.items()):
+        if not key.startswith(RETENTION_FLOOR_PREFIX):
+            continue
+        problem = retention_floor_problem(key, value)
+        if problem is not None:
+            problems.append(problem)
+            continue
+        match = _FLOOR_KEY.fullmatch(key)
+        assert match is not None
+        floors[(match.group(1), int(match.group(2)))] = int(value)
+    if problems:
+        raise TableDriftError("unreadable retention floors: " + "; ".join(problems))
+    return floors
+
+
 # --------------------------------------------------------------- declarations ---
 
 
@@ -276,6 +392,9 @@ class TableDeclaration:
     check_constraints: tuple[CheckConstraint, ...] = ()
     opt_in_features: frozenset[str] = frozenset()
     """Features Q6 forbids by default, accepted only here. Each needs a recorded reason (an ADR)."""
+    retention_floors: bool = False
+    """The table may carry `trace_x.retention_floor.*` properties, validated by the drift check.
+    Only Bronze's topic tables set it (ADR-0052 amendment 1)."""
 
     def __post_init__(self) -> None:
         problems: list[str] = []
@@ -302,6 +421,19 @@ class TableDeclaration:
             problem = _property_problem(key, value, self.opt_in_features)
             if problem is not None:
                 problems.append(problem)
+            if key.startswith(RETENTION_FLOOR_PREFIX):
+                problems.append(
+                    f"{key!r} is state the maintenance tooling commits, never a declared property"
+                )
+        try:
+            if self.deleted_file_retention_hours() > self.log_retention_hours():
+                problems.append(
+                    "delta.deletedFileRetentionDuration exceeds delta.logRetentionDuration: the "
+                    "VACUUM guard reads removals from the retained log, so a removal it cannot see "
+                    "could delete a file a consumer still needs"
+                )
+        except TableDeclarationError as exc:
+            problems.append(str(exc))
         if problems:
             raise TableDeclarationError(f"{self.ref}: " + "; ".join(problems))
 
@@ -327,12 +459,25 @@ class TableDeclaration:
     def allowed_features(self, environment: Environment = Environment.LOCAL) -> frozenset[str]:
         return BASELINE_FEATURES | self.required_features(environment) | self.opt_in_features
 
+    def retention_properties(self) -> dict[str, str]:
+        """The declared retention: the table's own value for each property, else
+        `DECLARED_RETENTION`."""
+        return {key: self.properties.get(key, value) for key, value in DECLARED_RETENTION.items()}
+
+    def log_retention_hours(self) -> int:
+        return retention_hours(self.retention_properties()[LOG_RETENTION_PROPERTY])
+
+    def deleted_file_retention_hours(self) -> int:
+        return retention_hours(self.retention_properties()[DELETED_FILE_RETENTION_PROPERTY])
+
     def creation_properties(self) -> dict[str, str]:
-        """Declared properties plus one `delta.constraints.<name>` per CHECK constraint.
+        """Declared properties, the declared retention, and one `delta.constraints.<name>` per CHECK
+        constraint.
 
         Observed: the builder accepts constraints at creation, in the same single commit,
         and refuses a violating write afterwards."""
         return {
+            **self.retention_properties(),
             **self.properties,
             **{CONSTRAINT_PROPERTY_PREFIX + c.name: c.expression for c in self.check_constraints},
         }
@@ -458,13 +603,21 @@ def check_drift(
         if want != got:
             drifts.append(Drift("constraint", f"{name!r} is {got!r}, declared {want!r}"))
 
-    live_properties = {
-        key: value
-        for key, value in live.properties.items()
-        if not key.startswith(CONSTRAINT_PROPERTY_PREFIX)
-    }
-    for key in sorted(declaration.properties.keys() | live_properties.keys()):
-        want, got = declaration.properties.get(key), live_properties.get(key)
+    live_properties: dict[str, str] = {}
+    for key, value in live.properties.items():
+        if key.startswith(CONSTRAINT_PROPERTY_PREFIX):
+            continue
+        if declaration.retention_floors and key.startswith(RETENTION_FLOOR_PREFIX):
+            problem = retention_floor_problem(key, value)
+            if problem is not None:
+                drifts.append(Drift("property", problem))
+            continue
+        live_properties[key] = value
+    declared = {**declaration.retention_properties(), **declaration.properties}
+    for key in sorted(declared.keys() | live_properties.keys()):
+        want = declared.get(key)
+        # An absent retention property is Delta's default, which is observed to be the declared one.
+        got = live_properties.get(key, DELTA_DEFAULT_RETENTION.get(key))
         if want != got:
             drifts.append(Drift("property", f"{key!r} is {got!r}, declared {want!r}"))
 
@@ -526,6 +679,23 @@ class SnapshotFacts:
     table_id: str
     version: int
     transactions: Mapping[str, int]
+    properties: Mapping[str, str] = field(default_factory=dict)
+    """The table's properties at `version`, from the same snapshot (retention floors included)."""
+
+
+def _snapshot(spark: SparkSession, path: Path) -> Any:
+    session: Any = spark
+    jvm: Any = session.sparkContext._jvm
+    delta_log = jvm.org.apache.spark.sql.delta.DeltaLog.forTable(session._jsparkSession, str(path))
+    return delta_log.update(False, jvm.scala.Option.empty(), jvm.scala.Option.empty())
+
+
+def _configuration(spark: SparkSession, snapshot: Any) -> dict[str, str]:
+    session: Any = spark
+    jvm: Any = session.sparkContext._jvm
+    configuration = snapshot.metadata().configuration()
+    keys = jvm.scala.jdk.javaapi.CollectionConverters.asJava(configuration.keys())
+    return {str(key): str(configuration.apply(key)) for key in keys}
 
 
 def snapshot_facts(spark: SparkSession, path: Path) -> SnapshotFacts | None:
@@ -537,10 +707,7 @@ def snapshot_facts(spark: SparkSession, path: Path) -> SnapshotFacts | None:
 
     if not DeltaTable.isDeltaTable(spark, str(path)):
         return None
-    session: Any = spark
-    jvm: Any = session.sparkContext._jvm
-    delta_log = jvm.org.apache.spark.sql.delta.DeltaLog.forTable(session._jsparkSession, str(path))
-    snapshot = delta_log.update(False, jvm.scala.Option.empty(), jvm.scala.Option.empty())
+    snapshot = _snapshot(spark, path)
     transactions: dict[str, int] = {}
     iterator = snapshot.setTransactions().iterator()
     while iterator.hasNext():
@@ -550,6 +717,7 @@ def snapshot_facts(spark: SparkSession, path: Path) -> SnapshotFacts | None:
         table_id=str(snapshot.metadata().id()),
         version=int(snapshot.version()),
         transactions=transactions,
+        properties=_configuration(spark, snapshot),
     )
 
 
@@ -756,17 +924,41 @@ LOSS_TOLERANT_SOURCE_OPTIONS: Final[Mapping[str, tuple[str, str]]] = {
 }
 """Reader options with the same purpose (option names are case-insensitive)."""
 
+RETENTION_SOURCE_OPTIONS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "ignoreDeletes": (
+            "the user's decision (2026-09-15, ADR-0052 amendment 1): Bronze's retention floor "
+            "deletes whole files below the floor in removes-only commits, which a Delta source "
+            "otherwise stops at. Observed on Delta 4.0.1: the option passes only a removes-only "
+            "commit -- a rewrite still fails with DELTA_SOURCE_TABLE_IGNORE_CHANGES -- and a "
+            "delete never retracts the add actions a reader has not reached, so no appended row "
+            "is skipped"
+        ),
+    }
+)
+"""The only loss-tolerant reader option ever permitted, and only on a Bronze topic table: the
+checkpoint convention decides which sources are Bronze, never a caller."""
+
 
 def require_no_loss_tolerance(
-    *, session_conf: Mapping[str, str], source_options: Mapping[str, str]
+    *,
+    session_conf: Mapping[str, str],
+    source_options: Mapping[str, str],
+    retention_source: bool = False,
 ) -> None:
-    """Refuse any setting whose job is to let a streaming source skip data it cannot read."""
+    """Refuse any setting whose job is to let a streaming source skip data it cannot read.
+
+    `retention_source` (a Bronze topic table, decided by `OpenedCheckpoint.delta_source`) permits
+    `RETENTION_SOURCE_OPTIONS` and nothing else."""
     problems: list[str] = []
     for key, (refused, why) in LOSS_TOLERANT_SESSION_CONF.items():
         if session_conf.get(key, "").strip().lower() == refused:
             problems.append(f"session {key}={refused}: {why}")
     options = {key.lower(): value for key, value in source_options.items()}
+    permitted = {key.lower() for key in RETENTION_SOURCE_OPTIONS} if retention_source else set()
     for key, (refused, why) in LOSS_TOLERANT_SOURCE_OPTIONS.items():
+        if key.lower() in permitted:
+            continue
         if options.get(key.lower(), "").strip().lower() == refused:
             problems.append(f"source option {key}={refused}: {why}")
     if problems:
@@ -809,6 +1001,95 @@ def retained_log(table_path: Path) -> RetainedLog | None:
             break
         earliest = version
     return RetainedLog(earliest=earliest, latest=versions[-1])
+
+
+@dataclass(frozen=True, slots=True)
+class LoggedAdd:
+    """A data file as the commit that added it recorded it."""
+
+    version: int
+    data_change: bool
+
+
+def retained_commit_actions(table_path: Path) -> Iterator[tuple[int, dict[str, Any]]]:
+    """(version, action) for every action of the retained contiguous run of JSON commits."""
+    retained = retained_log(table_path)
+    if retained is None:
+        return
+    for version in range(retained.earliest, retained.latest + 1):
+        path = table_path / "_delta_log" / f"{version:020d}.json"
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                yield version, json.loads(line)
+
+
+def retained_adds(table_path: Path) -> dict[str, LoggedAdd]:
+    """Every data file an `add` action in the retained log names, by its log path, at its latest
+    add."""
+    adds: dict[str, LoggedAdd] = {}
+    for version, action in retained_commit_actions(table_path):
+        add = action.get("add")
+        if isinstance(add, dict):
+            adds[str(add["path"])] = LoggedAdd(version, bool(add.get("dataChange", True)))
+    return adds
+
+
+def latest_removal_version(table_path: Path) -> int | None:
+    """The newest retained commit that removed a data file, with or without `dataChange`: VACUUM
+    deletes removed files, and a reader positioned before the removal still reads them."""
+    versions = [v for v, action in retained_commit_actions(table_path) if "remove" in action]
+    return max(versions) if versions else None
+
+
+@dataclass(frozen=True, slots=True)
+class RetentionStart:
+    """Where a new streaming reader of a table with retention floors must start."""
+
+    snapshot_version: int
+    floors: Mapping[FloorKey, int]
+    start_version: int
+    """0 without floors. With floors, the lowest version that added a data file still live at
+    `snapshot_version` (or `snapshot_version` when none is live): every commit from it onward is
+    retained, and every row below it was retired and removed."""
+
+
+def retention_start(spark: SparkSession, path: Path) -> RetentionStart:
+    """The start a new streaming reader of `path` needs, from one snapshot; or
+    `StreamingSourceRetentionError` when no start delivers exactly the unretired rows.
+
+    Observed (ADR-0052 amendment 1, O5): from version 0 a reader re-delivers deleted rows before
+    VACUUM and fails after it; from the first live version it delivers exactly the live rows."""
+    from pyspark.sql import DataFrame
+
+    snapshot = _snapshot(spark, path)
+    version = int(snapshot.version())
+    floors = retention_floors(_configuration(spark, snapshot))
+    if not floors:
+        return RetentionStart(version, MappingProxyType({}), 0)
+    live = [
+        str(row["path"])
+        for row in DataFrame(snapshot.allFiles().toDF(), cast(Any, spark)).select("path").collect()
+    ]
+    adds = retained_adds(path)
+    problems: list[str] = []
+    versions: list[int] = []
+    for file in sorted(live):
+        logged = adds.get(file)
+        if logged is None:
+            problems.append(f"{file} was added before the retained log, so no start reads it")
+        elif not logged.data_change:
+            problems.append(
+                f"{file} was written by a rewrite (dataChange=false, such as OPTIMIZE), which a "
+                f"streaming reader never delivers"
+            )
+        else:
+            versions.append(logged.version)
+    if problems:
+        raise StreamingSourceRetentionError(
+            f"{path}: no streaming start delivers exactly the unretired rows: "
+            + "; ".join(problems)
+        )
+    return RetentionStart(version, MappingProxyType(dict(floors)), min(versions, default=version))
 
 
 @dataclass(frozen=True, slots=True)
@@ -1099,14 +1380,20 @@ __all__ = [
     "CHECK_CONSTRAINT_FEATURES",
     "CLUSTERING_FEATURES",
     "CONSTRAINT_PROPERTY_PREFIX",
+    "DECLARED_RETENTION",
+    "DELETED_FILE_RETENTION_PROPERTY",
+    "DELTA_DEFAULT_RETENTION",
     "FEATURE_ENABLING_PROPERTIES",
     "FORBIDDEN_BY_DEFAULT",
+    "LOG_RETENTION_PROPERTY",
     "LOSS_TOLERANT_SESSION_CONF",
     "LOSS_TOLERANT_SOURCE_OPTIONS",
     "PROVENANCE_FORMAT",
     "PROVENANCE_MARKER",
     "READER_FEATURES",
     "REFUSED_PROPERTY_PATTERNS",
+    "RETENTION_FLOOR_PREFIX",
+    "RETENTION_SOURCE_OPTIONS",
     "SESSION_PROPERTY_DEFAULTS_PREFIX",
     "UNMEASURABLE_ROOTS",
     "USER_METADATA_CONF",
@@ -1115,8 +1402,11 @@ __all__ = [
     "DeltaSourceOffset",
     "Drift",
     "Environment",
+    "FloorKey",
     "LiveTable",
+    "LoggedAdd",
     "RetainedLog",
+    "RetentionStart",
     "ScanMeasurement",
     "SnapshotFacts",
     "TableDeclaration",
@@ -1125,13 +1415,22 @@ __all__ = [
     "check_drift",
     "create_table",
     "describe_live_table",
+    "floor_column",
+    "latest_removal_version",
     "measure_scans",
     "protocol_ceiling",
     "require_git_sha",
     "require_no_drift",
     "require_no_loss_tolerance",
     "require_source_retained",
+    "retained_adds",
+    "retained_commit_actions",
     "retained_log",
+    "retention_floor_key",
+    "retention_floor_problem",
+    "retention_floors",
+    "retention_hours",
+    "retention_start",
     "snapshot_facts",
     "stamped_commits",
 ]

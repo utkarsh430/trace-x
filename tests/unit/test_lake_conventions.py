@@ -285,7 +285,8 @@ def test_required_and_allowed_features_are_derived_from_the_declaration() -> Non
     with_check = declare(check_constraints=(CheckConstraint("amount_nonneg", "amount_minor >= 0"),))
     assert with_check.required_features() == {"invariants", "checkConstraints"}
     assert with_check.creation_properties() == {
-        "delta.constraints.amount_nonneg": "amount_minor >= 0"
+        **tables.DECLARED_RETENTION,
+        "delta.constraints.amount_nonneg": "amount_minor >= 0",
     }
     clustered_on_databricks_only = declare(
         layout=TableLayout(partition_columns=("id",)),

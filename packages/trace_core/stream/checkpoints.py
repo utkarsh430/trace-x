@@ -21,6 +21,12 @@ holds Spark's checkpoint files plus `trace-checkpoint.json`, this module's ident
 * A running query reading a Delta source with `failOnDataLoss=false` completes without error
   when the log it needs was cleaned, and never delivers the rows. So Delta sources are read
   only through `OpenedCheckpoint.delta_source`, which forces `failOnDataLoss=true`.
+* A Delta source stops at a commit that removes data files. Bronze's audited retention floor
+  (ADR-0052 amendment 1, the user's decision of 2026-09-15) deletes whole retired files in
+  removes-only commits, so a Bronze topic table -- and no other table -- is always read with
+  `ignoreDeletes=true`. Observed on Delta 4.0.1: that option passes only a removes-only commit (a
+  rewrite still stops the reader) and skips no appended row. Once a Bronze table has retention
+  floors, a new reader must start at its first live version (`tables.retention_start`).
 
 **Starting is refused** (`CheckpointRefusedError`) whenever the checkpoint on disk cannot be
 the one that produced the targets' state: no checkpoint while a target holds the query's
@@ -58,11 +64,16 @@ from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, cast
 
-from trace_core.domain.errors import CheckpointRefusedError, NaiveDatetimeError
+from trace_core.domain.errors import (
+    CheckpointRefusedError,
+    NaiveDatetimeError,
+    StreamingSourceRetentionError,
+)
 from trace_core.observability import get_logger
 from trace_core.stream.lake import AppId, LakeConfig, require_identifier
 from trace_core.stream.tables import (
     LOSS_TOLERANT_SESSION_CONF,
+    RETENTION_SOURCE_OPTIONS,
     CommitProvenance,
     DeltaSourceOffset,
     TableRef,
@@ -70,6 +81,8 @@ from trace_core.stream.tables import (
     require_no_loss_tolerance,
     require_source_retained,
     retained_log,
+    retention_floors,
+    retention_start,
     snapshot_facts,
     stamped_commits,
 )
@@ -886,6 +899,14 @@ def _session_txn(conf: Any, app_id: str, batch_id: int) -> Iterator[None]:
         conf.unset(TXN_VERSION_CONF)
 
 
+def is_bronze_topic_table(ref: TableRef) -> bool:
+    """Whether `ref` is a released topic's Bronze table: the only source granted
+    `RETENTION_SOURCE_OPTIONS`. Decided from Bronze's own registry, never by a caller."""
+    from trace_core.stream.bronze import BRONZE_TOPICS  # bronze imports this module
+
+    return any(spec.table == ref for spec in BRONZE_TOPICS.values())
+
+
 @dataclass(frozen=True, slots=True)
 class OpenedCheckpoint:
     """A checkpoint a query may run from, and the only way it writes its targets."""
@@ -984,7 +1005,11 @@ class OpenedCheckpoint:
         Always `failOnDataLoss=true`; the start position is the one this checkpoint recorded;
         loss-tolerant settings on the reader or the session are refused; and a restart whose
         checkpoint needs log versions the source no longer retains is refused before start.
-        Session settings changed after this call are not seen."""
+        Session settings changed after this call are not seen.
+
+        A Bronze topic table is always read with `ignoreDeletes=true` (a caller may pass only
+        `true`), and, once it has retention floors, a checkpoint that has committed nothing from it
+        must start at its first live version. Every other source refuses `ignoreDeletes`."""
         record = self.identity.sources.get(f"delta:{source}")
         if record is None or record.kind != "delta" or record.table_id is None:
             raise CheckpointRefusedError(f"delta:{source} is not a source of this checkpoint")
@@ -1000,10 +1025,25 @@ class OpenedCheckpoint:
                 f"failOnDataLoss is always true"
             )
         conf: Any = spark.conf
+        bronze = is_bronze_topic_table(source)
         require_no_loss_tolerance(
             session_conf={key: str(conf.get(key, "false")) for key in LOSS_TOLERANT_SESSION_CONF},
             source_options=extra,
+            retention_source=bronze,
         )
+        if bronze:
+            granted = {key.lower() for key in RETENTION_SOURCE_OPTIONS}
+            overridden = sorted(
+                key
+                for key, value in extra.items()
+                if key.lower() in granted and value.strip().lower() != "true"
+            )
+            if overridden:
+                raise CheckpointRefusedError(
+                    f"{overridden} may not be turned off on {source}: a Bronze source is always "
+                    f"read with ignoreDeletes=true, so the retention floor's deletes never stop it"
+                )
+            extra = {key: value for key, value in extra.items() if key.lower() not in granted}
         path = source.local_path(self.lake)
         facts = snapshot_facts(spark, path)
         if facts is None or facts.table_id != record.table_id:
@@ -1031,7 +1071,26 @@ class OpenedCheckpoint:
                     table_id=facts.table_id,
                     retained=retained_log(path),
                 )
+        if (
+            bronze
+            and SparkProgress.read(self.directory).last_committed is None
+            and record.start.startswith("version:")
+            and retention_floors(facts.properties)
+        ):
+            requested = int(record.start.split(":", 1)[1])
+            needed = retention_start(spark, path).start_version
+            if requested != needed:
+                raise StreamingSourceRetentionError(
+                    f"checkpoint v{self.identity.version} of {self.identity.query!r} starts "
+                    f"{source} at version {requested}, but {source} has retention floors, so a "
+                    f"new reader must start at version {needed}, the first version whose files "
+                    f"are all live: an earlier start re-delivers retired rows, or fails once they "
+                    f"are vacuumed, and a later one skips unretired rows. Reset it with "
+                    f"trace_core.stream.maintenance.reset_silver and a recorded reason."
+                )
         reader: Any = spark.readStream.format("delta").option("failOnDataLoss", "true")
+        if bronze:
+            reader = reader.option("ignoreDeletes", "true")
         if record.start.startswith("version:"):
             reader = reader.option("startingVersion", record.start.split(":", 1)[1])
         for key, value in sorted(extra.items()):
@@ -1309,6 +1368,7 @@ __all__ = [
     "TargetRecord",
     "committed_source_offsets",
     "decide_start",
+    "is_bronze_topic_table",
     "kafka_consumed_end",
     "open_checkpoint",
     "parse_batch_offsets",

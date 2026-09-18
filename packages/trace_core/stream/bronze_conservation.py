@@ -22,6 +22,14 @@ The check backing `P3.kafka-ingest`. For each partition of a Bronze query's topi
 - **Conserved** when all of that holds, no checkpoint problem was found, and, when the caller gives
   the broker's topic id, it is the one the current version recorded: a recreated topic's offsets
   are not the offsets the checkpoint consumed.
+- **Retired offsets** (ADR-0052 amendment 1). An offset below its (topic id, partition) retention
+  floor is RETIRED from the commit that set the floor, whether its row still exists or not: it is
+  never missing, never a duplicate and never out of range, and a row still present below the floor
+  is only counted (`retired_present`). The floors come from the same snapshot as the rows. Offsets
+  skipped between versions stay reported: retirement never launders a loss, and maintenance refuses
+  to advance a floor while conservation fails.
+- **Interrupted maintenance.** A Bronze table whose only drift is `delta.appendOnly=false` was left
+  mid-maintenance. It is judged, and never conserved, until maintenance runs again.
 
 Counting distinct offsets inside the range is enough to prove completeness: offsets on these topics
 are contiguous, because every producer is idempotent and none is transactional (ADR-0047) and no
@@ -44,7 +52,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from trace_core.domain.errors import CheckpointRefusedError, LakeContractError
 from trace_core.observability import get_logger
@@ -65,7 +73,17 @@ from trace_core.stream.checkpoints import (
     read_initial_offsets,
 )
 from trace_core.stream.lake import LakeConfig
-from trace_core.stream.tables import describe_live_table, require_no_drift, snapshot_facts
+from trace_core.stream.tables import (
+    Drift,
+    FloorKey,
+    LiveTable,
+    TableDeclaration,
+    check_drift,
+    describe_live_table,
+    require_no_drift,
+    retention_floors,
+    snapshot_facts,
+)
 
 if TYPE_CHECKING:
     from pyspark.sql import SparkSession
@@ -220,6 +238,9 @@ class PartitionRows:
     current_out_of_range: int
     current_other_topic_id: int = 0
     """Rows the checkpoint under judgement wrote under a topic id other than the one it recorded."""
+    retired_present: int = 0
+    """Rows below their (topic id, partition) retention floor, under any checkpoint. Every other
+    count excludes them."""
 
 
 Record = tuple[int, int, str, str]
@@ -232,14 +253,20 @@ def partition_rows_from_records(
     checkpoint_id: str,
     ranges: Mapping[int, OffsetRange],
     topic_id: str | None,
+    floors: Mapping[FloorKey, int] = MappingProxyType({}),
 ) -> dict[int, PartitionRows]:
     """The reference implementation of `read_partition_rows`, over `Record` tuples. Used by tests
     to hold the Spark aggregation to the definition."""
     by_partition: dict[int, list[tuple[int, str, str]]] = {}
+    retired: dict[int, int] = {}
     for partition, offset, writer, row_topic_id in records:
+        if offset < floors.get((row_topic_id, partition), 0):
+            retired[partition] = retired.get(partition, 0) + 1
+            continue
         by_partition.setdefault(partition, []).append((offset, writer, row_topic_id))
     result: dict[int, PartitionRows] = {}
-    for partition, items in by_partition.items():
+    for partition in sorted(set(by_partition) | set(retired)):
+        items = by_partition.get(partition, [])
         expected = ranges.get(partition)
 
         def inside(offset: int, expected: OffsetRange | None = expected) -> bool:
@@ -257,6 +284,7 @@ def partition_rows_from_records(
             current_other_topic_id=0
             if topic_id is None
             else sum(1 for _, row_topic_id in current if row_topic_id != topic_id),
+            retired_present=retired.get(partition, 0),
         )
     return result
 
@@ -275,6 +303,11 @@ class PartitionVerdict:
     """Offsets no checkpoint version read, between versions of one topic id."""
     other_topic_id: int = 0
     """Rows this checkpoint wrote under a topic id other than the one it recorded reading."""
+    floor: int = 0
+    """The retention floor of (the recorded topic id, this partition); offsets below it are
+    retired."""
+    retired_present: int = 0
+    """Rows below their floor that are still present (retired, not yet deleted)."""
 
     @property
     def conserved(self) -> bool:
@@ -308,15 +341,24 @@ class ConservationReport:
     """The earlier checkpoint versions of the query, each judged against its own range."""
     broker_topic_id: str | None = None
     """The broker's id for the topic when this was judged; None when it was not compared."""
+    floors: Mapping[FloorKey, int] = field(default_factory=lambda: MappingProxyType({}))
+    """The retention floors read from the same snapshot as the rows."""
+    append_only_lifted: bool = False
+    """The table's only drift is `delta.appendOnly=false`: maintenance was interrupted."""
 
     @property
-    def conserved(self) -> bool:
+    def conserved_rows(self) -> bool:
+        """Every row judgement holds, whatever the table's appendOnly state."""
         return (
             not self.problems
             and self.foreign_topic_rows == 0
             and all(verdict.conserved for verdict in self.partitions)
-            and all(report.conserved for report in self.superseded)
+            and all(report.conserved_rows for report in self.superseded)
         )
+
+    @property
+    def conserved(self) -> bool:
+        return self.conserved_rows and not self.append_only_lifted
 
     @property
     def started_after_trim(self) -> bool:
@@ -337,6 +379,8 @@ class ConservationReport:
             "broker_topic_id": self.broker_topic_id,
             "through_batch": self.consumed.through_batch,
             "conserved": self.conserved,
+            "append_only_lifted": self.append_only_lifted,
+            "floors": {f"{tid}.{p}": floor for (tid, p), floor in sorted(self.floors.items())},
             "started_after_trim": self.started_after_trim,
             "foreign_topic_rows": self.foreign_topic_rows,
             "problems": list(self.problems),
@@ -348,6 +392,8 @@ class ConservationReport:
                     "out_of_range": v.out_of_range,
                     "skipped": [[r.start, r.end] for r in self.skipped.get(v.partition, ())],
                     "other_topic_id": v.other_topic_id,
+                    "floor": v.floor,
+                    "retired_present": v.retired_present,
                 }
                 for v in self.partitions
             },
@@ -366,8 +412,11 @@ def judge_conservation(
     topic_id: str | None = None,
     superseded: Sequence[ConservationReport] = (),
     broker_topic_id: str | None = None,
+    floors: Mapping[FloorKey, int] = MappingProxyType({}),
+    append_only_lifted: bool = False,
 ) -> ConservationReport:
-    """Judge one checkpoint version's rows against its consumed range.
+    """Judge one checkpoint version's rows against its consumed range, offsets below the retention
+    floors retired.
 
     With `superseded` -- the query's earlier versions, each judged alone, in version order -- also
     judge the offsets between versions that no version read."""
@@ -392,15 +441,19 @@ def judge_conservation(
     for partition in sorted(set(consumed.ranges) | set(rows) | set(skipped)):
         expected = consumed.ranges.get(partition)
         held = rows.get(partition, PartitionRows(partition, 0, 0, 0, 0, 0))
+        floor = 0 if topic_id is None else floors.get((topic_id, partition), 0)
+        retained = 0 if expected is None else max(0, expected.end - max(expected.start, floor))
         verdicts.append(
             PartitionVerdict(
                 partition=partition,
                 expected=expected,
-                missing=0 if expected is None else expected.length - held.current_in_range_distinct,
+                missing=0 if expected is None else retained - held.current_in_range_distinct,
                 duplicates=held.rows - held.distinct_offsets,
                 out_of_range=held.current_out_of_range,
                 skipped=sum(r.length for r in skipped.get(partition, ())),
                 other_topic_id=held.current_other_topic_id,
+                floor=floor,
+                retired_present=held.retired_present,
             )
         )
     return ConservationReport(
@@ -417,7 +470,23 @@ def judge_conservation(
         first_starts=MappingProxyType(first_starts),
         superseded=tuple(superseded),
         broker_topic_id=broker_topic_id,
+        floors=MappingProxyType(dict(floors)),
+        append_only_lifted=append_only_lifted,
     )
+
+
+APPEND_ONLY_LIFTED: Final = Drift("property", "'delta.appendOnly' is 'false', declared 'true'")
+"""The drift maintenance leaves while it deletes (ADR-0052 amendment 1, §4)."""
+
+
+def append_only_lifted(declaration: TableDeclaration, live: LiveTable) -> bool:
+    """True when the table's only drift is the appendOnly maintenance lifts; `TableDriftError` for
+    any other drift."""
+    drifts = check_drift(declaration, live)
+    if drifts == (APPEND_ONLY_LIFTED,):
+        return True
+    require_no_drift(declaration, live)
+    return False
 
 
 # --------------------------------------------------------------------- Spark ---
@@ -432,12 +501,18 @@ def read_partition_rows(
     checkpoint_id: str,
     ranges: Mapping[int, OffsetRange],
     topic_id: str | None,
+    floors: Mapping[FloorKey, int] = MappingProxyType({}),
 ) -> tuple[dict[int, PartitionRows], int]:
     """Per-partition statistics of a Bronze table at `version`, and its rows of another topic."""
     from pyspark.sql import functions as F  # noqa: N812
 
     frame = spark.read.format("delta").option("versionAsOf", str(version)).load(str(path))
     partition, offset = F.col("kafka_partition"), F.col("kafka_offset")
+    floor_of: Any = None
+    for (floor_topic_id, number), value in sorted(floors.items()):
+        on = (F.col("kafka_topic_id") == F.lit(floor_topic_id)) & (partition == F.lit(number))
+        floor_of = F.when(on, F.lit(value)) if floor_of is None else floor_of.when(on, F.lit(value))
+    kept = offset >= (F.lit(0) if floor_of is None else floor_of.otherwise(F.lit(0)))
     in_range: Any = None
     for number, expected in sorted(ranges.items()):
         condition = (offset >= F.lit(expected.start)) & (offset < F.lit(expected.end))
@@ -454,12 +529,19 @@ def read_partition_rows(
         frame.where(F.col("kafka_topic") == F.lit(topic))
         .groupBy(partition)
         .agg(
-            F.count(F.lit(1)).alias("rows"),
-            F.countDistinct(F.col("kafka_topic_id"), offset).alias("distinct_offsets"),
-            F.sum(F.when(current, 1).otherwise(0)).alias("current_rows"),
-            F.countDistinct(F.when(current & inside, offset)).alias("current_in_range_distinct"),
-            F.sum(F.when(current & ~inside, 1).otherwise(0)).alias("current_out_of_range"),
-            F.sum(F.when(current & other_id, 1).otherwise(0)).alias("current_other_topic_id"),
+            F.sum(F.when(kept, 1).otherwise(0)).alias("rows"),
+            F.countDistinct(F.when(kept, F.col("kafka_topic_id")), F.when(kept, offset)).alias(
+                "distinct_offsets"
+            ),
+            F.sum(F.when(current & kept, 1).otherwise(0)).alias("current_rows"),
+            F.countDistinct(F.when(current & inside & kept, offset)).alias(
+                "current_in_range_distinct"
+            ),
+            F.sum(F.when(current & ~inside & kept, 1).otherwise(0)).alias("current_out_of_range"),
+            F.sum(F.when(current & other_id & kept, 1).otherwise(0)).alias(
+                "current_other_topic_id"
+            ),
+            F.sum(F.when(~kept, 1).otherwise(0)).alias("retired_present"),
         )
         .collect()
     )
@@ -472,6 +554,7 @@ def read_partition_rows(
             current_in_range_distinct=int(row["current_in_range_distinct"]),
             current_out_of_range=int(row["current_out_of_range"]),
             current_other_topic_id=int(row["current_other_topic_id"]),
+            retired_present=int(row["retired_present"]),
         )
         for row in stats
     }, int(foreign)
@@ -509,7 +592,8 @@ def check_conservation(
     )
     if facts is None:
         raise LakeContractError(f"{spec.table} does not exist at {path}")
-    require_no_drift(
+    floors = retention_floors(facts.properties)
+    lifted = append_only_lifted(
         bronze_declaration(topic), describe_live_table(spark, spec.table.path_identifier(lake))
     )
     reports: list[ConservationReport] = []
@@ -556,6 +640,7 @@ def check_conservation(
             checkpoint_id=identity.app_id,
             ranges=consumed.ranges,
             topic_id=topic_id,
+            floors=floors,
         )
         reports.append(
             judge_conservation(
@@ -568,6 +653,8 @@ def check_conservation(
                 topic_id=topic_id,
                 superseded=tuple(reports) if current else (),
                 broker_topic_id=broker_topic_id if current else None,
+                floors=floors,
+                append_only_lifted=lifted if current else False,
             )
         )
     report = reports[-1]
@@ -578,6 +665,7 @@ def check_conservation(
 
 
 __all__ = [
+    "APPEND_ONLY_LIFTED",
     "INITIAL_OFFSETS_PARTS",
     "ConservationReport",
     "ConsumedRanges",
@@ -586,6 +674,7 @@ __all__ = [
     "PartitionVerdict",
     "Record",
     "VersionConsumption",
+    "append_only_lifted",
     "check_conservation",
     "consumed_ranges",
     "judge_conservation",
