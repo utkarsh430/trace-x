@@ -25,7 +25,11 @@ run_gate() {           # run_gate <name> <command...>
   if [[ $rc -eq 0 ]]; then
     RESULTS+=("PASS|$name|"); ((PASS++))
   else
-    RESULTS+=("FAIL|$name|$(echo "$out" | tail -5 | tr '\n' ' ')"); ((FAIL++))
+    # The whole output is kept: five lines of a pytest tail rarely name the failing test, and a
+    # failure that does not reproduce is otherwise undiagnosable.
+    local log="${TMPDIR:-/tmp}/trace-x-verify-${name}.log"
+    printf '%s\n' "$out" > "$log"
+    RESULTS+=("FAIL|$name|$(echo "$out" | tail -5 | tr '\n' ' ') [full output: $log]"); ((FAIL++))
   fi
 }
 

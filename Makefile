@@ -83,7 +83,9 @@ up: ## Start the core profile (postgres, redis, gateway) and apply migrations
 
 up-streaming: ## Start core + streaming (kafka, spark) -- needs ~10 GB free
 	@$(MAKE) --no-print-directory up
-	@$(COMPOSE) --profile streaming up -d --wait
+	@# core is named too: `worker` depends on `postgres`, and compose refuses a project whose
+	@# dependency is outside the active profiles ("depends on undefined service").
+	@$(COMPOSE) --profile core --profile streaming up -d --wait
 
 .PHONY: kafka-topics kafka-topics-verify kafka-topics-budget
 
