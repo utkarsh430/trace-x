@@ -79,9 +79,36 @@ planning surfaced recorded under *What Phase 3 planning found in Phase 2's artef
   - Redis hydration: 11 passed in 247.36 s.
 
   Recorded in `tests/acceptance/status.json` with both commands (D22).
-- **Found, not fixed: D20** (gateway unready on fresh volumes) and D21 in *KNOWN TECHNICAL DEBT*.
-- **Next.** `PHASE3_HANDOFF.md` §7 step 7 (branch deletion, after this is on origin), then §7 C,
-  starting with `P3.checkpoint-resume` on the landed code.
+- **Docker Desktop memory lowered to 10 GiB.** It was 17.5 GiB of the Mac's 18. Spark runs on the host,
+  and 10 GiB fits core (about 2.7 GB) plus a throwaway broker (1.25 GB) with headroom. A leftover broker,
+  `tracex-kafka-agent-0c43474e`, was removed. It came from the killed competing session: a SIGKILL skips
+  the fixture's `finally`, so this was not a fixture defect.
+- **`P3.checkpoint-resume` PASS at `1d22e75`.**
+  - Run as `pytest -m chaos tests/chaos/test_spark_resume.py`, **one session**: 7 passed, 0 skipped, in
+    1001.12 s.
+  - Seed 20260915, test unmodified. The earlier session's `LATE_BY` 20→60 edit was not needed. This
+    replaces the evidence that passed only in five `-k` splits.
+- **`P3.medallion` PASS at `1d22e75`.**
+  - The command was repointed per the handoff §7 step 10: it had named a test file that never existed.
+  - Seven sessions, one JVM per file:
+    - Bronze Kafka 8, Silver Kafka 1 and resource-bounds Kafka 2;
+    - the parity end-to-end run 1 (315.46 s: real broker, then Bronze, Silver and Gold);
+    - Bronze tables 5, Silver tables 12 and Gold tables 7.
+  - All 23 declared tables are produced and checked. Three Silver tables are produced only from
+    synthetic Bronze rows (D23).
+  - One JVM per file is required: the same three stream files in one session hit the GC death spiral
+    earlier on 2026-09-18.
+- **Found, not fixed:** D20 (gateway unready on fresh volumes), D21 and D23, in *KNOWN TECHNICAL DEBT*.
+- **Branches.** §7 step 7 is done: the three leftover remote branches were deleted after the landing was
+  on origin.
+- **Next.**
+  1. D20 fix, which the measured parity run and the load gate need.
+  2. `P3.feature-parity`, measured.
+  3. The Phase 2 load-gate re-run.
+  4. Step 13 (`P3.stream-throughput`).
+  5. Step 14 (`P3.layout-benchmark`).
+  6. First GitHub CI runs.
+  7. The exit review.
 
 ### Phase 3 — HANDOFF (2026-09-18; continuing on a Mac Pro with Docker).
 
@@ -322,8 +349,8 @@ afterwards as `trace_eval`: known fraud triaged at **37.3%** against **0.0%** fo
 `make verify` 11/0/0 on the Mac. Before it, `aca29b0` (the 2026-09-16 handoff) was the last gated
 commit. `9bd99b6` was committed on h3noyce under a user-approved exception with verify 10/11 (no
 Docker; `docs/PHASE3_HANDOFF.md` §4).
-`tests/acceptance/status.json` records `last_verified_commit` `86d69e7`, the commit the latest evidence
-(`P3.resource-bounds`, 2026-09-18) was measured on.
+`tests/acceptance/status.json` records `last_verified_commit` `1d22e75`, the commit the latest evidence
+(`P3.checkpoint-resume` and `P3.medallion`, 2026-09-18) was measured on.
 
 Phase 2's acceptance evidence was recorded at `c86c6cd` (`run_id: load-20260913-gateway-c86c6cdd`).
 The CI fix described under CURRENT STATUS is the commit that immediately follows this file; it changes
@@ -1912,6 +1939,7 @@ both reports.
 | **D20** | **The gateway is permanently unready after `make up` on fresh volumes.** `make up` waits on the gateway's liveness check, then runs `make migrate`. The gateway's first connections as `trace_app` fail authentication because the role does not exist yet, and its pool closes and never reopens (`/readyz`: `postgres: unreachable: PoolClosed`). Reproduced on a clean environment on 2026-09-18; a gateway restart clears it | Anything driving the gateway after a fresh `make up` (parity, load gate) sees 5xx or refusals until it is restarted. The workaround is in `PHASE3_HANDOFF.md` §7 A.4 | Before the measured parity run and the load-gate re-run: the pool must recover once the role exists, or `make up` must migrate before the gateway starts |
 | **D21** | **ADR-0052 Amendment 1 Risks 1–3 are open.** (1) A DELETE losing to a concurrent append is inferred, never constructed. (2) Gold is refused by VACUUM, not vacuumed, so its disk use is unbounded locally. (3) The Spark half of the coverage rule is proved with a stub ledger | Each is an untested path or an unbounded local resource | Phase 3 exit review decides: build the test or accept with the ADR |
 | ~~D22~~ | **Resolved 2026-09-18: the capability's evidence now names both commands.** `P3.resource-bounds`'s command does not select the 14 Step 11 stream tests. `tests/stream/test_resource_bounds_maintenance.py` is marked `stream` only, so the crash, reset, VACUUM and race tests run outside `-m 'unit or integration'` | The recorded command under-reports what the capability rests on | done |
+| **D23** | **Three Silver tables are never produced from real Kafka input.** `silver.tx_raw_v1`, `silver.device_events_v1` and `silver.investigation_requested_v1` are built and checked only from hand-built Bronze rows (`tests/stream/test_silver_tables.py`). Their Bronze tables are produced from a real broker | A Kafka-to-Silver defect specific to those topics would not be caught end-to-end | Phase 3 exit review decides: add a Kafka-driven Silver test for them, or accept |
 | **D14** | CI provisions no Redis or PostgreSQL, so the Redis conformance suite, the Redis store tests, the hole-ledger tests and the other service-backed integration tests skip there, loudly. Their evidence is local runs | CI cannot catch a regression in the online store or the ledger | Before Phase 3 exit: provision the services in `test-integration.yml`, or start throwaway containers in those fixtures as the capacity test does |
 
 ---
