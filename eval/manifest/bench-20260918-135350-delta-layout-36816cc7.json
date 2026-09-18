@@ -1,0 +1,924 @@
+{
+  "dataset_digest": "10000000:-10864223966181580214263",
+  "dirty_at_end": false,
+  "dirty_at_start": false,
+  "dirty_worktree": false,
+  "env_lock_digest": "sha256:b8c74723800f0505649f050bba317fd575e6e5dfa295bb45ed073ba5cb650e6f",
+  "finished_at": "2026-09-18T14:00:51.308721+00:00",
+  "generator_digest": "sha256:0475474a7aad67cc953f31ee022e537c972edc02c051560c4f1d563414bfd25d",
+  "generator_spec": {
+    "account_skew": 2.0,
+    "accounts": 200000,
+    "amount_median_minor": 1808,
+    "amount_sigma": 1.05,
+    "currency": "GBP",
+    "days": 60,
+    "decline_share": 0.05,
+    "devices": 240000,
+    "home_device_share": 0.92,
+    "home_ip_share": 0.85,
+    "identity_share": 0.06,
+    "ips": 160000,
+    "merchant_skew": 2.43,
+    "merchants": 14992,
+    "rows": 10000000,
+    "seed": 42,
+    "start_ms": 1767225600000
+  },
+  "generator_version": "delta-layout-gen-v1",
+  "git_commit_sha": "36816cc7a29aabdb1d89624161538749e5b53c43",
+  "git_commit_sha_at_end": "36816cc7a29aabdb1d89624161538749e5b53c43",
+  "machine": {
+    "cpu_count": 12,
+    "lake_disk_free_bytes_at_start": 180226256896,
+    "memory_bytes": 19327352832,
+    "platform": "macOS-26.6.2-arm64-arm-64bit",
+    "processor": "arm"
+  },
+  "measured": {
+    "builds": [
+      {
+        "clustering_columns": [],
+        "content_digest": "10000000:-10864223966181580214263",
+        "file_bytes_max": 104694850,
+        "file_bytes_median": 87054028,
+        "file_bytes_min": 47595754,
+        "min_reader_version": 1,
+        "min_writer_version": 2,
+        "num_files": 8,
+        "optimize_s": null,
+        "partition_columns": [],
+        "partitions": 1,
+        "rows": 10000000,
+        "size_bytes": 674611410,
+        "table_features": [
+          "appendOnly",
+          "invariants"
+        ],
+        "variant": "control",
+        "version": 1,
+        "write_s": 13.721995542000514
+      },
+      {
+        "clustering_columns": [],
+        "content_digest": "10000000:-10864223966181580214263",
+        "file_bytes_max": 104694850,
+        "file_bytes_median": 87054028,
+        "file_bytes_min": 47595754,
+        "min_reader_version": 1,
+        "min_writer_version": 2,
+        "num_files": 8,
+        "optimize_s": 0.6025505829893518,
+        "partition_columns": [],
+        "partitions": 1,
+        "rows": 10000000,
+        "size_bytes": 674611410,
+        "table_features": [
+          "appendOnly",
+          "invariants"
+        ],
+        "variant": "control_compacted",
+        "version": 1,
+        "write_s": 13.88116291697952
+      },
+      {
+        "clustering_columns": [],
+        "content_digest": "10000000:-10864223966181580214263",
+        "file_bytes_max": 11451561,
+        "file_bytes_median": 11397778,
+        "file_bytes_min": 7024,
+        "min_reader_version": 1,
+        "min_writer_version": 7,
+        "num_files": 61,
+        "optimize_s": null,
+        "partition_columns": [
+          "event_date"
+        ],
+        "partitions": 61,
+        "rows": 10000000,
+        "size_bytes": 683545623,
+        "table_features": [
+          "appendOnly",
+          "generatedColumns",
+          "invariants"
+        ],
+        "variant": "partitioned_date",
+        "version": 1,
+        "write_s": 22.531791374989552
+      },
+      {
+        "clustering_columns": [],
+        "content_digest": "10000000:-10864223966181580214263",
+        "file_bytes_max": 11451561,
+        "file_bytes_median": 11397778,
+        "file_bytes_min": 7024,
+        "min_reader_version": 1,
+        "min_writer_version": 7,
+        "num_files": 61,
+        "optimize_s": 22.064862041006563,
+        "partition_columns": [
+          "event_date"
+        ],
+        "partitions": 61,
+        "rows": 10000000,
+        "size_bytes": 683545623,
+        "table_features": [
+          "appendOnly",
+          "generatedColumns",
+          "invariants"
+        ],
+        "variant": "partitioned_date_zorder",
+        "version": 2,
+        "write_s": 22.809188042010646
+      },
+      {
+        "clustering_columns": [],
+        "content_digest": "10000000:-10864223966181580214263",
+        "file_bytes_max": 462188184,
+        "file_bytes_median": 283479748,
+        "file_bytes_min": 15679326,
+        "min_reader_version": 1,
+        "min_writer_version": 2,
+        "num_files": 4,
+        "optimize_s": null,
+        "partition_columns": [
+          "stream"
+        ],
+        "partitions": 4,
+        "rows": 10000000,
+        "size_bytes": 823605867,
+        "table_features": [
+          "appendOnly",
+          "invariants"
+        ],
+        "variant": "partitioned_stream",
+        "version": 1,
+        "write_s": 50.10697720799362
+      },
+      {
+        "clustering_columns": [
+          "account_id",
+          "occurred_at"
+        ],
+        "content_digest": "10000000:-10864223966181580214263",
+        "file_bytes_max": 154007074,
+        "file_bytes_median": 131813367,
+        "file_bytes_min": 130193094,
+        "min_reader_version": 1,
+        "min_writer_version": 7,
+        "num_files": 5,
+        "optimize_s": 27.031650167016778,
+        "partition_columns": [],
+        "partitions": 1,
+        "rows": 10000000,
+        "size_bytes": 692958281,
+        "table_features": [
+          "appendOnly",
+          "clustering",
+          "domainMetadata",
+          "invariants"
+        ],
+        "variant": "liquid",
+        "version": 2,
+        "write_s": 12.797105582983932
+      }
+    ],
+    "executions": 120,
+    "ranking": [
+      {
+        "bytes_score": 0.4985067714813321,
+        "files_score": 2.6000785837153035,
+        "rank": 1,
+        "ratios": {
+          "account_history": {
+            "bytes": 0.4927074031401039,
+            "files": 7.5,
+            "wall": 0.7440789020532481
+          },
+          "context_extract": {
+            "bytes": 1.42389671493398,
+            "files": 7.5,
+            "wall": 1.0567232026928954
+          },
+          "context_lookup": {
+            "bytes": 2.6014699933868792,
+            "files": 3.25,
+            "wall": 1.1468447808264775
+          },
+          "time_range": {
+            "bytes": 0.03383746745018248,
+            "files": 0.25,
+            "wall": 0.45961870360044266
+          }
+        },
+        "variant": "partitioned_date_zorder",
+        "wall_score": 0.8023625362070199
+      },
+      {
+        "bytes_score": 0.4985067714813321,
+        "files_score": 2.6000785837153035,
+        "rank": 2,
+        "ratios": {
+          "account_history": {
+            "bytes": 0.4927074031401039,
+            "files": 7.5,
+            "wall": 0.7904627993730291
+          },
+          "context_extract": {
+            "bytes": 1.42389671493398,
+            "files": 7.5,
+            "wall": 1.0448398791990432
+          },
+          "context_lookup": {
+            "bytes": 2.6014699933868792,
+            "files": 3.25,
+            "wall": 1.1355576533006082
+          },
+          "time_range": {
+            "bytes": 0.03383746745018248,
+            "files": 0.25,
+            "wall": 0.48197487833019825
+          }
+        },
+        "variant": "partitioned_date",
+        "wall_score": 0.8199572152994394
+      },
+      {
+        "bytes_score": 0.8073708282311505,
+        "files_score": 0.3850087860301279,
+        "rank": 3,
+        "ratios": {
+          "account_history": {
+            "bytes": 0.4551724082896643,
+            "files": 0.375,
+            "wall": 0.8469018149226586
+          },
+          "context_extract": {
+            "bytes": 1.0487529289140396,
+            "files": 0.625,
+            "wall": 1.0565128692122756
+          },
+          "context_lookup": {
+            "bytes": 2.1009153403308956,
+            "files": 0.375,
+            "wall": 0.9880505433607464
+          },
+          "time_range": {
+            "bytes": 0.42367666717927366,
+            "files": 0.25,
+            "wall": 0.8212291541376562
+          }
+        },
+        "variant": "liquid",
+        "wall_score": 0.9230768168659238
+      },
+      {
+        "bytes_score": 1.0,
+        "files_score": 1.0,
+        "rank": 4,
+        "ratios": {
+          "account_history": {
+            "bytes": 1.0,
+            "files": 1.0,
+            "wall": 0.993331151112165
+          },
+          "context_extract": {
+            "bytes": 1.0,
+            "files": 1.0,
+            "wall": 0.9770743183247039
+          },
+          "context_lookup": {
+            "bytes": 1.0,
+            "files": 1.0,
+            "wall": 0.9689048086680648
+          },
+          "time_range": {
+            "bytes": 1.0,
+            "files": 1.0,
+            "wall": 0.9232658472149157
+          }
+        },
+        "variant": "control_compacted",
+        "wall_score": 0.9652890593902379
+      },
+      {
+        "bytes_score": 1.0,
+        "files_score": 1.0,
+        "rank": 5,
+        "ratios": {
+          "account_history": {
+            "bytes": 1.0,
+            "files": 1.0,
+            "wall": 1.0
+          },
+          "context_extract": {
+            "bytes": 1.0,
+            "files": 1.0,
+            "wall": 1.0
+          },
+          "context_lookup": {
+            "bytes": 1.0,
+            "files": 1.0,
+            "wall": 1.0
+          },
+          "time_range": {
+            "bytes": 1.0,
+            "files": 1.0,
+            "wall": 1.0
+          }
+        },
+        "variant": "control",
+        "wall_score": 1.0
+      },
+      {
+        "bytes_score": 1.1685013020589892,
+        "files_score": 0.25,
+        "rank": 6,
+        "ratios": {
+          "account_history": {
+            "bytes": 1.220889079627391,
+            "files": 0.5,
+            "wall": 1.0427535157401802
+          },
+          "context_extract": {
+            "bytes": 0.5790065092446217,
+            "files": 0.125,
+            "wall": 0.718328589288203
+          },
+          "context_lookup": {
+            "bytes": 2.160074512865112,
+            "files": 0.125,
+            "wall": 1.0580119276973736
+          },
+          "time_range": {
+            "bytes": 1.220923392448068,
+            "files": 0.5,
+            "wall": 0.9584934095503189
+          }
+        },
+        "variant": "partitioned_stream",
+        "wall_score": 0.9335683662544055
+      }
+    ],
+    "results_digest": "sha256:b49b0ff4a31be529960047ec4e0c18304248cc24872a40e5825640428de49c92",
+    "results_file": "benchmarks/delta_layout/results/bench-20260918-135350-delta-layout-36816cc7.json",
+    "shape_leaders": {
+      "account_history": [
+        "liquid",
+        "partitioned_date_zorder",
+        "partitioned_date",
+        "control_compacted",
+        "control",
+        "partitioned_stream"
+      ],
+      "context_extract": [
+        "partitioned_stream",
+        "control_compacted",
+        "control",
+        "liquid",
+        "partitioned_date",
+        "partitioned_date_zorder"
+      ],
+      "context_lookup": [
+        "control_compacted",
+        "control",
+        "liquid",
+        "partitioned_stream",
+        "partitioned_date",
+        "partitioned_date_zorder"
+      ],
+      "time_range": [
+        "partitioned_date_zorder",
+        "partitioned_date",
+        "liquid",
+        "control_compacted",
+        "control",
+        "partitioned_stream"
+      ]
+    },
+    "staging": {
+      "batches": 10,
+      "digest": "10000000:-10864223966181580214263",
+      "rows": 10000000,
+      "write_s": 54.26600433301064
+    },
+    "summaries": [
+      {
+        "input_bytes": 7678674,
+        "input_records": 340000,
+        "reps": 5,
+        "rows_median": 1,
+        "selected_bytes": 674611410,
+        "selected_files": 8,
+        "shape": "context_lookup",
+        "variant": "control",
+        "wall_max_s": 0.33173520799027756,
+        "wall_median_s": 0.2687500419851858,
+        "wall_min_s": 0.23645795899210498
+      },
+      {
+        "input_bytes": 7678674,
+        "input_records": 340000,
+        "reps": 5,
+        "rows_median": 1,
+        "selected_bytes": 674611410,
+        "selected_files": 8,
+        "shape": "context_lookup",
+        "variant": "control_compacted",
+        "wall_max_s": 0.28271345800021663,
+        "wall_median_s": 0.26039320800919086,
+        "wall_min_s": 0.2406714999815449
+      },
+      {
+        "input_bytes": 19975840,
+        "input_records": 520000,
+        "reps": 5,
+        "rows_median": 1,
+        "selected_bytes": 295991648,
+        "selected_files": 26,
+        "shape": "context_lookup",
+        "variant": "partitioned_date",
+        "wall_max_s": 0.34521199998562224,
+        "wall_median_s": 0.3051811670011375,
+        "wall_min_s": 0.2533546249906067
+      },
+      {
+        "input_bytes": 19975840,
+        "input_records": 520000,
+        "reps": 5,
+        "rows_median": 1,
+        "selected_bytes": 295991648,
+        "selected_files": 26,
+        "shape": "context_lookup",
+        "variant": "partitioned_date_zorder",
+        "wall_max_s": 0.42307587500545196,
+        "wall_median_s": 0.30821458299760707,
+        "wall_min_s": 0.2515368330059573
+      },
+      {
+        "input_bytes": 16586508,
+        "input_records": 1552917,
+        "reps": 5,
+        "rows_median": 1,
+        "selected_bytes": 462188184,
+        "selected_files": 1,
+        "shape": "context_lookup",
+        "variant": "partitioned_stream",
+        "wall_max_s": 0.30226862500421703,
+        "wall_median_s": 0.28434074998949654,
+        "wall_min_s": 0.26731241701054387
+      },
+      {
+        "input_bytes": 16132244,
+        "input_records": 1100000,
+        "reps": 5,
+        "rows_median": 1,
+        "selected_bytes": 407137840,
+        "selected_files": 3,
+        "shape": "context_lookup",
+        "variant": "liquid",
+        "wall_max_s": 0.31124966699280776,
+        "wall_median_s": 0.26553862501168624,
+        "wall_min_s": 0.24844608298735693
+      },
+      {
+        "input_bytes": 79661778,
+        "input_records": 9420000,
+        "reps": 5,
+        "rows_median": 4700000,
+        "selected_bytes": 674611410,
+        "selected_files": 8,
+        "shape": "context_extract",
+        "variant": "control",
+        "wall_max_s": 0.4669072079996113,
+        "wall_median_s": 0.4530472500191536,
+        "wall_min_s": 0.4233998749987222
+      },
+      {
+        "input_bytes": 79661778,
+        "input_records": 9420000,
+        "reps": 5,
+        "rows_median": 4700000,
+        "selected_bytes": 674611410,
+        "selected_files": 8,
+        "shape": "context_extract",
+        "variant": "control_compacted",
+        "wall_max_s": 0.4853690000018105,
+        "wall_median_s": 0.4426608329813462,
+        "wall_min_s": 0.4089971659996081
+      },
+      {
+        "input_bytes": 113430144,
+        "input_records": 9999999,
+        "reps": 5,
+        "rows_median": 4700000,
+        "selected_bytes": 683538599,
+        "selected_files": 60,
+        "shape": "context_extract",
+        "variant": "partitioned_date",
+        "wall_max_s": 0.4955047089897562,
+        "wall_median_s": 0.47336183398147114,
+        "wall_min_s": 0.46369170799152926
+      },
+      {
+        "input_bytes": 113430144,
+        "input_records": 9999999,
+        "reps": 5,
+        "rows_median": 4700000,
+        "selected_bytes": 683538599,
+        "selected_files": 60,
+        "shape": "context_extract",
+        "variant": "partitioned_date_zorder",
+        "wall_max_s": 0.5060238330042921,
+        "wall_median_s": 0.47874554101144895,
+        "wall_min_s": 0.43007508301525377
+      },
+      {
+        "input_bytes": 46124688,
+        "input_records": 4700000,
+        "reps": 5,
+        "rows_median": 4700000,
+        "selected_bytes": 462188184,
+        "selected_files": 1,
+        "shape": "context_extract",
+        "variant": "partitioned_stream",
+        "wall_max_s": 0.3997250419924967,
+        "wall_median_s": 0.32543679198715836,
+        "wall_min_s": 0.31234445798327215
+      },
+      {
+        "input_bytes": 83545523,
+        "input_records": 9460000,
+        "reps": 5,
+        "rows_median": 4700000,
+        "selected_bytes": 692958281,
+        "selected_files": 5,
+        "shape": "context_extract",
+        "variant": "liquid",
+        "wall_max_s": 0.5112658330181148,
+        "wall_median_s": 0.4786502500064671,
+        "wall_min_s": 0.45260200000484474
+      },
+      {
+        "input_bytes": 680452258,
+        "input_records": 10000000,
+        "reps": 5,
+        "rows_median": 67,
+        "selected_bytes": 674611410,
+        "selected_files": 8,
+        "shape": "account_history",
+        "variant": "control",
+        "wall_max_s": 1.3680513750005048,
+        "wall_median_s": 1.1797889169829432,
+        "wall_min_s": 1.1191386659920681
+      },
+      {
+        "input_bytes": 680452258,
+        "input_records": 10000000,
+        "reps": 5,
+        "rows_median": 67,
+        "selected_bytes": 674611410,
+        "selected_files": 8,
+        "shape": "account_history",
+        "variant": "control_compacted",
+        "wall_max_s": 1.353645333001623,
+        "wall_median_s": 1.1719210829760414,
+        "wall_min_s": 1.1484282499877736
+      },
+      {
+        "input_bytes": 335263865,
+        "input_records": 4500005,
+        "reps": 5,
+        "rows_median": 67,
+        "selected_bytes": 683538599,
+        "selected_files": 60,
+        "shape": "account_history",
+        "variant": "partitioned_date",
+        "wall_max_s": 0.9655072090099566,
+        "wall_median_s": 0.9325792499876115,
+        "wall_min_s": 0.667958957987139
+      },
+      {
+        "input_bytes": 335263865,
+        "input_records": 4500005,
+        "reps": 5,
+        "rows_median": 67,
+        "selected_bytes": 683538599,
+        "selected_files": 60,
+        "shape": "account_history",
+        "variant": "partitioned_date_zorder",
+        "wall_max_s": 0.9976494169968646,
+        "wall_median_s": 0.8778560420032591,
+        "wall_min_s": 0.6535543749923818
+      },
+      {
+        "input_bytes": 830756731,
+        "input_records": 10000000,
+        "reps": 5,
+        "rows_median": 67,
+        "selected_bytes": 823605867,
+        "selected_files": 4,
+        "shape": "account_history",
+        "variant": "partitioned_stream",
+        "wall_max_s": 1.2868240830139257,
+        "wall_median_s": 1.2302290410152636,
+        "wall_min_s": 1.1175818339979742
+      },
+      {
+        "input_bytes": 309723093,
+        "input_records": 4308290,
+        "reps": 5,
+        "rows_median": 67,
+        "selected_bytes": 392384113,
+        "selected_files": 3,
+        "shape": "account_history",
+        "variant": "liquid",
+        "wall_max_s": 1.0792026669951156,
+        "wall_median_s": 0.9991653750184923,
+        "wall_min_s": 0.9098516670055687
+      },
+      {
+        "input_bytes": 679715024,
+        "input_records": 10000000,
+        "reps": 5,
+        "rows_median": 166667,
+        "selected_bytes": 674611410,
+        "selected_files": 8,
+        "shape": "time_range",
+        "variant": "control",
+        "wall_max_s": 1.3681272919930052,
+        "wall_median_s": 1.156382625020342,
+        "wall_min_s": 0.7951544579991605
+      },
+      {
+        "input_bytes": 679715024,
+        "input_records": 10000000,
+        "reps": 5,
+        "rows_median": 166667,
+        "selected_bytes": 674611410,
+        "selected_files": 8,
+        "shape": "time_range",
+        "variant": "control_compacted",
+        "wall_max_s": 1.2653047500061803,
+        "wall_median_s": 1.0676485839940142,
+        "wall_min_s": 0.6871808329888154
+      },
+      {
+        "input_bytes": 22999835,
+        "input_records": 333332,
+        "reps": 5,
+        "rows_median": 166667,
+        "selected_bytes": 22773519,
+        "selected_files": 2,
+        "shape": "time_range",
+        "variant": "partitioned_date",
+        "wall_max_s": 0.5781255420006346,
+        "wall_median_s": 0.5573473749973346,
+        "wall_min_s": 0.4957741250109393
+      },
+      {
+        "input_bytes": 22999835,
+        "input_records": 333332,
+        "reps": 5,
+        "rows_median": 166667,
+        "selected_bytes": 22773519,
+        "selected_files": 2,
+        "shape": "time_range",
+        "variant": "partitioned_date_zorder",
+        "wall_max_s": 0.5605802500213031,
+        "wall_median_s": 0.5314950829779264,
+        "wall_min_s": 0.49951462500030175
+      },
+      {
+        "input_bytes": 829879973,
+        "input_records": 10000000,
+        "reps": 5,
+        "rows_median": 166667,
+        "selected_bytes": 823605867,
+        "selected_files": 4,
+        "shape": "time_range",
+        "variant": "partitioned_stream",
+        "wall_max_s": 1.255429874989204,
+        "wall_median_s": 1.1083851250004955,
+        "wall_min_s": 1.070218874985585
+      },
+      {
+        "input_bytes": 287979396,
+        "input_records": 4129709,
+        "reps": 5,
+        "rows_median": 166667,
+        "selected_bytes": 285820441,
+        "selected_files": 2,
+        "shape": "time_range",
+        "variant": "liquid",
+        "wall_max_s": 1.4732782499922905,
+        "wall_median_s": 0.9496551250049379,
+        "wall_min_s": 0.9367665839963593
+      }
+    ]
+  },
+  "mode": "full",
+  "publishable": true,
+  "python_version": "3.12.14",
+  "query_shapes": [
+    {
+      "description": "one transaction's point-in-time subject row, by transaction id",
+      "name": "context_lookup",
+      "projection": [
+        "event_id",
+        "occurred_ms"
+      ],
+      "provenance": "code",
+      "source": "packages/trace_core/stream/gold.py read_context_rows (lines 561-569), transaction_ids given: gold.observations filtered to stream = TRANSACTION and event_id IN (ids), projected to (event_id, occurred_ms)"
+    },
+    {
+      "description": "the full context extract parity and training read",
+      "name": "context_extract",
+      "projection": [
+        "event_id",
+        "occurred_ms"
+      ],
+      "provenance": "code",
+      "source": "packages/trace_core/stream/gold.py read_context_rows (lines 561-569), transaction_ids None, as eval/parity/lake.py gold_context_rows (lines 144-147) calls it: every transaction's subject row, projected to (event_id, occurred_ms)"
+    },
+    {
+      "description": "every observation of one account, all columns",
+      "name": "account_history",
+      "projection": [
+        "stream",
+        "identity_namespace",
+        "event_id",
+        "observation_identity",
+        "occurred_at",
+        "occurred_ms",
+        "account_id",
+        "currency",
+        "amount_minor",
+        "card_id",
+        "device_id",
+        "merchant_id",
+        "ip_id",
+        "merchant_mcc",
+        "merchant_country",
+        "latitude",
+        "longitude",
+        "channel",
+        "authorization_outcome",
+        "verification",
+        "correlation_id",
+        "source_table"
+      ],
+      "provenance": "adr-0015",
+      "source": "ADR-0015 Decision: 'point lookup by account_id'; no reader in the code yet (the investigation tools of Phase 5 are its expected caller)"
+    },
+    {
+      "description": "every observation in one 24-hour event-time window, all columns",
+      "name": "time_range",
+      "projection": [
+        "stream",
+        "identity_namespace",
+        "event_id",
+        "observation_identity",
+        "occurred_at",
+        "occurred_ms",
+        "account_id",
+        "currency",
+        "amount_minor",
+        "card_id",
+        "device_id",
+        "merchant_id",
+        "ip_id",
+        "merchant_mcc",
+        "merchant_country",
+        "latitude",
+        "longitude",
+        "channel",
+        "authorization_outcome",
+        "verification",
+        "correlation_id",
+        "source_table"
+      ],
+      "provenance": "adr-0015",
+      "source": "ADR-0015 Decision: 'time-range scan'; no Gold reader in the code yet (hydration reads the same projection time-ordered, but from Silver: hydration.py observation_frame)"
+    }
+  ],
+  "ranking_rule": "For each shape and variant, take the median over repetitions of bytes read (Spark task input bytes of the scans), of files selected and of wall time. Divide each by the control's median for that shape. A variant's score is the geometric mean of its bytes-read ratios over every shape, each shape weighted equally; lower is better. Ties (scores equal to three decimal places) are broken by the geometric mean of the files-selected ratios, then by the geometric mean of the wall-time ratios. Build and OPTIMIZE cost and protocol features are reported beside the ranking, not folded into it. A zero anywhere is refused, never ranked.",
+  "record_type": "BENCHMARK",
+  "row_count": 10000000,
+  "run_id": "bench-20260918-135350-delta-layout-36816cc7",
+  "seed": 42,
+  "session": {
+    "batch_rows": 1000000,
+    "driver_memory": "4g",
+    "master": "local[4]",
+    "optimize_max_file_size": 134217728,
+    "reps": 5,
+    "shuffle_partitions": 4
+  },
+  "spark_conf": {
+    "parquet.block.size": "<unset: parquet default 134217728>",
+    "spark.databricks.delta.merge.repartitionBeforeWrite.enabled": "<unset: SparkNoSuchElementException>",
+    "spark.databricks.delta.optimize.maxFileSize": "134217728",
+    "spark.databricks.delta.optimize.minFileSize": "<unset: SparkNoSuchElementException>",
+    "spark.databricks.delta.properties.defaults.dataSkippingNumIndexedCols": "<unset: SparkNoSuchElementException>",
+    "spark.databricks.delta.stats.skipping": "<unset: SparkNoSuchElementException>",
+    "spark.sql.adaptive.advisoryPartitionSizeInBytes": "67108864b",
+    "spark.sql.adaptive.coalescePartitions.enabled": "true",
+    "spark.sql.adaptive.enabled": "true",
+    "spark.sql.files.maxPartitionBytes": "134217728b",
+    "spark.sql.files.openCostInBytes": "4194304b",
+    "spark.sql.parquet.compression.codec": "snappy",
+    "spark.sql.parquet.filterPushdown": "true",
+    "spark.sql.shuffle.partitions": "4"
+  },
+  "started_at": "2026-09-18T13:53:50.613109+00:00",
+  "subject": "delta-layout",
+  "tool": "spark+delta",
+  "tool_version": "spark 4.0.1 / delta 4.0.1",
+  "toolchain": {
+    "delta": "4.0.1",
+    "delta_extension_loaded_from": "/Users/bistboiiiii/.cache/trace-x/spark-jars/delta-spark_2.13-4.0.1.jar",
+    "delta_jar": "io.delta:delta-spark_2.13:4.0.1 sha256:a1e76860b19fe1e6b205a4ea7a9099a2f9575d39bb71d49b3e679b299d0efb91",
+    "hadoop": "3.4.1",
+    "java": "17",
+    "java_vendor": "Eclipse Adoptium",
+    "pyspark": "4.0.1",
+    "python": "3.12.14",
+    "scala": "2.13.16",
+    "spark": "4.0.1"
+  },
+  "track": "SYNTHETIC",
+  "unpublishable_reasons": [],
+  "variants": [
+    {
+      "cluster_by": [],
+      "description": "no layout, no OPTIMIZE: gold.observations as declared today",
+      "generated": [],
+      "name": "control",
+      "optimize": "none",
+      "partition_by": [],
+      "zorder_by": []
+    },
+    {
+      "cluster_by": [],
+      "description": "no layout, plain OPTIMIZE: isolates compaction",
+      "generated": [],
+      "name": "control_compacted",
+      "optimize": "compact",
+      "partition_by": [],
+      "zorder_by": []
+    },
+    {
+      "cluster_by": [],
+      "description": "PARTITIONED BY (event_date), generated from occurred_at",
+      "generated": [
+        "event_date DATE AS (CAST(occurred_at AS DATE))"
+      ],
+      "name": "partitioned_date",
+      "optimize": "none",
+      "partition_by": [
+        "event_date"
+      ],
+      "zorder_by": []
+    },
+    {
+      "cluster_by": [],
+      "description": "PARTITIONED BY (event_date), then OPTIMIZE ZORDER BY (account_id)",
+      "generated": [
+        "event_date DATE AS (CAST(occurred_at AS DATE))"
+      ],
+      "name": "partitioned_date_zorder",
+      "optimize": "zorder",
+      "partition_by": [
+        "event_date"
+      ],
+      "zorder_by": [
+        "account_id"
+      ]
+    },
+    {
+      "cluster_by": [],
+      "description": "PARTITIONED BY (stream)",
+      "generated": [],
+      "name": "partitioned_stream",
+      "optimize": "none",
+      "partition_by": [
+        "stream"
+      ],
+      "zorder_by": []
+    },
+    {
+      "cluster_by": [
+        "account_id",
+        "occurred_at"
+      ],
+      "description": "CLUSTER BY (account_id, occurred_at), then OPTIMIZE",
+      "generated": [],
+      "name": "liquid",
+      "optimize": "cluster",
+      "partition_by": [],
+      "zorder_by": []
+    }
+  ],
+  "warm_cold_policy": "The page cache is not flushed (that needs root), so every measurement is warm-cache. Each (variant, shape, repetition) is executed once, unmeasured, by the correctness pass before any timing; the measured pass interleaves the variants, rotating their order each repetition. Files and bytes selected and bytes read are cache-independent; wall time is not, and understates cold I/O. Each execution resolves its table at the version the build recorded, as Gold readers do (gold._at), inside the timed region."
+}

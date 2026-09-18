@@ -4,7 +4,7 @@
   "current_phase": "3",
   "current_phase_name": "Streaming & Medallion",
   "updated_at": "2026-09-18",
-  "last_verified_commit": "1d22e75",
+  "last_verified_commit": "36816cc",
   "legend": {
     "NOT_STARTED": "No implementation exists.",
     "IN_PROGRESS": "Implementation started; acceptance evidence incomplete.",
@@ -278,11 +278,11 @@
       "id": "P3.layout-benchmark",
       "phase": "3",
       "name": "Delta layout benchmark backing ADR-0015",
-      "status": "NOT_STARTED",
+      "status": "PASS",
       "evidence": {
-        "command": "make bench-layout",
-        "verified_at": null,
-        "result": null
+        "command": "make bench-layout ARGS=\"--optimize-max-file-size 134217728\"",
+        "verified_at": "2026-09-18",
+        "result": "Publishable run bench-20260918-135350-delta-layout-36816cc7 at commit 36816cc (clean tree): 10,000,000 rows shaped like gold.observations, 5 repetitions, 6 layouts (no-layout control, compacted control, PARTITIONED BY event_date, + ZORDER BY account_id, PARTITIONED BY stream, liquid CLUSTER BY (account_id, occurred_at)) x 4 query shapes (2 from Gold's code, 2 named by ADR-0015), files and bytes selected and bytes read recorded from the scan metrics, results identical across layouts. OPTIMIZE max file size 128 MiB declared before measurement. Ranking by the declared rule: date partitioning first (score 0.499; Z-order identical on every metric), liquid 0.807, controls 1.000, stream 1.169. Date partitioning loses on both code-backed shapes (2.6x and 1.4x the control's bytes) and wins on the two ADR-named shapes. Decision written into ADR-0015 (Proposed; acceptance is the user's at Phase 3 exit). Report: benchmarks/delta_layout/REPORT.md."
       },
       "notes": "ADR-0015 may not be merged until this produces committed output."
     },

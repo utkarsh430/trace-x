@@ -126,6 +126,72 @@ planning surfaced recorded under *What Phase 3 planning found in Phase 2's artef
   5. First GitHub CI runs.
   6. The exit review.
 
+### Phase 3 — the rest of 2026-09-18: hardening, parity, and the two benchmarks
+
+**Status at the end of the day.** Ten of twelve required capabilities PASS. The layout benchmark was
+added today (`bench-20260918-135350-delta-layout-36816cc7`). Two are open, each on a finding:
+`P3.feature-parity`, awaiting a user decision (below), and `P3.stream-throughput`. The Phase 2 load
+gate re-run is blocked on a macOS permission.
+
+- **Exit adversarial review (read-only, run early on purpose).** It found no class A defect. It
+  found nine places where a check could pass without meaning what it says, all in the machinery for
+  the capabilities still to measure: the outage timing, publishability, the skew floor, the excused
+  ceiling, git failure read as a clean tree, `;`-chained commands, and the D20 test depth. All were
+  fixed before any affected run, in `3bf7863` with ADR-0056 Amendment 1.
+- **The earlier "flaky" test-fast failure was not a flake.** test-fast contains
+  `test_secret_scan::test_clean_tree_passes`, so any secret-scan finding in the tree fails it too.
+  `scripts/verify.sh` now keeps a failing gate's whole output, and that output showed the cause.
+- **`P3.feature-parity`, representative: measured PASS.**
+  - Record `parity-20260918-085943-representative-220ae92b`: 0 divergences in both pairings, arrival
+    skew 0.30% against 1%, guard clean.
+  - Before the run, a probe measured the warm-up at about 306 posts/s on a fresh stack. The earlier
+    session's 17/s came from environment starvation, so its lowered warm-up guard (`471d8ba`) was
+    not needed.
+- **`P3.feature-parity`, adversarial (v2, 300 bp, user-approved): measured FAIL, and the cause is an
+  online-store defect.**
+  - Record `parity-20260918-114515-adversarial-ingress-3bf78637`: 169 as-served divergences, all
+    `lookback_completeness`, on the 28 transactions read more than 60 minutes late. The values are
+    equal; the event-time-complete pairing has 0 divergences.
+  - *Cause (confirmed by reproduction through the real `FeatureContext`).*
+    `redis_features._assemble` folds one unheld window (the 5-minute card window) into the
+    context-wide `complete_since`. That withdraws every lookback of 5 minutes or more, where
+    ADR-0046 §5 withdraws only the unheld window. The error is on the safe side. It also serves
+    `failed_logins_1h`'s real zero as INSUFFICIENT_HISTORY.
+  - *Status.* A fix, which tracks unheld windows per window and bumps the feature set to 6.0.0, is
+    prepared but not landed: it changes served behaviour, so it waits for the **user's decision**.
+    The record is kept in the session scratch until then.
+- **`P3.stream-throughput`: not measured yet. The first real runs found three problems.**
+  1. A harness defect, fixed in `36816cc`. confluent-kafka returns no headers in delivery reports,
+     so the clock-offset bound saw 0 reports and every run read INVALID.
+  2. The consumer (Bronze and Silver in one JVM, 2 GiB heap) died of
+     `java.lang.OutOfMemoryError` within the first minutes at the target rate, in both runs. A
+     heap-sampled diagnostic run showed the old generation oscillating well below full rather than
+     climbing: a full working set, not a simple leak. These runs were INVALID, so no figure from
+     them is published.
+  3. A likely scaling cause. Silver's canonical MERGE matches on
+     `t.silver_identity = s.silver_identity` with no pruning predicate
+     (`stream/silver.py` `_canonical_merge`), so every micro-batch joins the whole growing Silver
+     table. Bounding that is an ADR-0053 change, for the user. Both INVALID records are kept in the
+     session scratch.
+- **Phase 2 load gate: blocked (class E).** k6 bind-mounts `tests/load/k6` from the repository in
+  `~/Downloads`. Docker Desktop then never starts that container, and afterwards starts no
+  container at all, until it is stopped and started (a restart is not enough). Most likely a
+  missing macOS Files and Folders permission for Downloads. The user must grant it.
+- **CI.** `test-integration` and `test-stream` trigger only on pull requests and pushes to `main`,
+  and no Phase 3 pull request exists, so neither has ever run on Phase 3 code. test-fast's
+  10-minute timeout cancelled 3 of 4 Phase 3 runs; it is now 25 minutes.
+- **`P3.layout-benchmark`: PASS**, `run_id: bench-20260918-135350-delta-layout-36816cc7`.
+  - Date partitioning ranks first by the declared rule, and ADR-0015 now records it as the
+    proposed local decision.
+  - It loses on both of today's code-backed Gold reads, and wins only on the two shapes ADR-0015
+    named. The ADR states this. Acceptance is the user's.
+  - Two harness defects were fixed on the way: generated columns through Delta's builder, and the
+    secret-scan exclusion for result records.
+- **New debt.**
+  - D24: Silver's unpruned canonical MERGE.
+  - D25: the consumer's 2 GiB heap at 5,000 events/s.
+  - D26: `failed_logins_1h` and account windows withdrawn on late reads, until the store fix lands.
+
 ### Phase 3 — HANDOFF (2026-09-18; continuing on a Mac Pro with Docker).
 
 **The operational continuation document is `docs/PHASE3_HANDOFF.md`**: status by step and capability,
@@ -1956,6 +2022,9 @@ both reports.
 | **D21** | **ADR-0052 Amendment 1 Risks 1–3 are open.** (1) A DELETE losing to a concurrent append is inferred, never constructed. (2) Gold is refused by VACUUM, not vacuumed, so its disk use is unbounded locally. (3) The Spark half of the coverage rule is proved with a stub ledger | Each is an untested path or an unbounded local resource | Phase 3 exit review decides: build the test or accept with the ADR |
 | ~~D22~~ | **Resolved 2026-09-18: the capability's evidence now names both commands.** `P3.resource-bounds`'s command does not select the 14 Step 11 stream tests. `tests/stream/test_resource_bounds_maintenance.py` is marked `stream` only, so the crash, reset, VACUUM and race tests run outside `-m 'unit or integration'` | The recorded command under-reports what the capability rests on | done |
 | **D23** | **Three Silver tables are never produced from real Kafka input.** `silver.tx_raw_v1`, `silver.device_events_v1` and `silver.investigation_requested_v1` are built and checked only from hand-built Bronze rows (`tests/stream/test_silver_tables.py`). Their Bronze tables are produced from a real broker | A Kafka-to-Silver defect specific to those topics would not be caught end-to-end | Phase 3 exit review decides: add a Kafka-driven Silver test for them, or accept |
+| **D24** | **Silver's canonical MERGE is unpruned.** `_canonical_merge` matches `t.silver_identity = s.silver_identity` with no partition or time predicate, so each micro-batch joins the whole Silver table | Per-batch cost grows with the table; the likely reason the stream benchmark's consumer could not sustain the target rate | A bounded match needs an ADR-0053 decision (user) |
+| **D25** | **The stream consumer ran out of heap at the target rate** (Bronze and Silver in one JVM, the harness's default heap), twice, in INVALID runs | `P3.stream-throughput` cannot be measured past the warm-up at this configuration | With D24; a larger heap alone is a configuration change to be declared before a run, never after |
+| **D26** | **A late read withdraws every lookback of 5 minutes or more** (`redis_features._assemble` moves the context-wide `complete_since` for one unheld window), where ADR-0046 §5 withdraws only that window | Late transactions are scored with less context than the store holds; `failed_logins_1h` serves a real zero as INSUFFICIENT_HISTORY | Fix prepared (feature set 6.0.0); awaits the user's decision |
 | **D14** | CI provisions no Redis or PostgreSQL, so the Redis conformance suite, the Redis store tests, the hole-ledger tests and the other service-backed integration tests skip there, loudly. Their evidence is local runs | CI cannot catch a regression in the online store or the ledger | Before Phase 3 exit: provision the services in `test-integration.yml`, or start throwaway containers in those fixtures as the capacity test does |
 
 ---
