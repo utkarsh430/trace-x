@@ -28,7 +28,9 @@
 > "Mac Pro" is the same Mac where a session on 2026-09-16/17 made four commits that were never pushed
 > (`075f713`, `b5c830a`, `a1403ca`, `471d8ba`); they are preserved on the local-only branch
 > `backup/mac-phase3-471d8ba` and were **not** used as evidence. Since then: §7 step 7 done,
-> `P3.checkpoint-resume` and `P3.medallion` PASS, D20 fixed. The live next list is in PROGRESS.
+> `P3.checkpoint-resume` and `P3.medallion` PASS, D20 fixed. **End of 2026-09-18: 11 of 12 required
+> capabilities PASS; `P3.stream-throughput` FAIL (D29 needs a design decision).** The live state is PROGRESS,
+> *END OF 2026-09-18*.
 
 ---
 

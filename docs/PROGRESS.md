@@ -126,6 +126,43 @@ planning surfaced recorded under *What Phase 3 planning found in Phase 2's artef
   5. First GitHub CI runs.
   6. The exit review.
 
+### Phase 3 — END OF 2026-09-18: 11 of 12 required capabilities PASS; `P3.stream-throughput` FAIL
+
+**Read this first.** `tests/acceptance/status.json` is authoritative (`last_verified_commit`
+`4396c0f`). Phase 3 is **not closed**. One required capability fails, honestly recorded, and the
+fix needs a design decision.
+
+- **Evidence re-run at `b46e7e7`, after the store fix (D26) and the Silver bound (D24).** Every
+  capability those changes touch was re-run verbatim, one segment at a time: event-time,
+  kafka-ingest, medallion, resource-bounds, redis-hydration, feature-parity self-tests and
+  end-to-end, semantics-hardening, checkpoint-resume, observation-log, pin-failfast. 22 of 23
+  segments passed.
+  - The failure was `tests/chaos/test_writer_fence.py`, with a stale premise (class C): a writer
+    taking over correctly waits out any live writer session, including a running gateway's. The
+    fixture now stops the gateway for that test.
+  - `pytest -m chaos tests/chaos` then passed 29 of 29 in one session at `4396c0f`.
+- **`P3.feature-parity` PASS**, on ADR-0056 §Acceptance.
+  - Representative: `run_id: parity-20260918-160446-representative-a3d51d7f`.
+  - Adversarial FAIL, recorded, not gated: `run_id: parity-20260918-174845-adversarial-ingress-a8198214`.
+  - Disclosed: the measured runs predate the Silver bound, which is exact and guarded, and the
+    end-to-end parity test re-passed after it.
+- **`P3.stream-throughput` FAIL**, `run_id: bench-20260918-200555-stream-throughput-b46e7e74`, at
+  `b46e7e7` with the bound in place.
+  - The consumer still ran out of heap at 2 GiB. Diagnostics, not citable: a 4 GiB heap only
+    delays the OOM; capping Bronze intake does not help; the heap is dominated by in-flight byte
+    arrays.
+  - The per-batch work that still reads the whole Silver table grows with it (D29).
+- **D24 is partly resolved:** the canonical and late_events MERGEs are bounded exactly (ADR-0053
+  Amendment 1).
+
+**Open decisions for the user**
+- D29: an identity-organised layout for Silver's per-batch identity lookup and uniqueness check.
+- D27: ADR-0056's absent-on-an-unheld-window rule gap.
+- D28: `declined_ratio_1h` is never served with a value.
+- ADR-0015's local layout: date partitioning, or defer the change.
+- Acceptance of ADRs 0015 and 0046–0057.
+- Opening a pull request, so `test-integration` and `test-stream` run on Phase 3.
+
 ### Phase 3 — 2026-09-18 evening: user decisions A and (a), the fixes, and the re-runs
 
 - **Decisions (user).**
@@ -2073,11 +2110,12 @@ both reports.
 | **D21** | **ADR-0052 Amendment 1 Risks 1–3 are open.** (1) A DELETE losing to a concurrent append is inferred, never constructed. (2) Gold is refused by VACUUM, not vacuumed, so its disk use is unbounded locally. (3) The Spark half of the coverage rule is proved with a stub ledger | Each is an untested path or an unbounded local resource | Phase 3 exit review decides: build the test or accept with the ADR |
 | ~~D22~~ | **Resolved 2026-09-18: the capability's evidence now names both commands.** `P3.resource-bounds`'s command does not select the 14 Step 11 stream tests. `tests/stream/test_resource_bounds_maintenance.py` is marked `stream` only, so the crash, reset, VACUUM and race tests run outside `-m 'unit or integration'` | The recorded command under-reports what the capability rests on | done |
 | **D23** | **Three Silver tables are never produced from real Kafka input.** `silver.tx_raw_v1`, `silver.device_events_v1` and `silver.investigation_requested_v1` are built and checked only from hand-built Bronze rows (`tests/stream/test_silver_tables.py`). Their Bronze tables are produced from a real broker | A Kafka-to-Silver defect specific to those topics would not be caught end-to-end | Phase 3 exit review decides: add a Kafka-driven Silver test for them, or accept |
-| **D24** | **Silver's canonical MERGE is unpruned.** `_canonical_merge` matches `t.silver_identity = s.silver_identity` with no partition or time predicate, so each micro-batch joins the whole Silver table | Per-batch cost grows with the table; the likely reason the stream benchmark's consumer could not sustain the target rate | A bounded match needs an ADR-0053 decision (user) |
+| **D24** | **Partly resolved 2026-09-18 (`b46e7e7`, ADR-0053 Amendment 1): the MERGEs are now bounded exactly; the whole-table reads that remain are D29.** Silver's canonical MERGE was unpruned. `_canonical_merge` matches `t.silver_identity = s.silver_identity` with no partition or time predicate, so each micro-batch joins the whole Silver table | Per-batch cost grows with the table; the likely reason the stream benchmark's consumer could not sustain the target rate | A bounded match needs an ADR-0053 decision (user) |
 | **D25** | **The stream consumer ran out of heap at the target rate** (Bronze and Silver in one JVM, the harness's default heap), twice, in INVALID runs | `P3.stream-throughput` cannot be measured past the warm-up at this configuration | With D24; a larger heap alone is a configuration change to be declared before a run, never after |
-| **D26** | **A late read withdraws every lookback of 5 minutes or more** (`redis_features._assemble` moves the context-wide `complete_since` for one unheld window), where ADR-0046 §5 withdraws only that window | Late transactions are scored with less context than the store holds; `failed_logins_1h` serves a real zero as INSUFFICIENT_HISTORY | Fix prepared (feature set 6.0.0); awaits the user's decision |
+| ~~D26~~ | **Resolved 2026-09-18 (`a819821`, feature set 6.0.0).** A late read withdrew every lookback of 5 minutes or more (`redis_features._assemble` moves the context-wide `complete_since` for one unheld window), where ADR-0046 §5 withdraws only that window | Late transactions are scored with less context than the store holds; `failed_logins_1h` serves a real zero as INSUFFICIENT_HISTORY | Fix prepared (feature set 6.0.0); awaits the user's decision |
 | **D27** | **ADR-0056's rules make a divergence unavoidable when both sides are absent on a window the store no longer holds.** §3 requires completeness to match for absences, and F1 forbids the reference from modelling retention | The adversarial partition cannot reach 0 divergences while late reads meet short-retention windows; the FAIL is recorded, not re-framed | An ADR-0056 amendment is a user decision; any change needs a new measured run |
 | **D28** | **`declined_ratio_1h` is permanently UNAVAILABLE** on the scoring path: it requires `authorization_outcome` in the transaction's field coverage, which scoring requests never carry | A declared online feature is never served; parity has never compared its value | Product decision: derive coverage from verified outcomes (ADR-0049), or re-declare the feature |
+| **D29** | **Silver still reads its whole canonical table on every micro-batch**: classification's identity lookup (`classify_frame`) and the post-write uniqueness check (`_assert_unique`). Neither can be bounded on `occurred_at`: a conflicting delivery may carry any event time | The per-batch cost grows with the table. The stream consumer cannot sustain the target rate locally and runs out of heap (`P3.stream-throughput` FAIL, `bench-20260918-200555-stream-throughput-b46e7e74`) | Design decision (user): an identity-organised layout or index for those lookups (ADR-0053/ADR-0015); a dedup time horizon is not allowed (§4.2) |
 | **D14** | CI provisions no Redis or PostgreSQL, so the Redis conformance suite, the Redis store tests, the hole-ledger tests and the other service-backed integration tests skip there, loudly. Their evidence is local runs | CI cannot catch a regression in the online store or the ledger | Before Phase 3 exit: provision the services in `test-integration.yml`, or start throwaway containers in those fixtures as the capacity test does |
 
 ---
