@@ -681,10 +681,26 @@ def test_a_skewed_broker_clock_is_outside_the_tolerance() -> None:
 
 
 def test_a_clock_that_stepped_leaves_no_consistent_offset() -> None:
+    """A ~900 ms step: no single offset fits both records (drift reported), and the step is judged
+    by the envelope -- inside a 10 s tolerance, outside the benchmark's 500 ms one."""
     bounds = OffsetBounds().observe(sent_ms=1_000.0, acked_ms=1_002.0, log_append_ms=1_001.0)
     bounds = bounds.observe(sent_ms=2_000.0, acked_ms=2_002.0, log_append_ms=2_900.0)
     assert not bounds.consistent
-    assert not bounds.within(10_000.0)
+    assert bounds.drift_ms == 896.0  # intersection [898, 2]
+    assert (bounds.min_lower_ms, bounds.max_upper_ms) == (-1.0, 901.0)
+    assert bounds.within(10_000.0)
+    assert not bounds.within(500.0)
+
+
+def test_millisecond_drift_between_records_does_not_invalidate_the_offset() -> None:
+    """The 2026-09-18 run: 720,784 reports whose intersection inverted by ~1.4 ms (LogAppendTime is
+    in whole milliseconds, and Docker Desktop's VM clock drifts) while every record sat within a
+    few milliseconds of the host clock. That is a bounded offset, not an integrity failure."""
+    bounds = OffsetBounds().observe(sent_ms=1_000.0, acked_ms=1_000.4, log_append_ms=1_000.0)
+    bounds = bounds.observe(sent_ms=2_002.5, acked_ms=2_003.0, log_append_ms=2_001.0)
+    assert not bounds.consistent and bounds.drift_ms is not None and bounds.drift_ms > 0
+    assert bounds.within(500.0)
+    assert verdict.clock_verdict(bounds).passed
     merged = OffsetBounds(-1.0, 2.0, 5).merge(OffsetBounds(-3.0, 1.0, 5))
     assert (merged.lower_ms, merged.upper_ms, merged.samples) == (-1.0, 1.0, 10)
 

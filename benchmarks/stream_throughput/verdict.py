@@ -405,9 +405,9 @@ def clock_verdict(bounds: OffsetBounds, *, required: bool = True) -> Verdict:
         "clock_offset_bounded",
         INTEGRITY,
         bounds.within(CLOCK_OFFSET_TOLERANCE_MS),
-        f"broker-to-host clock offset in [{bounds.lower_ms}, {bounds.upper_ms}] ms from "
-        f"{bounds.samples} delivery reports (consistent: {bounds.consistent}); must lie within "
-        f"+-{CLOCK_OFFSET_TOLERANCE_MS} ms",
+        f"every record's broker-to-host clock offset lies in [{bounds.min_lower_ms}, "
+        f"{bounds.max_upper_ms}] ms over {bounds.samples} delivery reports (drift between records "
+        f"{bounds.drift_ms} ms); must lie within +-{CLOCK_OFFSET_TOLERANCE_MS} ms",
     )
 
 
