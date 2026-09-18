@@ -63,6 +63,7 @@ from trace_core.features.semantics import (
     Stream,
     WindowedAggregate,
 )
+from trace_core.features.state_plan import PLAN
 from trace_core.repositories.redis_features import LAYOUT, RedisOnlineFeatureStore
 
 pytestmark = [pytest.mark.integration, pytest.mark.parity]
@@ -154,7 +155,7 @@ def _compare(
         ):
             if (
                 isinstance(spec.semantics, WindowedAggregate)
-                and served.complete_since == expected.complete_since
+                and PLAN.completeness(spec.feature_id, served) is Completeness.COMPLETE
             ):
                 problems.append(
                     f"{where} {spec.feature_id}: absent in a read behind the store, which still "
@@ -601,8 +602,14 @@ def test_a_read_behind_what_the_store_holds_is_absent_not_a_lower_bound(redis_cl
     assert got.or_none() is None and got.state is FeatureState.INSUFFICIENT_HISTORY, (
         f"served {got.state} {got.or_none()} for a window the store no longer holds"
     )
-    assert served.context.completeness(300) is not Completeness.COMPLETE
+    assert PLAN.completeness("card_tx_count_5m", served.context) is Completeness.INCOMPLETE
 
+    # Per window, not per lookback length: the account's windows are held in full, so they are
+    # served and still vouched for (ADR-0046 §5).
     hourly = ONLINE_FEATURES.get("account_tx_count_1h")
     assert hourly.evaluate(second, served.context).or_none() == 2.0
     assert hourly.evaluate(second, expected.context).or_none() == 2.0
+    for feature_id in ("account_tx_count_5m", "account_tx_count_1h", "failed_logins_1h"):
+        assert PLAN.completeness(feature_id, served.context) is Completeness.COMPLETE, feature_id
+    logins = ONLINE_FEATURES.get("failed_logins_1h").evaluate(second, served.context)
+    assert logins.or_none() == 0.0, f"served {logins.state} for a held, empty window"

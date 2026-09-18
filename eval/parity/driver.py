@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
@@ -76,6 +77,10 @@ class Posted:
     phase: str
     """`warmup` or `slice`."""
     fault: str | None = None
+    sent_ms: int | None = None
+    """The driver's wall clock, in epoch milliseconds, when it sent the request: a lower bound on
+    the gateway's clock at the write, which the store keys retention on (`min(occurred, written)`).
+    None when not recorded."""
 
 
 def classify(
@@ -170,6 +175,7 @@ class GatewayDriver:
         headers = {"Authorization": f"Bearer {self._token}"}
         if key is not None:
             headers[HEADER_IDEMPOTENCY] = key
+        sent_ms = time.time_ns() // 1_000_000
         response = self._client.post(STREAMS[topic], json=request, headers=headers)
         body = response.json() if response.content else None
         applied = classify(topic, request, key, int(response.status_code), body, self._seen)
@@ -182,6 +188,7 @@ class GatewayDriver:
             body=body,
             applied=applied,
             phase=self.phase,
+            sent_ms=sent_ms,
         )
         self.posts.append(posted)
         return posted

@@ -267,6 +267,21 @@ sufficient; the literals are the oracle.
   stops vouching for it, so it reads `INSUFFICIENT_HISTORY` and the decision carries
   `history_incomplete`. A previous observation is served only when nothing that could be later has
   been folded away (`tests/integration/test_redis_feature_store.py`).
+  - *Clarification (2026-09-18, feature set 6.0.0).* "Stops vouching for it" is per window. Up to
+    5.0.0 the Redis store folded every unheld window into one context-wide `complete_since` (`as_of`
+    minus the shortest unheld window), so a read over an hour late, whose five-minute card window
+    was trimmed, served every feature with a lookback of five minutes or more as absent and
+    INCOMPLETE -- held account windows and a genuinely empty `failed_logins_1h` included. It erred
+    safe but served less than declared; the adversarial parity partition's late band surfaced it as
+    `lookback_completeness` divergences (ADR-0056 §3).
+    From 6.0.0 the context keeps the store's epoch and carries the unheld windows and
+    previous-observation reads (`FeatureContext.unheld_windows`, `unheld_previous`); each is absent
+    and INCOMPLETE for the features reading it alone, and completeness is decided per feature from
+    what it reads (`StatePlan.completeness`). Consequently §8 item 5's sentence that, while a legacy
+    identity set exists, "other account features with lookbacks of an hour or more on that account
+    also read INCOMPLETE" no longer holds: only `failed_logins_1h` and
+    `hours_since_identity_change` do. The reference models no retention (ADR-0056 F1), so nothing
+    changes on its side.
 - **Parity is declared per feature** (`FeatureSpec.parity`, a `semantics.ParityComparison`), so a
   comparison cannot quietly choose its own tolerance.
   - `EXACT`: counts, amount sums, exact distinct counts and the habitual and known sets. Compared

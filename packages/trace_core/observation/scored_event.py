@@ -119,13 +119,17 @@ def decision_summary(decision: RiskDecision) -> dict[str, Any]:
 
 
 def lookback_completeness(feature_id: str, context: FeatureContext | None) -> str:
-    """Whether the served context could vouch for the feature's whole lookback."""
-    lookback = PLAN.lookback_s.get(feature_id, 0)
-    if not lookback:
+    """Whether the served context could vouch for the feature's whole lookback.
+
+    Per feature: a window the store no longer holds is unvouched for the features reading it
+    alone (ADR-0046 §5)."""
+    if not PLAN.lookback_s.get(feature_id, 0):
         return NOT_APPLICABLE
     if context is None:
         return Completeness.UNKNOWN.value
-    return context.completeness(lookback).value
+    completeness = PLAN.completeness(feature_id, context)
+    assert completeness is not None
+    return completeness.value
 
 
 def served_features(

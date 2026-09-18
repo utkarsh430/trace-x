@@ -1109,7 +1109,8 @@ class RedisOnlineFeatureStore:
             Stream.IDENTITY_CHANGE: dropped_through,
         }
         high_ms = _optional_int(_text(high_watermark))
-        unheld_ms: list[int] = []
+        unheld_windows: set[tuple[Entity, Stream, str]] = set()
+        unheld_previous: set[tuple[Entity, Stream]] = set()
 
         def held(entity: Entity, stream: Stream, window: Window, through_ms: int | None) -> bool:
             """Does the store still hold every observation `(as_of - W, as_of]` contains?
@@ -1121,7 +1122,7 @@ class RedisOnlineFeatureStore:
             if through_ms is None or as_of_ms - window.seconds * 1000 >= through_ms:
                 return True
             if (entity, stream, window) in _DECLARED_WINDOWS:
-                unheld_ms.append(window.seconds * 1000)
+                unheld_windows.add((entity, stream, window.label))
             return False
 
         def trimmed_through(retention_ms: int) -> int | None:
@@ -1166,7 +1167,7 @@ class RedisOnlineFeatureStore:
                 if lookback is None:
                     continue
                 if legacy:
-                    unheld_ms.append(lookback.seconds * 1000)
+                    unheld_previous.add((Entity.ACCOUNT, stream))
                 elif latest:
                     # The latest held is the latest there was only if nothing later was dropped.
                     occurred_ms = int(float(_text(latest[1])))
@@ -1266,8 +1267,8 @@ class RedisOnlineFeatureStore:
 
         epoch_text = _text(epoch)
         complete_ms = int(epoch_text) if epoch_text else None
-        if complete_ms is not None and unheld_ms:
-            complete_ms = max(complete_ms, as_of_ms - min(unheld_ms) + 1)
+        # The store's epoch stays the store's: an unheld window withdraws the vouching of the
+        # features that read it, never of every window as long as it (ADR-0046 §5).
         return FeatureContext(
             as_of=EventTime(from_millis(as_of_ms)),
             source=FeatureSource.ONLINE_ONLY,
@@ -1276,6 +1277,8 @@ class RedisOnlineFeatureStore:
             previous=previous,
             complete_since=None if complete_ms is None else EventTime(from_millis(complete_ms)),
             distinct_dimensions={e: PLAN.distinct_dimensions(e) for e in Entity},
+            unheld_windows=frozenset(unheld_windows),
+            unheld_previous=frozenset(unheld_previous),
         )
 
 

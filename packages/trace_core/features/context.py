@@ -40,6 +40,11 @@ from trace_core.features.semantics import WINDOWS, Dimension, Entity, Stream
 
 _WINDOW_SECONDS: Final[dict[str, int]] = {w.label: w.seconds for w in WINDOWS}
 
+WindowKey = tuple[Entity, Stream, str]
+"""`(entity, stream, window label)`: one declared window, for whichever entity the context read."""
+PreviousKey = tuple[Entity, Stream]
+"""`(entity, stream)`: one previous-observation read."""
+
 
 class Completeness(StrEnum):
     """Whether the store can vouch for everything inside a lookback.
@@ -244,11 +249,35 @@ class FeatureContext:
     complete-and-empty window can say "zero distinct merchants" rather than
     leave the dimension absent -- which `_distinct` would correctly read as
     "not declared" and refuse to answer."""
+    unheld_windows: frozenset[WindowKey] = frozenset()
+    """Declared windows this read reaches behind what the store still holds (ADR-0046 §5).
 
-    def completeness(self, lookback_s: int) -> Completeness:
-        """Can the store vouch for the whole of `(as_of - lookback_s, as_of]`?"""
+    Each is absent and not vouched for, whatever `complete_since` says; every other window keeps
+    the store's completeness. Per window rather than folded into `complete_since`, which would
+    withdraw the vouching of every window as long as the shortest unheld one -- a late read whose
+    card window was trimmed would then call a held, genuinely empty account window unknown."""
+    unheld_previous: frozenset[PreviousKey] = frozenset()
+    """Previous-observation reads the store can no longer answer for this read (ADR-0046 §5)."""
+
+    def completeness(
+        self,
+        lookback_s: int,
+        *,
+        window: WindowKey | None = None,
+        previous: PreviousKey | None = None,
+    ) -> Completeness:
+        """Can the store vouch for the whole of `(as_of - lookback_s, as_of]`?
+
+        `window` / `previous`: what the asking feature reads. A read the store no longer holds is
+        never vouched for (INCOMPLETE), whatever the store's age; with neither, only the store's
+        age is asked -- the right question for a profile, which reads no window.
+        """
         if self.complete_since is None:
             return Completeness.UNKNOWN
+        if (window is not None and window in self.unheld_windows) or (
+            previous is not None and previous in self.unheld_previous
+        ):
+            return Completeness.INCOMPLETE
         began = self.as_of - dt.timedelta(seconds=lookback_s)
         return (
             Completeness.COMPLETE
@@ -278,6 +307,10 @@ class FeatureContext:
         """
         if entity_id is None:
             return None
+        if (entity, stream, window_label) in self.unheld_windows:
+            # Reaches behind what the store still holds: what is left is neither the value nor a
+            # lower bound the store can vouch for (ADR-0046 §5).
+            return None
         state = self.windows.get((entity, entity_id, stream, window_label))
         if state is not None:
             return state
@@ -294,6 +327,6 @@ class FeatureContext:
     def previous_observation(
         self, entity: Entity, entity_id: str | None, stream: Stream
     ) -> Observation | None:
-        if entity_id is None:
+        if entity_id is None or (entity, stream) in self.unheld_previous:
             return None
         return self.previous.get((entity, entity_id, stream))

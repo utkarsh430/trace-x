@@ -54,7 +54,7 @@ from trace_core.features.semantics import (
     WindowedAggregate,
 )
 
-FEATURE_SET_VERSION: Final = "5.0.0"
+FEATURE_SET_VERSION: Final = "6.0.0"
 """Bumped whenever a feature's MEANING changes.
 
 Recorded on every `RiskDecision` and in every run manifest: a latency or quality

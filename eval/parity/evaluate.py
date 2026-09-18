@@ -231,7 +231,9 @@ def compare_as_served(
     capped: set[tuple[str, str]] = set()
     for delivery in deliveries:
         if delivery.event is not None:
-            replay.observe(delivery.event)
+            # The store keys its newest-write mark on `min(occurred, written)`; without the write
+            # time a future-dated identity event or outcome would move it to its event time.
+            replay.observe(delivery.event, written_ms=delivery.posted.sent_ms)
             continue
         score = delivery.served
         assert score is not None

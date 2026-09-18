@@ -411,3 +411,16 @@ def test_a_complete_history_missing_a_recorded_observation_is_refused() -> None:
     assert verify_history(result, CompleteHistory(log))["recorded_by_store"] == 2
     with pytest.raises(HistoryMismatchError):
         verify_history(result, CompleteHistory([log[1]]))
+
+
+def test_a_future_dated_observation_moves_the_newest_write_mark_only_to_its_write_time() -> None:
+    """The store keys its newest-write mark on `min(occurred, written)`. A failed login dated three
+    hours ahead but written a minute after `T0` must not make the next read look three hours late:
+    `late_by_ms` is recorded on every divergence and would be overstated."""
+    log = [tx("tx_a", T0), failed_login("idev_future", T0 + 3 * HOUR_MS), tx("tx_b", T0 + 120_000)]
+    deliveries = [
+        replace(d, posted=replace(POSTED, sent_ms=T0 + 60_000)) if d.event is not None else d
+        for d in serve(log)
+    ]
+    result = compare_as_served(deliveries, ParityTally(Pairing.AS_SERVED))
+    assert result.replay.high_watermark_ms == T0 + 120_000

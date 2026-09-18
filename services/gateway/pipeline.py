@@ -400,8 +400,10 @@ def history_incomplete(features: dict[str, FeatureValue], context: FeatureContex
             # The store began watching inside this account's lifetime, so it cannot vouch for the
             # lifetime's start: a property of the deployment, not of the transaction (ADR-0046 §3).
             return True
-        lookback = PLAN.lookback_s.get(feature_id, 0)
-        if lookback and context.completeness(lookback) is not Completeness.COMPLETE:
+        # Per feature: a window the store no longer holds is unvouched for its own features only
+        # (ADR-0046 §5).
+        completeness = PLAN.completeness(feature_id, context)
+        if completeness is not None and completeness is not Completeness.COMPLETE:
             return True
     return False
 

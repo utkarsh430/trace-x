@@ -37,6 +37,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Final
 
+from trace_core.features.context import Completeness, FeatureContext, PreviousKey, WindowKey
 from trace_core.features.semantics import (
     LATE_ARRIVAL_MARGIN_S,
     Aggregation,
@@ -116,12 +117,35 @@ class StatePlan:
     feature reads on that stream -- what an account's raw observations on it are held for, before
     the late-arrival margin (ADR-0046 §5)."""
 
+    window_reads: dict[str, WindowKey] = field(default_factory=dict)
+    """`feature_id -> (entity, stream, window label)` for every windowed feature: the window whose
+    held-ness decides the feature's lookback completeness (ADR-0046 §5)."""
+
+    previous_reads: dict[str, PreviousKey] = field(default_factory=dict)
+    """`feature_id -> (entity, stream)` for every previous-observation feature."""
+
     content_reads: frozenset[tuple[Entity, Stream]] = frozenset()
     """Raw sets whose observations an as-served read decodes for their content, and so caps at
     `SCORE_READ_CAP`: every entity and stream with an amount sum or an exact distinct count
     (ADR-0046 §8)."""
 
     # -- derived views -------------------------------------------------------
+
+    def completeness(self, feature_id: str, context: FeatureContext) -> Completeness | None:
+        """Whether `context` vouches for the whole of this feature's lookback; None when the
+        feature looks back over nothing.
+
+        Decided per feature, from the window or previous observation it reads: a window the store
+        no longer holds is unvouched for that feature alone, and every other feature keeps the
+        store's completeness (ADR-0046 §5)."""
+        lookback = self.lookback_s.get(feature_id, 0)
+        if not lookback:
+            return None
+        return context.completeness(
+            lookback,
+            window=self.window_reads.get(feature_id),
+            previous=self.previous_reads.get(feature_id),
+        )
 
     def velocity_retention(self, entity: Entity, stream: Stream) -> Retention:
         return Retention.for_windows(self.velocity[(entity, stream)])
@@ -211,6 +235,8 @@ def build_plan(registry: FeatureRegistry) -> StatePlan:
     profiles: dict[Entity, Window] = {}
     lookback: dict[str, int] = {}
     account_lookback: dict[Stream, int] = {}
+    window_reads: dict[str, WindowKey] = {}
+    previous_reads: dict[str, PreviousKey] = {}
     content_reads: set[tuple[Entity, Stream]] = set()
 
     for spec in registry:
@@ -226,6 +252,14 @@ def build_plan(registry: FeatureRegistry) -> StatePlan:
             )
         if isinstance(semantics, WindowedAggregate) and reads_observation_content(semantics):
             content_reads.add((semantics.entity, semantics.stream))
+        if isinstance(semantics, WindowedAggregate):
+            window_reads[spec.feature_id] = (
+                semantics.entity,
+                semantics.stream,
+                semantics.window.label,
+            )
+        elif isinstance(semantics, PairwiseWithPrevious):
+            previous_reads[spec.feature_id] = (semantics.entity, semantics.stream)
 
         if isinstance(semantics, PairwiseWithPrevious):
             pair = (semantics.entity, semantics.stream)
@@ -273,6 +307,8 @@ def build_plan(registry: FeatureRegistry) -> StatePlan:
         profiles=profiles,
         lookback_s=lookback,
         account_lookback_s=account_lookback,
+        window_reads=window_reads,
+        previous_reads=previous_reads,
         content_reads=frozenset(content_reads),
     )
 
