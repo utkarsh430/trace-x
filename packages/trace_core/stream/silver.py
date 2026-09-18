@@ -22,6 +22,9 @@ that topic's Bronze table through its checkpoint's loss-refusing Delta source, f
      record with the same digest and an earlier key replaces the row;
    - `silver.late_events` (MERGE on topic and identity): re-derived from the committed canonical
      rows of the batch's identities, so it is exactly "the canonical rows that are late".
+
+   Both MERGEs, and the read of the committed rows, are bounded on `occurred_at` so that their cost
+   does not grow with the table, exactly (the bounded-MERGEs section; ADR-0053 Amendment 1).
 4. **Assertions** after the writes: no identity of the batch appears twice in the canonical table,
    and no (topic, identity) twice in `late_events`. A failure raises and stops the query.
 
@@ -50,6 +53,7 @@ from trace_core.stream.bronze import Trigger, bronze_topic
 from trace_core.stream.checkpoints import DeltaSourceStart, OpenedCheckpoint
 from trace_core.stream.lake import LakeConfig
 from trace_core.stream.silver_rules import (
+    DIGESTED_EVENT_TIME,
     DUPLICATES,
     KEY_NULL,
     LATE_EVENTS,
@@ -550,6 +554,7 @@ def classify_frame(admitted: DataFrame, canonical: DataFrame, topic: str) -> Dat
         F.col("kafka_partition").alias("existing_partition"),
         F.col("kafka_offset").alias("existing_offset"),
         F.col("kafka_timestamp").alias("existing_kafka_timestamp"),
+        F.unix_micros(DIGESTED_EVENT_TIME).alias("existing_occurred_at_us"),
         F.col("bronze_batch_id").alias("existing_bronze_batch_id"),
         F.col("bronze_checkpoint_id").alias("existing_bronze_checkpoint_id"),
         _key(
@@ -653,6 +658,152 @@ def classify_frame(admitted: DataFrame, canonical: DataFrame, topic: str) -> Dat
         "superseder_rank",
         *[f"first_{column}" for column in _COORDS],
         *[f"sup_{column}" for column in _COORDS],
+    )
+
+
+# ------------------------------------------------------------- bounded MERGEs ---
+#
+# ADR-0053 Amendment 1. Without a target predicate, each batch's MERGEs joined the whole canonical
+# table, and the `late_events` MERGE its topic's whole partition: per-batch cost grew with the
+# table. They are bounded on `occurred_at`, exactly:
+#
+# - Every row an identity has ever had in its canonical table carries one content digest: an
+#   insert-only MERGE never replaces a row, and a `tx.scored.v1` supersede requires the stored
+#   digest (`classify_frame`'s `eligible`, and `_canonical_merge`'s update condition). The digest
+#   covers `envelope.occurred_at` (`silver_rules.DIGESTED_EVENT_TIME`), so all those rows, and the
+#   `late_events` row copied from one of them, share one `occurred_at`.
+# - The canonical MERGE's source is the batch's `admit` and `supersede` rows. An `admit` row's
+#   identity has no committed row (classification read the table this MERGE writes, and one writer
+#   per canonical table is required, §7), so it matches nothing, whatever the predicate. A
+#   `supersede` row matches the committed row of its identity, which has its digest, and so its
+#   `occurred_at`. The target predicate is the range of the superseding rows' `occurred_at`, or
+#   FALSE when the batch supersedes nothing.
+# - After the canonical commit, an identity of the batch has one committed row: the batch's `admit`
+#   or `supersede` row, or the row classification found (`existing_occurred_at_us`), which a
+#   `duplicate` or `replayed` row equals in `occurred_at`. The `late_events` source read and its
+#   MERGE target are bounded by the range of those values; a `conflict` row's own `occurred_at` is
+#   left out, since it differs by definition and never becomes canonical.
+#
+# Nothing here is a lateness bound: a record of any age is admitted and deduplicated. The guards
+# refuse, before anything is written, a `supersede` whose `occurred_at` differs from the row it
+# replaces, and, after the canonical commit, a batch identity whose committed row the bounded read
+# did not find. The uniqueness assertion (`_assert_unique`) still reads by identity, unbounded.
+
+STATS_SLACK_US: Final = 1_000
+"""Each bound is widened by 1 ms. Delta's file statistics hold timestamps at millisecond precision,
+so a file's recorded maximum can be below its true maximum by under 1 ms. Widening only adds files
+to read; it never changes which rows match."""
+
+_MIN_US: Final = -62_135_596_800_000_000
+"""0001-01-01T00:00:00Z, the earliest timestamp a literal can name."""
+_MAX_US: Final = 253_402_300_799_999_999
+"""9999-12-31T23:59:59.999999Z, the latest."""
+
+
+class SilverPruningError(LakeContractError):
+    """A bounded MERGE's exactness premise failed: a row that must match lay outside the range. The
+    batch is refused rather than deduplicated against part of the table."""
+
+
+@dataclass(frozen=True, slots=True)
+class OccurredRange:
+    """An inclusive range of `occurred_at`, in epoch microseconds."""
+
+    low_us: int
+    high_us: int
+
+    def __post_init__(self) -> None:
+        if self.low_us > self.high_us:
+            raise SilverPruningError(f"an empty occurred_at range: {self.low_us} > {self.high_us}")
+
+
+@dataclass(frozen=True, slots=True)
+class MergeBounds:
+    """What the batch's two MERGEs may match (see the section comment)."""
+
+    supersede: OccurredRange | None
+    """The canonical MERGE's target range: the superseding rows' `occurred_at`; None, nothing."""
+    committed: OccurredRange | None
+    """The committed canonical rows of the batch's identities, and their `late_events` rows."""
+
+
+def merge_bounds(
+    *,
+    supersede_low_us: int | None,
+    supersede_high_us: int | None,
+    committed_low_us: int | None,
+    committed_high_us: int | None,
+    supersede_mismatched: int,
+) -> MergeBounds:
+    """The batch's bounds from its aggregates; refuses a `supersede` whose `occurred_at` is not the
+    replaced row's, the one case in which the canonical MERGE's range could miss its match."""
+    if supersede_mismatched:
+        raise SilverPruningError(
+            f"{supersede_mismatched} superseding row(s) carry an occurred_at other than the "
+            f"canonical row they replace, although the two share a content digest that covers "
+            f"envelope.{DIGESTED_EVENT_TIME}: refusing the batch rather than prune the MERGE"
+        )
+
+    def between(low: int | None, high: int | None) -> OccurredRange | None:
+        if (low is None) != (high is None):
+            raise SilverPruningError(f"a half-open occurred_at range: [{low}, {high}]")
+        return None if low is None or high is None else OccurredRange(low, high)
+
+    bounds = MergeBounds(
+        between(supersede_low_us, supersede_high_us),
+        between(committed_low_us, committed_high_us),
+    )
+    if bounds.supersede is not None and (
+        bounds.committed is None
+        or bounds.supersede.low_us < bounds.committed.low_us
+        or bounds.supersede.high_us > bounds.committed.high_us
+    ):
+        raise SilverPruningError(
+            f"the superseding range {bounds.supersede} is not inside the committed range "
+            f"{bounds.committed}"
+        )
+    return bounds
+
+
+def _timestamp_literal(micros: int) -> str:
+    moment = _EPOCH + dt.timedelta(microseconds=min(max(micros, _MIN_US), _MAX_US))
+    return f"TIMESTAMP '{moment.isoformat(sep=' ', timespec='microseconds')}'"
+
+
+def occurred_at_predicate(column: str, bounds: OccurredRange | None) -> str:
+    """`column` inside `bounds`, widened by `STATS_SLACK_US`, as SQL whose bounds are timestamp
+    literals, which Delta's data skipping compares with each file's statistics; FALSE for None,
+    which reads no file."""
+    if bounds is None:
+        return "FALSE"
+    low = _timestamp_literal(bounds.low_us - STATS_SLACK_US)
+    high = _timestamp_literal(bounds.high_us + STATS_SLACK_US)
+    return f"({column} >= {low} AND {column} <= {high})"
+
+
+def batch_merge_bounds(classified: DataFrame) -> MergeBounds:
+    """`merge_bounds` over a classified batch: one aggregate over the persisted batch."""
+    from pyspark.sql import functions as F  # noqa: N812
+
+    own = F.col(DIGESTED_EVENT_TIME)  # the event's column, in epoch microseconds here
+    existing = F.col("existing_occurred_at_us")
+    supersede = F.col("disposition") == Disposition.SUPERSEDE.value
+    kept = F.when(F.col("disposition") != Disposition.CONFLICT.value, own)
+    row = classified.agg(
+        F.min(F.when(supersede, own)).alias("supersede_low_us"),
+        F.max(F.when(supersede, own)).alias("supersede_high_us"),
+        F.min(F.least(kept, existing)).alias("committed_low_us"),
+        F.max(F.greatest(kept, existing)).alias("committed_high_us"),
+        F.count(F.when(supersede & ~own.eqNullSafe(existing), 1)).alias("supersede_mismatched"),
+    ).first()
+    if row is None:
+        raise LakeContractError("an aggregate returned no row")
+    return merge_bounds(
+        supersede_low_us=row["supersede_low_us"],
+        supersede_high_us=row["supersede_high_us"],
+        committed_low_us=row["committed_low_us"],
+        committed_high_us=row["committed_high_us"],
+        supersede_mismatched=int(row["supersede_mismatched"]),
     )
 
 
@@ -865,6 +1016,8 @@ def _write_batch(
         for row in classified.groupBy("disposition").count().collect()
     }
     rejected_count = decided.filter(F.col("outcome") == Outcome.QUARANTINED.value).count()
+    # Before the first commit: a refused premise leaves nothing of the batch written.
+    bounds = batch_merge_bounds(classified)
 
     # The order matters for a replay after a crash between two commits (module docstring).
     if not quarantined.isEmpty():
@@ -876,10 +1029,10 @@ def _write_batch(
             inserts.sparkSession,
             batch_id=batch_id,
             target=spec.table,
-            build=lambda target: _canonical_merge(target, inserts, topic),
+            build=lambda target: _canonical_merge(target, inserts, topic, bounds.supersede),
         )
     if not classified.isEmpty():
-        _merge_late_events(spec, opened, classified, batch_id=batch_id)
+        _merge_late_events(spec, opened, classified, bounds.committed, batch_id=batch_id)
     supersede_count = by_disposition.get(Disposition.SUPERSEDE.value, 0)
     return BatchCounts(
         admitted=by_disposition.get(Disposition.ADMIT.value, 0),
@@ -891,10 +1044,22 @@ def _write_batch(
     )
 
 
-def _canonical_merge(target: Any, inserts: DataFrame, topic: str) -> Any:
+def canonical_merge_condition(supersede: OccurredRange | None) -> str:
+    """The canonical MERGE's condition: the identity, and the target rows a superseding row can
+    match (`MergeBounds.supersede`), as a target-only conjunct Delta prunes files with."""
+    return (
+        f"t.silver_identity = s.silver_identity AND "
+        f"{occurred_at_predicate(f't.{DIGESTED_EVENT_TIME}', supersede)}"
+    )
+
+
+def _canonical_merge(
+    target: Any, inserts: DataFrame, topic: str, supersede: OccurredRange | None
+) -> Any:
     """Insert-only, except `tx.scored.v1`: there a row with the same digest and an earlier key
-    replaces the committed row. A differing digest is a conflict, and never reaches the MERGE."""
-    builder = target.alias("t").merge(inserts.alias("s"), "t.silver_identity = s.silver_identity")
+    replaces the committed row. A differing digest is a conflict, and never reaches the MERGE.
+    Bounded by `supersede` (the bounded-MERGEs section)."""
+    builder = target.alias("t").merge(inserts.alias("s"), canonical_merge_condition(supersede))
     if topic == SUPERSEDABLE_TOPIC:
         builder = builder.whenMatchedUpdateAll(
             condition=f"t.content_digest = s.content_digest AND {key_sql('s')} < {key_sql('t')}"
@@ -917,20 +1082,68 @@ LATE_COLUMNS: Final = (
 )
 
 
+def late_events_merge_condition(topic: str, committed: OccurredRange | None) -> str:
+    """The `late_events` MERGE's condition: the topic's partition (`LATE_EVENTS_LAYOUT`), the
+    batch's committed range (`MergeBounds.committed`), then topic and identity."""
+    return (
+        f"t.silver_topic = '{topic}' AND "
+        f"{occurred_at_predicate(f't.{DIGESTED_EVENT_TIME}', committed)} "
+        f"AND t.silver_topic = s.silver_topic AND t.silver_identity = s.silver_identity"
+    )
+
+
 def _merge_late_events(
-    spec: SilverTopic, opened: OpenedCheckpoint, classified: DataFrame, *, batch_id: int
+    spec: SilverTopic,
+    opened: OpenedCheckpoint,
+    classified: DataFrame,
+    committed_range: OccurredRange | None,
+    *,
+    batch_id: int,
 ) -> None:
     """Re-derive `late_events` for the batch's identities from the committed canonical rows.
 
     Read after the canonical MERGE, so it sees that commit (or, on a replay, the commit a previous
     attempt made): matched and late with other coordinates, update; matched and not late, delete;
-    not matched and late, insert; otherwise nothing."""
+    not matched and late, insert; otherwise nothing. The read and the MERGE are bounded by
+    `committed_range` (the bounded-MERGEs section); a batch identity whose committed row the
+    bounded read does not find refuses the batch before the MERGE."""
     from pyspark.sql import functions as F  # noqa: N812
 
     session = classified.sparkSession
     identities = classified.select("silver_identity").distinct()
-    committed = session.read.format("delta").load(str(spec.table.local_path(opened.lake)))
-    source = committed.join(identities, "silver_identity", "left_semi").select(
+    found = (
+        session.read.format("delta")
+        .load(str(spec.table.local_path(opened.lake)))
+        .filter(F.expr(occurred_at_predicate(DIGESTED_EVENT_TIME, committed_range)))
+        .join(identities, "silver_identity", "left_semi")
+        .persist()
+    )
+    try:
+        expected = identities.count()
+        located = found.select("silver_identity").distinct().count()
+        if located != expected:
+            raise SilverPruningError(
+                f"{spec.table}: {expected - located} of the batch's {expected} identities have "
+                f"no committed row inside the occurred_at range {committed_range}: refusing to "
+                f"re-derive {LATE_EVENTS} from part of the table"
+            )
+        _late_events_commit(spec, opened, found, committed_range, batch_id=batch_id)
+    finally:
+        found.unpersist()
+
+
+def _late_events_commit(
+    spec: SilverTopic,
+    opened: OpenedCheckpoint,
+    found: DataFrame,
+    committed_range: OccurredRange | None,
+    *,
+    batch_id: int,
+) -> None:
+    from pyspark.sql import functions as F  # noqa: N812
+
+    session = found.sparkSession
+    source = found.select(
         F.lit(spec.topic).alias("silver_topic"),
         "silver_identity",
         "occurred_at",
@@ -953,11 +1166,7 @@ def _merge_late_events(
     def build(target: Any) -> Any:
         return (
             target.alias("t")
-            .merge(
-                source.alias("s"),
-                f"t.silver_topic = '{spec.topic}' AND t.silver_topic = s.silver_topic "
-                f"AND t.silver_identity = s.silver_identity",
-            )
+            .merge(source.alias("s"), late_events_merge_condition(spec.topic, committed_range))
             .whenMatchedUpdate(condition=f"s.source_is_late AND {moved}", set=values)
             .whenMatchedDelete(condition="NOT s.source_is_late")
             .whenNotMatchedInsert(condition="s.source_is_late", values=values)

@@ -243,3 +243,104 @@ events handled exactly, and future skew quarantined, proved against real Delta a
 ## Status
 
 Proposed
+
+## Amendment 1 (2026-09-18): the canonical and `late_events` MERGEs are bounded on `occurred_at`
+
+- **Status of this amendment:** Proposed. The user approved bounding the MERGE (option (a)) after
+  the Step 13 stream benchmark (`bench-20260918-141621-stream-throughput-50aad177`, FAIL). The Step 13
+  record holds what that run measured; this amendment adds no measurement of its own.
+- **What it does not change:** §4.2 uniqueness, the dispositions, the commit order (§4), and timing
+  semantics v1. No lateness bound is added. A record of any age is admitted and deduplicated.
+
+### Context
+
+The canonical MERGE's condition was `t.silver_identity = s.silver_identity` and nothing else, so
+Delta read every file of the canonical table on every micro-batch (the Consequences above already
+named this growing join). The `late_events` MERGE read its topic's whole partition, and so did the
+read of the committed rows that feeds it. Per-batch cost therefore grew with the table.
+
+### Why no lateness or arrival bound exists, and why none is needed
+
+- **Nothing bounds how far apart one identity's deliveries are in arrival or event time.** `is_late`
+  is a tag, not a filter (§2.6). The only time rule that rejects a record is future skew (§2.2). It
+  bounds `occurred_at` above the record's own arrival, and never how far one delivery is from
+  another. A retry days later, a replay, or a checkpoint reset reaches the same identity at any
+  distance. Pruning on `kafka_timestamp`, `silver_admitted_at` or any lateness window would
+  therefore break exact deduplication.
+- **One identity's rows share one `occurred_at`.** This is an equality, not a window:
+  - The content digest covers `envelope.occurred_at` for every topic
+    (`silver_rules.content_digest`; `silver_rules.DIGESTED_EVENT_TIME`, which the module refuses at
+    import to exclude).
+  - An insert-only canonical table never replaces a row.
+  - A `tx.scored.v1` supersede requires the stored row's digest, in classification
+    (`silver.classify_frame`, `eligible`) and again in the MERGE's update condition
+    (`_canonical_merge`, `t.content_digest = s.content_digest`).
+  - So every row an identity has had, and the `late_events` row copied from one of them, carry one
+    `occurred_at`.
+
+### Decision
+
+1. **Canonical MERGE.** The condition is `t.silver_identity = s.silver_identity AND` a target-only
+   range on `t.occurred_at` (`silver.canonical_merge_condition`):
+   - The range is the batch's superseding rows' `occurred_at`, or `FALSE` when the batch supersedes
+     nothing, which is every batch of every topic but `tx.scored.v1` and most of its batches.
+   - It is exact. The source holds `admit` and `supersede` rows only.
+     - An `admit` row's identity has no committed row. Classification read, by identity and
+       unbounded, the table this MERGE writes, and §7 requires one writer per canonical table. So
+       the row matches nothing under any predicate.
+     - A `supersede` row matches its identity's committed row, whose `occurred_at` is its own.
+2. **`late_events`.** After the canonical commit, each batch identity has one committed row:
+   - the batch's `admit` or `supersede` row;
+   - or the row classification found. Classification now also returns `existing_occurred_at_us`,
+     and a `duplicate` or `replayed` row equals that row's `occurred_at`.
+
+   Both the read of the committed rows and the MERGE's target (`late_events_merge_condition`,
+   after the partition literal of §1) are bounded by the range of those values. A `conflict` row's
+   own `occurred_at` is left out: it differs by definition and never becomes canonical. Its
+   identity's stored row stays in the range through `existing_occurred_at_us`. The set of
+   identities re-derived is unchanged.
+3. **Literals Delta can skip files with.**
+   - The bounds are `TIMESTAMP '… +00:00'` literals, compared with each file's min/max statistics.
+     `occurred_at` is the fourth column of every canonical table and the third of `late_events`,
+     inside Delta's default 32 statistics columns. A unit test holds this.
+   - Each bound is widened by 1 ms (`STATS_SLACK_US`), because Delta records timestamp statistics
+     at millisecond precision. Widening only adds files to read.
+   - Silver appends roughly in arrival order, so file statistics are roughly time-clustered. A file
+     that holds a very late event, or one up to the 24 h future-skew limit, has wide statistics and
+     is read more often. That costs performance, never correctness.
+4. **Guards: a failed premise is refused, never deduplicated against part of the table.**
+   - *Before the batch's first commit* (`batch_merge_bounds`): the batch is refused with
+     `SilverPruningError` when any of these holds:
+     - a `supersede` row's `occurred_at` differs from the row it replaces;
+     - a bound is half-open;
+     - the superseding range falls outside the committed range.
+   - *Before the `late_events` MERGE*: the batch is refused when any batch identity has no committed
+     row inside the range.
+   - *After the writes*: `_assert_unique` still reads the canonical table and the topic's
+     `late_events` partition by identity, unbounded. So a duplicate that pruning could only create
+     if the premise broke stops the query.
+
+### Consequences
+
+- The two MERGEs, and the `late_events` source read, no longer grow with the table. For a batch
+  that supersedes nothing, the canonical MERGE reads no target file.
+- **Still O(table) per batch, and not bounded here:**
+  - classification's identity lookup (`classify_frame`, the `canonical.join(identities)` semi-join);
+  - the post-write uniqueness assertion (`_assert_unique`), which reads the canonical table by
+    identity and the topic's whole `late_events` partition.
+
+  They cannot be bounded on `occurred_at` exactly. A `conflict`, by definition, may carry any
+  `occurred_at`. Finding it, and proving that an `admit` identity has no row at all, needs a lookup
+  by identity. Bounding them needs a user decision: either an identity-organised layout or index
+  (Step 14 / ADR-0015 territory), or a declared dedup horizon, which §4.2 forbids.
+- **Two writers to one canonical table** (unsupported, §7): the unbounded MERGE read every file, so
+  Delta's conflict check refused the second writer's commit. With the MERGE reading no file, both
+  commits can land. The uniqueness assertion then stops the query after the fact, and
+  conservation fails.
+- **Evidence status.**
+  - The stream tests in `tests/stream/test_silver_bounded_merge.py` are written: exact dedup on a
+    multi-file table, a supersede at both edges of the range, and file-level pruning. Pruning is
+    shown by deleting every out-of-range data file: the bounded MERGE succeeds, and the unbounded
+    control fails with `FAILED_READ_FILE.FILE_NOT_EXIST`.
+  - Those stream tests have not been run as of this amendment.
+  - Whether the bounded MERGEs meet `P3.stream-throughput` is for a new benchmark run to say.

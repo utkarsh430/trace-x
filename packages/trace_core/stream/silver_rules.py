@@ -109,6 +109,18 @@ SCORED_RETRY_VARIABLE_PAYLOAD_FIELDS: Final = frozenset(
 )
 SCORED_RETRY_VARIABLE_ENVELOPE_FIELDS: Final = frozenset({"idempotency_key"})
 
+DIGESTED_EVENT_TIME: Final = "occurred_at"
+"""The envelope's event time, which every topic's content digest covers: two records with one
+digest have one `occurred_at`. So every row an identity has ever had in its canonical table, and its
+`silver.late_events` row, share one `occurred_at`, and Silver's MERGEs can prune their targets on it
+exactly (`trace_core.stream.silver.MergeBounds`; ADR-0053 Amendment 1). Excluding it from the digest
+would make that pruning unsound, so it is refused here, at import."""
+if DIGESTED_EVENT_TIME in RETRY_VARIABLE_ENVELOPE_FIELDS | SCORED_RETRY_VARIABLE_ENVELOPE_FIELDS:
+    raise ContractError(
+        f"the content digest must cover envelope.{DIGESTED_EVENT_TIME}: Silver's bounded MERGEs "
+        f"prune on it"
+    )
+
 INT64_MIN: Final = -(2**63)
 INT64_MAX: Final = 2**63 - 1
 
@@ -641,6 +653,7 @@ def classify(
 
 __all__ = [
     "DEDUP_IDENTITY",
+    "DIGESTED_EVENT_TIME",
     "DUPLICATES",
     "EXTRA_SEGMENT",
     "INT64_MAX",
