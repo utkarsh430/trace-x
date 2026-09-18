@@ -126,6 +126,55 @@ planning surfaced recorded under *What Phase 3 planning found in Phase 2's artef
   5. First GitHub CI runs.
   6. The exit review.
 
+### Phase 3 — 2026-09-18 evening: user decisions A and (a), the fixes, and the re-runs
+
+- **Decisions (user).**
+  - Parity: option A, fix the store (D26).
+  - Stream: option (a), bound Silver's canonical MERGE (D24).
+  - Docker Desktop was granted Files and Folders → Downloads access. That confirmed the TCC cause:
+    the repository bind mount now starts, and the load gate ran.
+- **History rewritten by the owner (not by the lead).** `git filter-branch` at 16:03:43 UTC
+  re-authored the ten unpushed commits after `0060521` as "Utkarsh Singh" and removed their
+  attribution lines. Every tree is identical, and each pair below was checked tree for tree. Run
+  records name the old SHAs; they are immutable and stay as written.
+
+  | old | new |
+  |---|---|
+  | `cd55033` | `9524f13` |
+  | `220ae92` | `e383610` |
+  | `a0a8cf3` | `9d69465` |
+  | `3bf7863` | `68eb1d8` |
+  | `11982c8` | `99ff2be` |
+  | `36816cc` | `da97777` |
+  | `da66bdb` | `24869c5` |
+  | `50aad17` | `e7c8583` |
+  | `c72d288` | `71b77d3` |
+  | `a3d51d7` | `a819821` |
+- **D26 fixed, and the parity partitions re-run on feature set 6.0.0.**
+  - Representative: PASS, `run_id: parity-20260918-160446-representative-a3d51d7f`. 0 divergences
+    in both pairings, skew 0.30%, guard clean, and the same counts as the 5.0.0 run.
+  - Adversarial, measured and recorded, not gated: FAIL, 28 divergences, down from 169
+    (`run_id: parity-20260918-174845-adversarial-ingress-a8198214`). They are all
+    `declined_ratio_1h` `lookback_completeness`. Both sides are absent; the store is correctly
+    INCOMPLETE, because the outcome window is not held for reads more than 60 minutes late; the
+    reference is COMPLETE. By ADR-0056 §3 ("absences match when … the lookback completeness too"),
+    this is a divergence, and the comparator is right. Reclassifying it would change accepted
+    criteria after seeing the result, so the FAIL stands. This is D27.
+- **New finding, D28: `declined_ratio_1h` is never served with a value on this path.** It requires
+  `authorization_outcome` in the scored transaction's field coverage. Scoring requests never carry
+  it, because outcomes arrive separately (ADR-0049), so it is UNAVAILABLE on every read in every
+  record. No parity result says anything about its outcome-window arithmetic.
+- **Phase 2 load gate re-met: PASS**, `run_id: load-20260918-193417-gateway-a8198214`, on the fixed
+  hot path, clean tree, quiet machine.
+  - 500.0 TPS sustained, 0 dropped iterations.
+  - p50 2.69 ms, p99 40.53 ms.
+  - 0 5xx, 0 4xx, 0 rate-limited, 0 feature-state evictions.
+
+  This closes Step 12's last item.
+- **Committed as evidence:** every parity and stream record from the day, including the FAILs and
+  the INVALID stream runs. Failed runs are never hidden, and `check-claims` refuses to let an
+  INVALID run be cited.
+
 ### Phase 3 — the rest of 2026-09-18: hardening, parity, and the two benchmarks
 
 **Status at the end of the day.** Ten of twelve required capabilities PASS. The layout benchmark was
@@ -2027,6 +2076,8 @@ both reports.
 | **D24** | **Silver's canonical MERGE is unpruned.** `_canonical_merge` matches `t.silver_identity = s.silver_identity` with no partition or time predicate, so each micro-batch joins the whole Silver table | Per-batch cost grows with the table; the likely reason the stream benchmark's consumer could not sustain the target rate | A bounded match needs an ADR-0053 decision (user) |
 | **D25** | **The stream consumer ran out of heap at the target rate** (Bronze and Silver in one JVM, the harness's default heap), twice, in INVALID runs | `P3.stream-throughput` cannot be measured past the warm-up at this configuration | With D24; a larger heap alone is a configuration change to be declared before a run, never after |
 | **D26** | **A late read withdraws every lookback of 5 minutes or more** (`redis_features._assemble` moves the context-wide `complete_since` for one unheld window), where ADR-0046 §5 withdraws only that window | Late transactions are scored with less context than the store holds; `failed_logins_1h` serves a real zero as INSUFFICIENT_HISTORY | Fix prepared (feature set 6.0.0); awaits the user's decision |
+| **D27** | **ADR-0056's rules make a divergence unavoidable when both sides are absent on a window the store no longer holds.** §3 requires completeness to match for absences, and F1 forbids the reference from modelling retention | The adversarial partition cannot reach 0 divergences while late reads meet short-retention windows; the FAIL is recorded, not re-framed | An ADR-0056 amendment is a user decision; any change needs a new measured run |
+| **D28** | **`declined_ratio_1h` is permanently UNAVAILABLE** on the scoring path: it requires `authorization_outcome` in the transaction's field coverage, which scoring requests never carry | A declared online feature is never served; parity has never compared its value | Product decision: derive coverage from verified outcomes (ADR-0049), or re-declare the feature |
 | **D14** | CI provisions no Redis or PostgreSQL, so the Redis conformance suite, the Redis store tests, the hole-ledger tests and the other service-backed integration tests skip there, loudly. Their evidence is local runs | CI cannot catch a regression in the online store or the ledger | Before Phase 3 exit: provision the services in `test-integration.yml`, or start throwaway containers in those fixtures as the capacity test does |
 
 ---
