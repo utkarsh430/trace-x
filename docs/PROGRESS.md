@@ -73,7 +73,13 @@ planning surfaced recorded under *What Phase 3 planning found in Phase 2's artef
 
   Removing the retired span at runtime makes this test fail (checked by mutation). This closes Step 9's
   recorded debt on the question.
-- **Found, not fixed: D20** (gateway unready on fresh volumes), and D21–D22 in *KNOWN TECHNICAL DEBT*.
+- **`P3.resource-bounds` PASS at `86d69e7`** (the landing commit, clean tree, no skips):
+  - the capability command: 46 passed in 59.51 s;
+  - the Step 11 stream suite: 14 passed in 409.15 s;
+  - Redis hydration: 11 passed in 247.36 s.
+
+  Recorded in `tests/acceptance/status.json` with both commands (D22).
+- **Found, not fixed: D20** (gateway unready on fresh volumes) and D21 in *KNOWN TECHNICAL DEBT*.
 - **Next.** `PHASE3_HANDOFF.md` §7 step 7 (branch deletion, after this is on origin), then §7 C,
   starting with `P3.checkpoint-resume` on the landed code.
 
@@ -316,8 +322,8 @@ afterwards as `trace_eval`: known fraud triaged at **37.3%** against **0.0%** fo
 `make verify` 11/0/0 on the Mac. Before it, `aca29b0` (the 2026-09-16 handoff) was the last gated
 commit. `9bd99b6` was committed on h3noyce under a user-approved exception with verify 10/11 (no
 Docker; `docs/PHASE3_HANDOFF.md` §4).
-`tests/acceptance/status.json` records `last_verified_commit` `4fc23de`, the commit its evidence was
-measured on.
+`tests/acceptance/status.json` records `last_verified_commit` `86d69e7`, the commit the latest evidence
+(`P3.resource-bounds`, 2026-09-18) was measured on.
 
 Phase 2's acceptance evidence was recorded at `c86c6cd` (`run_id: load-20260913-gateway-c86c6cdd`).
 The CI fix described under CURRENT STATUS is the commit that immediately follows this file; it changes
@@ -1905,7 +1911,7 @@ both reports.
 | **D19** | **A reused identity-event key with a different event time, while the replay cache is down,** gets a new envelope `event_id` on the log while the store records a conflict under one observation id (ADR-0051 risks) | History and the online store disagree about that one event | Step 6 exact dedup and conflicts |
 | **D20** | **The gateway is permanently unready after `make up` on fresh volumes.** `make up` waits on the gateway's liveness check, then runs `make migrate`. The gateway's first connections as `trace_app` fail authentication because the role does not exist yet, and its pool closes and never reopens (`/readyz`: `postgres: unreachable: PoolClosed`). Reproduced on a clean environment on 2026-09-18; a gateway restart clears it | Anything driving the gateway after a fresh `make up` (parity, load gate) sees 5xx or refusals until it is restarted. The workaround is in `PHASE3_HANDOFF.md` §7 A.4 | Before the measured parity run and the load-gate re-run: the pool must recover once the role exists, or `make up` must migrate before the gateway starts |
 | **D21** | **ADR-0052 Amendment 1 Risks 1–3 are open.** (1) A DELETE losing to a concurrent append is inferred, never constructed. (2) Gold is refused by VACUUM, not vacuumed, so its disk use is unbounded locally. (3) The Spark half of the coverage rule is proved with a stub ledger | Each is an untested path or an unbounded local resource | Phase 3 exit review decides: build the test or accept with the ADR |
-| **D22** | **`P3.resource-bounds`'s command does not select the 14 Step 11 stream tests.** `tests/stream/test_resource_bounds_maintenance.py` is marked `stream` only, so the crash, reset, VACUUM and race tests run outside `-m 'unit or integration'` | The recorded command under-reports what the capability rests on | When `P3.resource-bounds` is recorded: name both commands in its evidence |
+| ~~D22~~ | **Resolved 2026-09-18: the capability's evidence now names both commands.** `P3.resource-bounds`'s command does not select the 14 Step 11 stream tests. `tests/stream/test_resource_bounds_maintenance.py` is marked `stream` only, so the crash, reset, VACUUM and race tests run outside `-m 'unit or integration'` | The recorded command under-reports what the capability rests on | done |
 | **D14** | CI provisions no Redis or PostgreSQL, so the Redis conformance suite, the Redis store tests, the hole-ledger tests and the other service-backed integration tests skip there, loudly. Their evidence is local runs | CI cannot catch a regression in the online store or the ledger | Before Phase 3 exit: provision the services in `test-integration.yml`, or start throwaway containers in those fixtures as the capacity test does |
 
 ---

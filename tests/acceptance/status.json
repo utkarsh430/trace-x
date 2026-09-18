@@ -3,8 +3,8 @@
   "project": "TRACE-X",
   "current_phase": "3",
   "current_phase_name": "Streaming & Medallion",
-  "updated_at": "2026-09-16",
-  "last_verified_commit": "4fc23de",
+  "updated_at": "2026-09-18",
+  "last_verified_commit": "86d69e7",
   "legend": {
     "NOT_STARTED": "No implementation exists.",
     "IN_PROGRESS": "Implementation started; acceptance evidence incomplete.",
@@ -359,11 +359,11 @@
       "id": "P3.resource-bounds",
       "phase": "3",
       "name": "Local resource caps asserted; unsafe lake maintenance refused",
-      "status": "NOT_STARTED",
+      "status": "PASS",
       "evidence": {
-        "command": "pytest -m 'unit or integration' -k resource_bounds",
-        "verified_at": null,
-        "result": null
+        "command": "pytest -m 'unit or integration' -k resource_bounds; pytest -m stream tests/stream/test_resource_bounds_maintenance.py",
+        "verified_at": "2026-09-18",
+        "result": "46 passed, 0 failed, 0 skipped in 59.51 s at commit 86d69e7 (the Step 11 landing, ADR-0052 Amendment 1): 44 unit cases and 2 integration cases against a throwaway Kafka broker, Postgres and Delta 4.0.1 on Temurin 17.0.20.1 (macOS, clean Docker environment). The same commit's Step 11 stream suite, marked `stream` only and so outside this command (debt D22), passed separately: `pytest -m stream tests/stream/test_resource_bounds_maintenance.py` 14 passed, 0 skipped in 409.15 s (crash at every maintenance step, refusals commit nothing, Bronze-only ignoreDeletes, Silver reset after retention, VACUUM/OPTIMIZE guards, an append racing maintenance). Hydration at the same commit: 11 passed. The first run of this command, on the pre-fix tree c4912d6, FAILED 1 of 44: a real broker's topic id contained '+', which the floor key refused; fixed in 86d69e7. Open: Amendment 1 Risks 1-3 (D21)."
       }
     },
     {
