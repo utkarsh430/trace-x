@@ -49,6 +49,12 @@ EXCLUDE_FILES = (
     # by scripts/check_claims.py and tests/unit/test_eval_v1_freeze.py.
     r"^eval/manifest/",
     r"^eval/track_a/.*\.manifest\.json$",
+    # The Delta layout benchmark's machine-written results (committed) and its local run
+    # output (gitignored): sha256 digests of result sets and git SHAs, like the run records
+    # above, with fixed field sets (benchmarks/delta_layout/report.py). Added 2026-09-18, when
+    # the first smoke run's results.json tripped the entropy heuristic.
+    r"^benchmarks/delta_layout/results/",
+    r"^data/bench/",
     # The event-contract release ledger: sha256 digests of committed schema
     # files, high entropy by design and public. It holds schema filenames,
     # partition keys and digests -- there is nowhere in its shape for a

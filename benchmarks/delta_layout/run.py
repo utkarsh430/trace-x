@@ -301,6 +301,31 @@ def _merge(spark: SparkSession, source: DataFrame, path: Path) -> None:
     )
 
 
+def _create_table(
+    spark: SparkSession, variant: Variant, path: Path, fields: Sequence[tuple[str, str, bool]]
+) -> None:
+    """One commit, declared nullability kept. A generated column goes through Delta's builder:
+    Spark refuses one in path-based `CREATE TABLE delta.`...`` SQL even with the Delta catalog
+    ([UNSUPPORTED_FEATURE.TABLE_OPERATION], found on the first smoke run, 2026-09-18)."""
+    if not variant.generated:
+        spark.sql(create_table_sql(variant, str(path), fields))
+        return
+    from delta.tables import DeltaTable
+
+    builder = DeltaTable.create(spark).location(str(path))
+    for name, sql_type, nullable in fields:
+        builder = builder.addColumn(name, sql_type, nullable=nullable)
+    for column in variant.generated:
+        builder = builder.addColumn(
+            column.name, column.sql_type, generatedAlwaysAs=column.expression
+        )
+    if variant.partition_by:
+        builder = builder.partitionedBy(*variant.partition_by)
+    if variant.cluster_by:
+        builder = builder.clusterBy(*variant.cluster_by)
+    builder.execute()
+
+
 def build(
     spark: SparkSession,
     variant: Variant,
@@ -311,7 +336,7 @@ def build(
 ) -> dict[str, Any]:
     from pyspark.sql import functions as F  # noqa: N812
 
-    spark.sql(create_table_sql(variant, str(path), fields))
+    _create_table(spark, variant, path, fields)
     source = spark.read.format("delta").load(str(staging))
     for column in variant.generated:
         source = source.withColumn(column.name, F.expr(column.expression))
