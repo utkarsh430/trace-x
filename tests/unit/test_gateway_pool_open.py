@@ -13,7 +13,17 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
-from services.gateway.app import open_pool
+from fastapi.testclient import TestClient
+from services.gateway import app as gateway_app
+from services.gateway.app import GatewayState, create_app, open_pool
+from services.gateway.config import GatewaySettings
+from services.gateway.pipeline import ScoringPipeline
+
+from trace_core.features.definitions import ONLINE_FEATURES
+from trace_core.observability.metrics import HotPathMetrics
+from trace_core.rules.loader import default_loader
+from trace_core.scoring.banding import load_thresholds
+from trace_core.security.service_tokens import MIN_SECRET_LENGTH, ServiceTokenVerifier
 
 pytestmark = pytest.mark.unit
 
@@ -33,6 +43,7 @@ def unreachable_pool() -> Iterator[Any]:
         min_size=1,
         max_size=1,
         open=False,
+        timeout=1.0,  # bounded as the gateway's own pool is (`_postgres_pool`)
         kwargs={"connect_timeout": 2},
     )
     yield pool
@@ -53,3 +64,27 @@ def test_the_library_wait_this_replaces_closes_the_pool_on_timeout(unreachable_p
     assert unreachable_pool.closed
     with pytest.raises(psycopg_pool.PoolClosed):
         unreachable_pool.getconn(timeout=0.1)
+
+
+def test_the_gateway_start_up_leaves_a_late_databases_pool_open(
+    unreachable_pool: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The start-up path itself, not just `open_pool`: had the lifespan kept
+    `pool.open(wait=True, timeout=...)`, the pool would be closed here and never reopen."""
+    monkeypatch.setattr(gateway_app, "POOL_READY_WAIT_S", 0.5)
+    loader = default_loader(frozenset(ONLINE_FEATURES.ids))
+    state = GatewayState(
+        settings=GatewaySettings.from_environment({}),
+        verifier=ServiceTokenVerifier({"psp-one": "s" * MIN_SECRET_LENGTH}),
+        loader=loader,
+        pipeline=ScoringPipeline(
+            pack=loader.load(), thresholds=load_thresholds(), feature_store=None
+        ),
+        metrics=HotPathMetrics(),
+        pool=unreachable_pool,
+    )
+    with TestClient(create_app(state)) as client:
+        assert not unreachable_pool.closed, "start-up closed the pool: a late database is fatal"
+        ready = client.get("/readyz")
+        assert ready.status_code == 503, "an unreachable database must read as not ready"
+        assert ready.json()["checks"]["postgres"].startswith("unreachable")

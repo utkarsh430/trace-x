@@ -146,9 +146,9 @@ Declared in `eval/parity/partition.py`; `tests/unit/test_parity_partition.py` pi
 | Warm-up | the 24 h before, compressed, fault-free, same uniform shift | same |
 | Timing | PACED (§4.3): one uniform shift; on-time records at their recorded ingestion lag | PACED |
 | Seed | 20260915 | 20260916 |
-| Faults (basis points of slice base events) | reordered 50 (pairs), exact duplicate 50, retry with a new event id 20, late 20, future within 24 h 5 | reordered 500, exact duplicate 300, retry 300, late 300, future within 24 h 100, future beyond 24 h 50 |
+| Faults (basis points of slice base events) | reordered 50 (pairs), exact duplicate 50, retry with a new event id 20, late 20, future within 24 h 5 | reordered 300 (500 in v1, see Amendment 1), exact duplicate 300, retry 300, late 300, future within 24 h 100, future beyond 24 h 50 |
 | Bands | late 1,800-7,200 s; future lead 3,600-43,200 s; beyond 93,600-259,200 s; duplicates 1-120 s; reorder gap ≤ 120 s | same |
-| Digest | `sha256:7b1237e9…bc21f8f`; lateness `sha256:95b79e09…aa57e4d` | `sha256:f686f127…58604aa`; lateness `sha256:e44ce346…596f72b` |
+| Digest | `sha256:7b1237e9…bc21f8f`; lateness `sha256:95b79e09…aa57e4d` | v2: `sha256:815e7258…350973`; lateness `sha256:30b159ea…c37e25` (v1: `f686f127…58604aa`, `e44ce346…596f72b`) |
 
 - **Chosen, not measured.** No production lateness data exists.
 - **Counts** round half up from basis points.
@@ -299,7 +299,7 @@ classification already expects. The hypothesis that it was unbounded is withdraw
   skew below 1%;
 - a measured record on the adversarial partition, recorded, not gated.
 
-## Evidence so far (diagnostic; no measured run exists)
+## Evidence so far (diagnostic, written before any measured run; see Amendment 1 and PROGRESS for the measured runs)
 
 Every figure below is a diagnostic result on the working tree, NOT publishable: no `run_id`, and a
 measured run is the lead's, on a clean commit.
@@ -372,6 +372,36 @@ each fail the comparison, while the unmutated control compares clean.
   writer.
 - Representative arrival skew is weak evidence at eval-v2's density (§5).
 - Every limit in §7.
+
+## Amendment 1 (2026-09-18): the adversarial partition, and four guard hardenings
+
+Made after the Phase 3 exit review and the first measured representative run, and **before** any
+measured adversarial run. The user approved the partition change.
+
+1. **The adversarial lateness model is `adversarial-ingress-v2`.** v1 asked for a 500 bp reorder
+   rate, which is 181 pairs on its slice (3,617 events). eval-v2's adversarial slice holds only 141
+   disjoint same-key pairs within 120 s, so `build_overlay` refused and v1 could never run. It had
+   never been run. v2 sets the reorder rate to 300 bp (109 pairs) and changes nothing else. Digests:
+   lateness `sha256:30b159ea35eb4d630abaf3c2a8337a82b03615b518c5b4350e84deb927c37e25`, partition
+   `sha256:815e72584417f7159ed7885d42b2de45a7fc8c5419ebbb64b53fb84127350973`. §5's table row for the
+   adversarial reorder rate reads 300 from this amendment on. The representative declaration and its
+   digests are unchanged.
+2. **Arrival skew needs at least 200 comparisons on a gated partition** (`MIN_SKEW_COMPARISONS`, the
+   stratum floor). Before, one agreeing comparison passed.
+3. **Per-feature ceilings on what is not really compared** (`eval/parity/partition.py`):
+   - `MAX_EXCUSED_FRACTION_PER_FEATURE` (0.5): no more than half of a feature's offered comparisons
+     may be excused as declared exceptions;
+   - `MAX_UNCOMPARED_FRACTION_PER_FEATURE` (0.5): no more than half may be unvouched and excused
+     together. Each bound alone had let through a feature that was never compared with a value.
+4. **Commit and publishability.**
+   - A measured run refuses when its commit SHA cannot be resolved; a failed git call used to read
+     as a clean tree.
+   - A record is publishable when it is measured, clean and at a resolved commit, **whatever its
+     verdict**, so a FAIL stays citable. Before, only a PASS was publishable.
+
+The representative record `parity-20260918-085943-representative-220ae92b`, measured before this
+amendment, meets every new rule. Its skew denominator is 12,892. It has no excused and no unvouched
+comparison in any feature. Its SHA is resolved. So it stands as evidence.
 
 ## Status
 

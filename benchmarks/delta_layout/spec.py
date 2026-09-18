@@ -42,6 +42,7 @@ import math
 import statistics
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Final, Literal
 
 from benchmarks.delta_layout.generator import (
@@ -57,7 +58,17 @@ from benchmarks.delta_layout.generator import (
 
 MIN_PUBLISHABLE_ROWS: Final = 10_000_000
 """ROADMAP Phase 3 and ADR-0015: the layout decision is taken at ten million rows or more."""
-MIN_PUBLISHABLE_REPS: Final = 3
+DEFAULT_REPS: Final = 5
+"""The repetitions `make bench-layout` declares by default (`run.py --reps`)."""
+MIN_PUBLISHABLE_REPS: Final = DEFAULT_REPS
+"""A run with fewer repetitions than the declared default is diagnostic, never evidence."""
+
+EXIT_PUBLISHED: Final = 0
+"""A valid, publishable run: record, results and report written into the repository."""
+EXIT_HARNESS_ERROR: Final = 2
+"""The harness could not measure (a refusal, an integrity failure): the run is invalid."""
+EXIT_NOT_PUBLISHABLE: Final = 3
+"""A valid run that is not publishable: everything written under its own lake directory only."""
 
 SUBJECT: Final = "delta-layout"
 CONTROL: Final = "control"
@@ -694,12 +705,100 @@ def missing_manifest_fields(record: Mapping[str, Any]) -> list[str]:
     return missing
 
 
-def publishable(*, rows: int, reps: int, dirty_worktree: bool) -> bool:
-    return rows >= MIN_PUBLISHABLE_ROWS and reps >= MIN_PUBLISHABLE_REPS and not dirty_worktree
+def unpublishable_reasons(
+    *,
+    rows: int,
+    reps: int,
+    dirty_at_start: bool,
+    dirty_at_end: bool,
+    same_commit: bool,
+    integrity_passed: bool,
+) -> list[str]:
+    """Every reason a run may not be published; empty exactly when it may be.
+
+    The worktree is checked at the start and again at the end, before anything is written into
+    the repository: a tree that was dirty, became dirty, or moved to another commit during the
+    run measured code that no commit names.
+    """
+    reasons = []
+    if rows < MIN_PUBLISHABLE_ROWS:
+        reasons.append(f"{rows} rows < {MIN_PUBLISHABLE_ROWS}")
+    if reps < MIN_PUBLISHABLE_REPS:
+        reasons.append(f"{reps} repetitions < {MIN_PUBLISHABLE_REPS}")
+    if dirty_at_start:
+        reasons.append("the worktree was dirty at the start")
+    if dirty_at_end:
+        reasons.append("the worktree was dirty at the end")
+    if not same_commit:
+        reasons.append("HEAD moved to another commit during the run")
+    if not integrity_passed:
+        reasons.append("an integrity check failed")
+    return reasons
+
+
+def publishable(
+    *,
+    rows: int,
+    reps: int,
+    dirty_at_start: bool,
+    dirty_at_end: bool,
+    same_commit: bool,
+    integrity_passed: bool,
+) -> bool:
+    return not unpublishable_reasons(
+        rows=rows,
+        reps=reps,
+        dirty_at_start=dirty_at_start,
+        dirty_at_end=dirty_at_end,
+        same_commit=same_commit,
+        integrity_passed=integrity_passed,
+    )
+
+
+@dataclass(frozen=True)
+class OutputPaths:
+    manifest: Path
+    results: Path
+    report: Path
+    in_repository: bool
+
+
+def output_paths(
+    *,
+    publishable: bool,
+    run_id: str,
+    run_dir: Path,
+    manifest_dir: Path,
+    results_dir: Path,
+    report_path: Path,
+) -> OutputPaths:
+    """Only a publishable run writes into the repository; any other run writes all three under
+    its own (gitignored) lake directory, so it can never overwrite the publishable evidence."""
+    if publishable:
+        return OutputPaths(
+            manifest=manifest_dir / f"{run_id}.json",
+            results=results_dir / f"{run_id}.json",
+            report=report_path,
+            in_repository=True,
+        )
+    return OutputPaths(
+        manifest=run_dir / "manifest.json",
+        results=run_dir / "results.json",
+        report=run_dir / "REPORT.md",
+        in_repository=False,
+    )
+
+
+def exit_code(*, publishable: bool) -> int:
+    return EXIT_PUBLISHED if publishable else EXIT_NOT_PUBLISHABLE
 
 
 __all__ = [
     "CONTROL",
+    "DEFAULT_REPS",
+    "EXIT_HARNESS_ERROR",
+    "EXIT_NOT_PUBLISHABLE",
+    "EXIT_PUBLISHED",
     "MANIFEST_REQUIRED",
     "MEASUREMENT_FIELDS",
     "MIN_PUBLISHABLE_REPS",
@@ -712,6 +811,7 @@ __all__ = [
     "BenchmarkRefusedError",
     "LayoutChangedResultsError",
     "MissingMetricError",
+    "OutputPaths",
     "QueryParams",
     "QueryRun",
     "Ranked",
@@ -721,10 +821,12 @@ __all__ = [
     "ShapeSummary",
     "Variant",
     "create_table_sql",
+    "exit_code",
     "expected_rows",
     "extract_scan_metrics",
     "missing_manifest_fields",
     "optimize_sql",
+    "output_paths",
     "parameters",
     "publishable",
     "rank",
@@ -732,5 +834,6 @@ __all__ = [
     "require_identical_results",
     "shape_leaders",
     "summarize",
+    "unpublishable_reasons",
     "variant_named",
 ]

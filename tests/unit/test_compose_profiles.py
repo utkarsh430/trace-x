@@ -42,8 +42,8 @@ CORE_SERVICES_STILL_TO_COME = ("api", "worker", "ui")
 container. Whatever the containerised services claim, these three must still
 fit in what is left."""
 
-"""`services/gateway/app.py` opens the psycopg pool with `timeout=10` at
-start-up and serves anyway when it expires."""
+# POOL_OPEN_TIMEOUT_S: start-up waits this long for a first connection, then serves not-ready
+# with the pool left open (services/gateway/app.py `open_pool`).
 
 SENSITIVE_KEY = re.compile(r"TOKEN|PASSWORD|SECRET|KEY|AUTH", re.I)
 INTERPOLATED = re.compile(r"\$\{[A-Z_][A-Z0-9_]*")

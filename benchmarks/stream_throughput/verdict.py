@@ -164,26 +164,92 @@ def throughput_verdicts(stats: WindowStats) -> list[Verdict]:
 # -------------------------------------------------------------------- outage ---
 
 
+@dataclass(frozen=True, slots=True)
+class OutageTiming:
+    """The outage as it happened, on the host clock.
+
+    The stop is *signalled* first; the consumer process has *exited* only once its queries have
+    stopped (up to `consumer_stop_timeout_s`, plus a kill), and Silver may keep committing until
+    then. So the outage runs from the exit to the *restart*, never from the signal."""
+
+    signalled_ms: int
+    exited_ms: int
+    restarted_ms: int
+
+    @property
+    def stop_s(self) -> float:
+        """How long the consumer took to exit after it was signalled."""
+        return (self.exited_ms - self.signalled_ms) / 1000
+
+    @property
+    def down_s(self) -> float:
+        """How long no consumer process existed: the outage."""
+        return (self.restarted_ms - self.exited_ms) / 1000
+
+    def as_record(self) -> dict[str, float | int]:
+        return {
+            "signalled_at_ms": self.signalled_ms,
+            "exited_at_ms": self.exited_ms,
+            "restarted_at_ms": self.restarted_ms,
+            "stop_s": self.stop_s,
+            "consumer_down_s": self.down_s,
+        }
+
+
+def restart_due_ms(exited_ms: int) -> int:
+    """When the consumer is restarted: `OUTAGE_S` after its process actually exited."""
+    return exited_ms + OUTAGE_S * 1000
+
+
+def commits_while_down(timing: OutageTiming, commit_ms: Iterable[int]) -> list[int]:
+    """Silver commit times strictly inside (exited, restarted): none can exist if the consumer was
+    really down, because no process was left to write them."""
+    return sorted(t for t in commit_ms if timing.exited_ms < t < timing.restarted_ms)
+
+
+def outage_timing_verdicts(timing: OutageTiming, silver_commit_ms: Iterable[int]) -> list[Verdict]:
+    """Integrity of the outage itself: it lasted `OUTAGE_S` from the consumer's real exit, and
+    Silver did not advance while the consumer was supposedly down."""
+    ordered = timing.signalled_ms <= timing.exited_ms <= timing.restarted_ms
+    inside = commits_while_down(timing, silver_commit_ms)
+    return [
+        Verdict(
+            "outage_duration",
+            INTEGRITY,
+            ordered and abs(timing.down_s - OUTAGE_S) <= OUTAGE_TIMING_TOLERANCE_S,
+            f"the consumer exited {timing.stop_s:.3f} s after the stop was signalled and was "
+            f"restarted {timing.down_s:.3f} s after it exited; the outage is {OUTAGE_S} s "
+            f"(+-{OUTAGE_TIMING_TOLERANCE_S} s), measured from the exit"
+            + ("" if ordered else "; the signal, exit and restart times are out of order"),
+        ),
+        Verdict(
+            "outage_consumer_down",
+            INTEGRITY,
+            not inside,
+            (
+                f"{len(inside)} Silver commit(s) inside the down window "
+                f"({timing.exited_ms}, {timing.restarted_ms}) ms, e.g. {inside[:3]}: the "
+                f"consumer was not down, so no outage was measured"
+            )
+            if inside
+            else "no Silver commit between the consumer's exit and its restart",
+        ),
+    ]
+
+
 def outage_verdicts(
     recovery: Recovery | None,
     *,
-    consumer_down_s: float | None,
+    timing: OutageTiming | None,
+    silver_commit_ms: Iterable[int],
     consumer_failure: str | None,
     bound_s: int,
 ) -> list[Verdict]:
     verdicts: list[Verdict] = []
-    if consumer_down_s is not None:
+    if timing is not None:
         # Only an outage that happened can have the wrong length. One that never happened, because
         # the consumer had already failed, is that failure's target verdict below.
-        verdicts.append(
-            Verdict(
-                "outage_duration",
-                INTEGRITY,
-                abs(consumer_down_s - OUTAGE_S) <= OUTAGE_TIMING_TOLERANCE_S,
-                f"the consumer was down {consumer_down_s} s; the outage is {OUTAGE_S} s "
-                f"(+-{OUTAGE_TIMING_TOLERANCE_S} s)",
-            )
-        )
+        verdicts.extend(outage_timing_verdicts(timing, silver_commit_ms))
     if consumer_failure is not None:
         verdicts.append(Verdict("lag_recovers_after_outage", TARGET, False, consumer_failure))
         return verdicts

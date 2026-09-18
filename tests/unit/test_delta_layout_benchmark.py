@@ -497,11 +497,156 @@ def test_every_toolchain_version_and_measured_section_is_enforced() -> None:
     assert {"toolchain.delta", "measured.ranking"} <= set(spec.missing_manifest_fields(record))
 
 
-def test_only_a_clean_full_run_is_publishable() -> None:
-    assert spec.publishable(rows=10_000_000, reps=3, dirty_worktree=False)
-    assert not spec.publishable(rows=200_000, reps=5, dirty_worktree=False)
-    assert not spec.publishable(rows=10_000_000, reps=2, dirty_worktree=False)
-    assert not spec.publishable(rows=10_000_000, reps=5, dirty_worktree=True)
+_PUBLISHABLE: dict[str, Any] = {
+    "rows": 10_000_000,
+    "reps": 5,
+    "dirty_at_start": False,
+    "dirty_at_end": False,
+    "same_commit": True,
+    "integrity_passed": True,
+}
+
+
+def test_the_publishable_repetitions_are_the_declared_default() -> None:
+    from benchmarks.delta_layout import run
+
+    assert spec.MIN_PUBLISHABLE_REPS == spec.DEFAULT_REPS == 5
+    args = run._parser().parse_args([])
+    assert args.reps == spec.DEFAULT_REPS and args.rows == spec.MIN_PUBLISHABLE_ROWS
+
+
+def test_a_clean_full_run_at_the_declared_defaults_is_publishable() -> None:
+    assert spec.publishable(**_PUBLISHABLE)
+    assert spec.unpublishable_reasons(**_PUBLISHABLE) == []
+
+
+@pytest.mark.parametrize(
+    ("override", "reason"),
+    [
+        ({"rows": 9_999_999}, "rows"),
+        ({"rows": 200_000}, "rows"),
+        ({"reps": 4}, "repetitions"),
+        ({"reps": 1}, "repetitions"),
+        ({"dirty_at_start": True}, "dirty at the start"),
+        ({"dirty_at_end": True}, "dirty at the end"),
+        ({"same_commit": False}, "another commit"),
+        ({"integrity_passed": False}, "integrity"),
+    ],
+)
+def test_each_failing_condition_alone_makes_a_run_unpublishable(
+    override: dict[str, Any], reason: str
+) -> None:
+    conditions = {**_PUBLISHABLE, **override}
+    assert not spec.publishable(**conditions)
+    reasons = spec.unpublishable_reasons(**conditions)
+    assert len(reasons) == 1 and reason in reasons[0]
+
+
+def test_every_failing_condition_is_reported() -> None:
+    reasons = spec.unpublishable_reasons(
+        rows=1,
+        reps=1,
+        dirty_at_start=True,
+        dirty_at_end=True,
+        same_commit=False,
+        integrity_passed=False,
+    )
+    assert len(reasons) == 6
+
+
+def _paths(publishable: bool, tmp_path: Path) -> spec.OutputPaths:
+    return spec.output_paths(
+        publishable=publishable,
+        run_id="bench-x",
+        run_dir=tmp_path / "lake" / "bench-x",
+        manifest_dir=tmp_path / "repo" / "eval" / "manifest",
+        results_dir=tmp_path / "repo" / "results",
+        report_path=tmp_path / "repo" / "REPORT.md",
+    )
+
+
+def test_only_a_publishable_run_writes_into_the_repository(tmp_path: Path) -> None:
+    repo, run_dir = tmp_path / "repo", tmp_path / "lake" / "bench-x"
+    published = _paths(True, tmp_path)
+    assert published.in_repository
+    assert published.manifest == repo / "eval" / "manifest" / "bench-x.json"
+    assert published.results == repo / "results" / "bench-x.json"
+    assert published.report == repo / "REPORT.md"
+
+    kept = _paths(False, tmp_path)
+    assert not kept.in_repository
+    for path in (kept.manifest, kept.results, kept.report):
+        assert path.parent == run_dir and not path.is_relative_to(repo)
+    assert kept.report != published.report, "a non-publishable run never touches REPORT.md"
+
+
+def test_a_non_publishable_run_lands_in_the_gitignored_lake_by_default() -> None:
+    from benchmarks.delta_layout import run
+
+    assert run.DEFAULT_LAKE == ROOT / "data" / "bench" / "delta_layout"
+    ignored = (ROOT / ".gitignore").read_text().splitlines()
+    assert "data/bench/" in ignored
+    for repo_path in (run.MANIFEST_DIR, run.RESULTS_DIR, run.REPORT_PATH):
+        assert not repo_path.is_relative_to(run.DEFAULT_LAKE)
+
+
+def test_exit_codes_distinguish_published_unpublishable_and_harness_error() -> None:
+    assert spec.exit_code(publishable=True) == spec.EXIT_PUBLISHED == 0
+    assert spec.exit_code(publishable=False) == spec.EXIT_NOT_PUBLISHABLE == 3
+    assert spec.EXIT_HARNESS_ERROR == 2
+    assert len({spec.EXIT_PUBLISHED, spec.EXIT_NOT_PUBLISHABLE, spec.EXIT_HARNESS_ERROR}) == 3
+
+
+def test_a_refusal_exits_as_a_harness_error_before_any_write(tmp_path: Path) -> None:
+    from benchmarks.delta_layout import run
+
+    lake = tmp_path / "lake"
+    assert run.main(["--reps", "0", "--lake", str(lake)]) == spec.EXIT_HARNESS_ERROR
+    assert not lake.exists()
+
+
+def test_an_unexpected_failure_exits_as_a_harness_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from benchmarks.delta_layout import run
+
+    def crash(argv: Any) -> int:
+        raise OSError("disk gone")
+
+    monkeypatch.setattr(run, "_run", crash)
+    assert run.main([]) == spec.EXIT_HARNESS_ERROR
+
+
+def test_the_worktree_is_checked_again_at_the_end_before_any_repository_write() -> None:
+    """Defect 2: a tree that changed during the run must not be published. The second check has
+    to come after the measurements and before the first write (a write there would dirty it)."""
+    import inspect
+
+    from benchmarks.delta_layout import run
+
+    source = inspect.getsource(run._run)
+    checks = [i for i in range(len(source)) if source.startswith("is_dirty()", i)]
+    assert len(checks) == 2
+    assert source.index("require_complete_runs(") < checks[1] < source.index("_write_new(")
+    assert "dirty_at_end=dirty_at_end" in source and "same_commit=end_sha == sha" in source
+
+
+def test_every_record_says_whether_it_is_publishable() -> None:
+    import inspect
+
+    from benchmarks.delta_layout import run
+
+    source = inspect.getsource(run._run)
+    assert source.count('"publishable": is_publishable') == 2, "results and manifest alike"
+    assert "publishable" in spec.MANIFEST_REQUIRED
+
+
+def test_the_report_names_why_a_run_is_not_publishable() -> None:
+    record = {
+        **_record(),
+        "publishable": False,
+        "unpublishable_reasons": ["1 repetitions < 5", "the worktree was dirty at the end"],
+    }
+    text = report.render(record)
+    assert "NOT publishable (1 repetitions < 5; the worktree was dirty at the end)" in text
 
 
 def test_the_report_puts_every_number_under_a_run_id_and_names_no_winner_itself() -> None:

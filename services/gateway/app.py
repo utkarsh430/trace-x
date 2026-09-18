@@ -536,7 +536,7 @@ def create_app(state: GatewayState | None = None) -> FastAPI:
         # first: a pool that is still closed reads as an unreadable ledger, which cannot vouch
         # for the absence of a hole (ADR-0046 §5).
         if resolved.pool is not None:
-            open_pool(resolved.pool)
+            open_pool(resolved.pool, ready_wait_s=POOL_READY_WAIT_S)
 
         # The start-up writes to online state run only in the fenced writer (ADR-0051 §2): the
         # supervisor acquires the session, runs them, and only then reports ready. Its first step

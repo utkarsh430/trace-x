@@ -9,8 +9,10 @@
    is below the target, and at most `warmup_max_s`; then the measured window of `measured_s`. The
    window runs whatever the lag, so a pipeline that never reaches steady state is measured failing.
 3. *Outage.* `pre_outage_s` of steady traffic, then the consumer is stopped (SIGTERM, its queries
-   stop cleanly) and restarted from its checkpoints exactly `OUTAGE_S` after the stop, while the
-   producers keep offering the rate. Observed until lag has recovered and held, or until
+   stop cleanly) and restarted from its checkpoints exactly `OUTAGE_S` after its process *exited*
+   -- not after the signal: a graceful stop takes time and Silver may commit throughout it -- while
+   the producers keep offering the rate. A Silver commit between the exit and the restart makes
+   the run INVALID: the consumer was not down. Observed until lag has recovered and held, or until
    `recovery_bound_s` plus the hold has passed.
 4. *Evaluation.* The lag series is recomputed from the complete Delta logs after the run -- the
    live monitor only decides when the window starts and when observation may end -- and judged
@@ -18,9 +20,9 @@
    and the worktree clean.
 
 **Exit codes.** 0 every target met; 1 a target missed (recorded and reported as found); 2 the
-harness could not measure (refused preflight, a producer or consumer refusal, an integrity failure
--- the run is INVALID and no report is written); 3 a valid run on a dirty worktree (recorded, not
-publishable, no report).
+harness could not measure (refused preflight, a producer or consumer refusal, an integrity failure,
+or any unexpected exception -- the run is INVALID, its record says `publishable: false`, and no
+report is written); 3 a valid run on a dirty worktree (recorded, not publishable, no report).
 
 Nothing here needs more than the local `streaming` profile: `make up-streaming`, then
 `make kafka-topics`.
@@ -41,7 +43,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Final
 
@@ -57,7 +59,9 @@ from benchmarks.stream_throughput.lag import (
     window_stats,
 )
 from benchmarks.stream_throughput.spec import LAG_TARGET_MS, OUTAGE_S, RunConfig
-from benchmarks.stream_throughput.verdict import GoldBuild, Verdict
+from benchmarks.stream_throughput.verdict import GoldBuild, OutageTiming, Status, Verdict
+
+from trace_core.observability import get_logger
 
 ROOT: Final = Path(__file__).resolve().parents[2]
 EXIT_PASS: Final = 0
@@ -69,6 +73,8 @@ LAKE_ROOT_ENV: Final = "TRACE_DELTA_ROOT"
 READY_TIMEOUT_S: Final = 180.0
 RESOURCE_EVERY_S: Final = 5.0
 GOLD_EXIT_REFUSED: Final = 2
+
+_log = get_logger(__name__)
 
 
 class HarnessError(RuntimeError):
@@ -149,6 +155,15 @@ def watermarks(bootstrap: str, partitions: Sequence[PartitionKey]) -> dict[Parti
 # --------------------------------------------------------------- processes ---
 
 
+@dataclass(frozen=True, slots=True)
+class StopResult:
+    signalled_ms: int
+    exited_ms: int
+    """Taken once the process had exited (after the wait, or after the kill)."""
+    exit_code: int | None
+    killed: bool
+
+
 class ConsumerProcess:
     """The consumer under test, one generation per start. Stopped with SIGTERM (its queries stop
     cleanly); killed with its whole process group, JVM included, only if it will not stop."""
@@ -211,8 +226,9 @@ class ConsumerProcess:
     def exit_code(self) -> int | None:
         return None if self.process is None else self.process.poll()
 
-    def stop(self, timeout_s: float) -> tuple[int, int | None, bool]:
-        """(signalled at, exit code, killed)."""
+    def stop(self, timeout_s: float) -> StopResult:
+        """Signal, then wait for the process to exit (killing its group if it will not). The exit
+        time is taken after the wait returns: until then the consumer may still be committing."""
         if self.process is None:
             raise HarnessError("the consumer was never started")
         signalled = _now_ms()
@@ -225,18 +241,19 @@ class ConsumerProcess:
                 killed = True
                 os.killpg(self.process.pid, signal.SIGKILL)
                 self.process.wait(timeout=30)
+        exited = _now_ms()
         code = self.process.returncode
         self.events.append(
             {
                 "event": "stop",
                 "generation": self.generation,
                 "signalled_ms": signalled,
-                "exited_ms": _now_ms(),
+                "exited_ms": exited,
                 "exit_code": code,
                 "killed": killed,
             }
         )
-        return signalled, code, killed
+        return StopResult(signalled, exited, code, killed)
 
 
 class GoldLoop(threading.Thread):
@@ -607,6 +624,21 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Any exception the run did not turn into a verdict is a harness failure (exit 2), never
+    exit 1: a crash must not be mistaken for a missed target, and it never writes a report."""
+    try:
+        return _run(argv)
+    except (Exception, KeyboardInterrupt) as exc:
+        _log.exception("load_stream_harness_error", error=type(exc).__name__)
+        print(
+            f"load-stream: harness error ({type(exc).__name__}: {exc}); the run is not "
+            f"evidence of anything and no report was written",
+            file=sys.stderr,
+        )
+        return EXIT_HARNESS
+
+
+def _run(argv: Sequence[str] | None) -> int:
     args = _parser().parse_args(argv)
     try:
         config = config_from_args(args)
@@ -647,7 +679,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     sampler: ResourceSampler | None = None
     phases: dict[str, int | None] = {}
     consumer_failure: str | None = None
-    consumer_down_s: float | None = None
+    outage_timing: OutageTiming | None = None
     harness_error: str | None = None
     broker: dict[str, dict[str, Any]] = {}
     expected: list[PartitionKey] = []
@@ -762,14 +794,22 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         # --- phase 2: outage ---
         _sleep_until(measured_end + config.pre_outage_s * 1000, check=check)
-        signalled, code, killed = consumer.stop(config.consumer_stop_timeout_s)
-        phases["outage_start_ms"] = signalled
-        if code not in (0, None):
-            notes.append(f"the consumer exited {code} when stopped for the outage")
-        if killed:
+        stopped = consumer.stop(config.consumer_stop_timeout_s)
+        phases["outage_start_ms"] = stopped.signalled_ms
+        phases["outage_signalled_ms"] = stopped.signalled_ms
+        phases["consumer_exited_ms"] = stopped.exited_ms
+        if stopped.exit_code not in (0, None):
+            notes.append(f"the consumer exited {stopped.exit_code} when stopped for the outage")
+        if stopped.killed:
             notes.append("the consumer did not stop within its timeout and was killed")
-        _say(f"OUTAGE: consumer stopped (exit {code}); restarting in {OUTAGE_S} s")
-        restart_at = signalled + OUTAGE_S * 1000
+        _say(
+            f"OUTAGE: consumer exited (code {stopped.exit_code}) "
+            f"{(stopped.exited_ms - stopped.signalled_ms) / 1000:.1f} s after the stop was "
+            f"signalled; restarting {OUTAGE_S} s after the exit"
+        )
+        # The outage runs from the process's real exit, not from the signal: a graceful stop can
+        # take up to `consumer_stop_timeout_s`, and Silver can commit throughout it.
+        restart_at = verdict.restart_due_ms(stopped.exited_ms)
 
         def outage_check() -> None:
             _, _, errors = fleet.snapshot() if fleet is not None else ({}, {}, [])
@@ -779,7 +819,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         _sleep_until(restart_at, check=outage_check)
         restored = consumer.start()
         phases["restored_ms"] = restored
-        consumer_down_s = (restored - signalled) / 1000
+        outage_timing = OutageTiming(stopped.signalled_ms, stopped.exited_ms, restored)
         _say("consumer restarted from its checkpoints; observing recovery")
         observe_until = restored + (config.recovery_bound_s + config.recovery_hold_s) * 1000
         while _now_ms() < observe_until:
@@ -805,6 +845,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         harness_error = str(exc)
     except KeyboardInterrupt:
         harness_error = "interrupted"
+    except Exception as exc:  # a harness defect: recorded as INVALID, never as a missed target
+        _log.exception("load_stream_harness_crashed", run_id=run_id, error=type(exc).__name__)
+        harness_error = f"unexpected {type(exc).__name__}: {exc}"
     finally:
         _say("stopping ...")
         if gold is not None and gold.is_alive():
@@ -839,7 +882,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         gold=gold,
         sampler=sampler,
         consumer_failure=consumer_failure,
-        consumer_down_s=consumer_down_s,
+        outage_timing=outage_timing,
         harness_error=harness_error,
         notes=notes,
         toolchain_record=toolchain_record,
@@ -916,7 +959,7 @@ def _evaluate_and_record(
     gold: GoldLoop | None,
     sampler: ResourceSampler | None,
     consumer_failure: str | None,
-    consumer_down_s: float | None,
+    outage_timing: OutageTiming | None,
     harness_error: str | None,
     notes: list[str],
     toolchain_record: list[dict[str, Any]],
@@ -942,7 +985,8 @@ def _evaluate_and_record(
                     fleet=fleet,
                     gold=gold,
                     consumer_failure=consumer_failure,
-                    consumer_down_s=consumer_down_s,
+                    outage_timing=outage_timing,
+                    silver_commit_ms=[c.committed_ms for c in commits],
                     started=started,
                     finished=finished,
                     verdicts=verdicts,
@@ -992,19 +1036,29 @@ def _evaluate_and_record(
     print(f"\n  status: {status.value}")
     print(f"  record: {path}")
     print(f"  lake:   {lake_root} ({lake_bytes / 2**30:.2f} GiB, kept as evidence)")
-    if status is verdict.Status.INVALID:
+    code = exit_code_for(status, publishable=run.publishable)
+    if code == EXIT_HARNESS:
         print("  INVALID: the run did not measure what it claims; no report is written.")
-        return EXIT_HARNESS
-    if not run.publishable:
+        return code
+    if code == EXIT_UNPUBLISHABLE:
         print("  dirty worktree: recorded, NOT publishable, no report written. Commit and re-run.")
-        return EXIT_UNPUBLISHABLE
+        return code
     if args.record_dir is None:
         record.REPORT.write_text(record.render_report(run))
         print(f"  report: {record.REPORT.relative_to(ROOT)}")
-    if status is verdict.Status.FAIL:
+    if code == EXIT_TARGET_MISSED:
         print("  a Phase 3 target was missed: recorded and reported as found (CLAUDE.md §17).")
-        return EXIT_TARGET_MISSED
-    return EXIT_PASS
+    return code
+
+
+def exit_code_for(status: Status, *, publishable: bool) -> int:
+    """INVALID is a harness outcome (2), whatever the worktree; a valid run on a dirty or moved
+    worktree is 3; otherwise a missed target is 1 and a pass 0."""
+    if status is Status.INVALID:
+        return EXIT_HARNESS
+    if not publishable:
+        return EXIT_UNPUBLISHABLE
+    return EXIT_TARGET_MISSED if status is Status.FAIL else EXIT_PASS
 
 
 def _measure(
@@ -1018,7 +1072,8 @@ def _measure(
     fleet: ProducerFleet | None,
     gold: GoldLoop | None,
     consumer_failure: str | None,
-    consumer_down_s: float | None,
+    outage_timing: OutageTiming | None,
+    silver_commit_ms: Sequence[int],
     started: dt.datetime,
     finished: dt.datetime,
     verdicts: list[Verdict],
@@ -1099,11 +1154,19 @@ def _measure(
     verdicts.extend(
         verdict.outage_verdicts(
             recovery,
-            consumer_down_s=consumer_down_s,
+            timing=outage_timing,
+            silver_commit_ms=silver_commit_ms,
             consumer_failure=consumer_failure,
             bound_s=config.recovery_bound_s,
         )
     )
+    if outage_timing is not None:
+        out["outage"] = {
+            **outage_timing.as_record(),
+            "silver_commits_while_down": verdict.commits_while_down(
+                outage_timing, silver_commit_ms
+            ),
+        }
 
     # Gold.
     if start is not None and end is not None:

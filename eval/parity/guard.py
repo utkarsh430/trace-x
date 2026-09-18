@@ -3,8 +3,9 @@
 PHASE3_PLAN §4.4 requires every acceptance command to fail when it compares nothing or when every
 selected comparison was skipped. For parity the guard also fails when an exercised stratum of an
 approximate feature is below its minimum, when an approximate feature has too few comparisons
-overall, when a gated partition classified no arrival-skew comparison, and when Spark did not
-execute.
+overall, when a gated partition classified no arrival-skew comparison or fewer than the minimum,
+when a feature's comparisons were mostly excluded as unvouched or mostly excused as declared
+exceptions, and when Spark did not execute.
 
 Vacuity violations fail every run. Sample-size violations fail a measured run; a diagnostic run
 records them, because a small development run cannot reach the minimums and is never publishable.
@@ -15,15 +16,26 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
+from typing import Any, Final
 
 from eval.parity.comparator import Pairing, ParityTally
 from eval.parity.partition import (
+    MAX_EXCUSED_FRACTION_PER_FEATURE,
     MAX_NOT_VOUCHED_FRACTION_PER_FEATURE,
+    MAX_UNCOMPARED_FRACTION_PER_FEATURE,
     MIN_COMPARISONS_OVERALL,
     MIN_COMPARISONS_PER_STRATUM,
 )
 from eval.parity.skew import SkewTally
+
+MIN_SKEW_COMPARISONS: Final = MIN_COMPARISONS_PER_STRATUM
+"""The fewest classified arrival-skew comparisons a gated partition may be judged on.
+
+Before this, the guard fired only on a denominator of zero, so a gated partition that classified a
+single agreeing comparison had arrival skew 0 and passed. It reuses the per-stratum floor (200)
+rather than declaring a new number: the same judgement that a fraction over fewer comparisons is
+not evidence. Added 2026-09-18 after the Phase 3 exit review. A sample-size bound, like the stratum
+floors: it fails a measured run and is recorded by a diagnostic one."""
 
 
 @dataclass(frozen=True)
@@ -64,6 +76,9 @@ class GuardKind(StrEnum):
     STRATUM_BELOW_MINIMUM = "STRATUM_BELOW_MINIMUM"
     OVERALL_BELOW_MINIMUM = "OVERALL_BELOW_MINIMUM"
     FEATURE_MOSTLY_EXCLUDED = "FEATURE_MOSTLY_EXCLUDED"
+    FEATURE_MOSTLY_EXCUSED = "FEATURE_MOSTLY_EXCUSED"
+    FEATURE_MOSTLY_UNCOMPARED = "FEATURE_MOSTLY_UNCOMPARED"
+    ARRIVAL_SKEW_BELOW_MINIMUM = "ARRIVAL_SKEW_BELOW_MINIMUM"
 
 
 VACUITY = frozenset(
@@ -118,6 +133,35 @@ def collection_violations(
                         f"{MAX_NOT_VOUCHED_FRACTION_PER_FEATURE:.0%}",
                     )
                 )
+            excused = feature_counts.declared_exception
+            if offered and excused / offered > MAX_EXCUSED_FRACTION_PER_FEATURE:
+                violations.append(
+                    GuardViolation(
+                        GuardKind.FEATURE_MOSTLY_EXCUSED,
+                        f"{tally.pairing}: {feature_id}: {excused} of {offered} comparisons "
+                        f"excused as declared exceptions, above "
+                        f"{MAX_EXCUSED_FRACTION_PER_FEATURE:.0%}",
+                    )
+                )
+            # Only the case neither bound above catches: each alone at or under its bound.
+            caught = offered and (
+                excluded / offered > MAX_NOT_VOUCHED_FRACTION_PER_FEATURE
+                or excused / offered > MAX_EXCUSED_FRACTION_PER_FEATURE
+            )
+            uncompared = excluded + excused
+            if (
+                offered
+                and not caught
+                and uncompared / offered > MAX_UNCOMPARED_FRACTION_PER_FEATURE
+            ):
+                violations.append(
+                    GuardViolation(
+                        GuardKind.FEATURE_MOSTLY_UNCOMPARED,
+                        f"{tally.pairing}: {feature_id}: {excluded} unvouched + {excused} excused "
+                        f"of {offered} offered comparisons, above "
+                        f"{MAX_UNCOMPARED_FRACTION_PER_FEATURE:.0%} together",
+                    )
+                )
         if tally.pairing is not Pairing.AS_SERVED:
             continue
         for feature_id in approximate_features:
@@ -154,6 +198,14 @@ def collection_violations(
             GuardViolation(
                 GuardKind.NO_ARRIVAL_SKEW,
                 f"the gated partition classified no comparison; excluded {dict(skew.excluded)}",
+            )
+        )
+    elif gated and skew.denominator < MIN_SKEW_COMPARISONS:
+        violations.append(
+            GuardViolation(
+                GuardKind.ARRIVAL_SKEW_BELOW_MINIMUM,
+                f"the gated partition classified {skew.denominator} arrival-skew comparisons, "
+                f"below {MIN_SKEW_COMPARISONS}; excluded {dict(skew.excluded)}",
             )
         )
     return violations

@@ -41,12 +41,10 @@ def render(record: Mapping[str, Any]) -> str:
     toolchain: Mapping[str, Any] = record["toolchain"]
     shapes: Sequence[Mapping[str, Any]] = record["query_shapes"]
     variants: Sequence[Mapping[str, Any]] = record["variants"]
-    status = (
-        "publishable"
-        if record["publishable"]
-        else "NOT publishable (a smoke run, fewer than the required rows or repetitions, or a "
-        "dirty worktree)"
-    )
+    reasons: Sequence[str] = record.get("unpublishable_reasons") or [
+        "a smoke run, fewer than the required rows or repetitions, or a dirty worktree"
+    ]
+    status = "publishable" if record["publishable"] else f"NOT publishable ({'; '.join(reasons)})"
     lines = [
         "# Delta layout benchmark (ADR-0015, local)",
         "",

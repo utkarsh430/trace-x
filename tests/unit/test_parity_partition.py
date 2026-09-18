@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,7 @@ import pytest
 from eval.parity.comparator import Observed, Pairing, ParityTally
 from eval.parity.partition import (
     ADVERSARIAL,
+    ADVERSARIAL_LATENESS,
     APPROXIMATE_RMS_BOUND,
     ARRIVAL_SKEW_BOUND,
     MIN_COMPARISONS_OVERALL,
@@ -19,7 +21,7 @@ from eval.parity.partition import (
     LatenessModel,
     stratum_of,
 )
-from eval.parity.record import missing_fields, run_id_for, write_record
+from eval.parity.record import missing_fields, publishable_of, run_id_for, write_record
 from eval.parity.report import CAVEAT, render
 from eval.parity.skew import SkewTally
 from eval.replay.faults import OVERLAY_VERSION, FaultClass, Timing
@@ -39,8 +41,11 @@ def test_the_frozen_declarations_have_not_moved() -> None:
     assert REPRESENTATIVE.digest == (
         "sha256:7b1237e98ed911a54094b7a8e536bf5998547fe8dfa9a4707730521dbbc21f8f"
     )
+    assert ADVERSARIAL_LATENESS.digest == (
+        "sha256:30b159ea35eb4d630abaf3c2a8337a82b03615b518c5b4350e84deb927c37e25"
+    )
     assert ADVERSARIAL.digest == (
-        "sha256:f686f127bbe847e850780d692e4075a30e72b10e9e4342ac88c360e3d58604aa"
+        "sha256:815e72584417f7159ed7885d42b2de45a7fc8c5419ebbb64b53fb84127350973"
     )
     assert (APPROXIMATE_RMS_BOUND, MIN_COMPARISONS_PER_STRATUM, MIN_COMPARISONS_OVERALL) == (
         0.01,
@@ -49,6 +54,30 @@ def test_the_frozen_declarations_have_not_moved() -> None:
     )
     assert ARRIVAL_SKEW_BOUND == 0.01
     assert REPRESENTATIVE.gated and not ADVERSARIAL.gated
+
+
+def test_adversarial_v2_differs_from_v1_only_in_its_reorder_rate_and_name() -> None:
+    """v1 (reordered at 500 bp) was unsatisfiable on its own slice and never ran; v2 lowers that
+    one rate to 300 under a new name (user-approved 2026-09-18). Rebuilding v1 from v2 by undoing
+    exactly those two changes must reproduce v1's pinned digests, so nothing else moved."""
+    assert ADVERSARIAL_LATENESS.name == "adversarial-ingress-v2"
+    assert ADVERSARIAL_LATENESS.basis_points[FaultClass.REORDERED] == 300
+    v1 = replace(
+        ADVERSARIAL_LATENESS,
+        name="adversarial-ingress-v1",
+        basis_points={**ADVERSARIAL_LATENESS.basis_points, FaultClass.REORDERED: 500},
+    )
+    assert v1.digest == "sha256:e44ce34698bd95a7c64efa1b4d09154a6b1f156afb3bc4160a8a36095596f72b"
+    assert replace(ADVERSARIAL, lateness=v1).digest == (
+        "sha256:f686f127bbe847e850780d692e4075a30e72b10e9e4342ac88c360e3d58604aa"
+    )
+    assert v1.digest != ADVERSARIAL_LATENESS.digest
+
+
+def test_the_representative_declaration_is_untouched_by_the_adversarial_change() -> None:
+    assert REPRESENTATIVE_LATENESS.name == "representative-v1"
+    assert REPRESENTATIVE.lateness is REPRESENTATIVE_LATENESS
+    assert REPRESENTATIVE_LATENESS.basis_points[FaultClass.REORDERED] == 50
 
 
 def test_the_partitions_name_the_frozen_eval_v2_dataset() -> None:
@@ -138,6 +167,40 @@ def test_a_complete_diagnostic_record_validates_and_is_never_publishable() -> No
         _record(publishable=True)
     )
     assert "gateway" in missing_fields({k: v for k, v in _record().items() if k != "gateway"})
+
+
+MEASURED_CLEAN = {
+    "mode": "measured",
+    "dirty_worktree": False,
+    "dataset": {"eval_v2_manifest_digest": "sha256:" + "1" * 64},
+    "gateway": {"target": "http://localhost:8010", "image_digest": "sha256:" + "2" * 64},
+}
+
+
+def test_a_measured_clean_fail_is_publishable_so_it_can_be_cited() -> None:
+    """Publishable means citable, not passing: making a clean, measured FAIL uncitable would conceal
+    an unfavourable result (CLAUDE.md §13.7, §17). The verdict stays FAIL."""
+    assert publishable_of(measured=True, dirty=False, sha="a" * 40)
+    failed = _record(**MEASURED_CLEAN, verdict="FAIL", publishable=True)
+    assert missing_fields(failed) == []
+    assert "Verdict: **FAIL**; publishable." in render([failed])
+
+
+@pytest.mark.parametrize(
+    ("measured", "dirty", "sha"),
+    [(False, False, "a" * 40), (True, True, "a" * 40), (True, False, "unknown")],
+)
+def test_a_diagnostic_dirty_or_unattributed_run_is_not_publishable(
+    measured: bool, dirty: bool, sha: str
+) -> None:
+    assert not publishable_of(measured=measured, dirty=dirty, sha=sha)
+
+
+def test_a_record_claiming_publishable_at_an_unknown_commit_is_refused() -> None:
+    problems = missing_fields(_record(**MEASURED_CLEAN, git_commit_sha="unknown", publishable=True))
+    assert problems == ["publishable requires a resolved git_commit_sha"]
+    dirty = _record(**{**MEASURED_CLEAN, "dirty_worktree": True}, publishable=True)
+    assert missing_fields(dirty) == ["publishable requires a measured run on a clean worktree"]
 
 
 def test_a_measured_record_needs_the_manifest_and_image_digests() -> None:

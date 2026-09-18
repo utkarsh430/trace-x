@@ -49,6 +49,29 @@ Chosen, not derived, and frozen before any measured run: a feature more than hal
 comparisons were excluded was not meaningfully compared, whatever the divergence count says. It is
 not part of the partition declaration and so changes no frozen digest."""
 
+MAX_EXCUSED_FRACTION_PER_FEATURE: Final = 0.5
+"""Per feature and pairing: the share of its offered comparisons that may be excused as declared
+exceptions (ADR-0046 §8).
+
+`comparator.excused` accepts any declared situation for any absence served against a number, and
+a declared exception is neither a divergence nor an exclusion, so before this bound nothing in the
+guard or the verdict limited how many there were: a run whose store served absence for most of a
+feature's reads, each in some declared situation, reported zero divergences and passed.
+
+Added 2026-09-18 after the Phase 3 exit review, in the style of
+`MAX_NOT_VOUCHED_FRACTION_PER_FEATURE` and at the same value; chosen, not derived. "Offered" means
+the same as there (compared plus excluded as unvouched). It is a guard constant, not part of the
+partition declaration, and so changes no frozen digest."""
+
+MAX_UNCOMPARED_FRACTION_PER_FEATURE: Final = 0.5
+"""Per feature and pairing: the share of its offered comparisons that may be excluded as unvouched
+AND excused as declared exceptions together.
+
+The two bounds above are each checked alone, so a feature with half its comparisons excluded and
+half excused passed both while being compared with a value zero times. Added 2026-09-18 (Phase 3
+exit review), before the adversarial partition's measured run, at the same value as the other two:
+at least half of a feature's offered comparisons must be real comparisons."""
+
 ZERO_STRATUM: Final = "0"
 """True cardinality zero: both sides must be exactly zero, never judged by the RMS bound."""
 STRATA: Final[tuple[tuple[str, int, int | None], ...]] = (
@@ -253,11 +276,11 @@ REPRESENTATIVE_LATENESS: Final = LatenessModel(
     },
 )
 ADVERSARIAL_LATENESS: Final = LatenessModel(
-    name="adversarial-ingress-v1",
+    name="adversarial-ingress-v2",
     seed=20260916,
     timing=Timing.PACED,
     basis_points={
-        FaultClass.REORDERED: 500,
+        FaultClass.REORDERED: 300,
         FaultClass.EXACT_DUPLICATE: 300,
         FaultClass.RETRY_NEW_EVENT_ID: 300,
         FaultClass.LATE: 300,
@@ -265,6 +288,11 @@ ADVERSARIAL_LATENESS: Final = LatenessModel(
         FaultClass.FUTURE_BEYOND_24H: 50,
     },
 )
+"""`adversarial-ingress-v2` (2026-09-18, user-approved). v1 declared `reordered` at 500 basis
+points, which on its own slice requests 181 pairs where only 141 disjoint pairs of consecutive
+same-key events within `reorder_max_gap_s` exist, so `build_overlay` refused it and v1 never ran.
+v2 lowers that one rate to 300 and changes nothing else; the new name gives it a new digest, so no
+record can be read as measured under the other declaration."""
 
 REPRESENTATIVE: Final = Partition(
     name="representative",

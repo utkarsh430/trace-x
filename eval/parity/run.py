@@ -6,10 +6,10 @@ then every comparison, the guard and a PARITY record (ADR-0056 §5).
         --gateway-container tracex-gateway-1 --bootstrap localhost:9092 --lake /tmp/parity-lake
 
 **Diagnostic** mode is for development. It runs on any worktree, needs `--output-dir`, and its
-record says NOT publishable. **Measured** mode is for acceptance. It refuses a dirty worktree, a
-dataset that does not verify against the eval-v2 manifest, observation topics that already hold
-records, an existing lake, a feature store holding anything, and a gateway whose image digest
-cannot be read. It writes to `eval/manifest/`.
+record says NOT publishable. **Measured** mode is for acceptance. It refuses a commit SHA it cannot
+determine, a dirty worktree, a dataset that does not verify against the eval-v2 manifest,
+observation topics that already hold records, an existing lake, a feature store holding anything,
+and a gateway whose image digest cannot be read. It writes to `eval/manifest/`.
 
 What a run needs from its environment, and why: a gateway that is the online store's only writer
 and scores nothing else during the run, because the as-served order is the driver's order
@@ -62,7 +62,13 @@ from eval.parity.lake import (
     toolchain,
 )
 from eval.parity.partition import PARITY_SEMANTICS_VERSION, PARTITIONS, LatenessModel
-from eval.parity.record import RECORD_TYPE, run_id_for, write_record
+from eval.parity.record import (
+    RECORD_TYPE,
+    publishable_of,
+    resolved_commit,
+    run_id_for,
+    write_record,
+)
 from eval.parity.served import parse_time
 from eval.parity.skew import SkewTally, SkewVerdict
 from eval.replay.faults import OVERLAY_VERSION, ReplayScheduleError, build_overlay, publish_overlay
@@ -115,6 +121,19 @@ class Services:
     lake: LakeConfig
     gateway: Mapping[str, Any]
     stop_gateway: Callable[[], None] | None = None
+
+
+def measured_refusals(
+    *, sha: str, dirty: bool, dataset: Mapping[str, Any], services: Services
+) -> list[str]:
+    """Every reason a measured run refuses before posting anything (ADR-0056 §6)."""
+    return [
+        *([] if resolved_commit(sha) else [f"the commit SHA cannot be determined ({sha!r})"]),
+        *(["the worktree is dirty"] if dirty else []),
+        *([] if dataset.get("eval_v2_manifest_digest") else ["no verified eval-v2 dataset"]),
+        *([] if services.gateway.get("image_digest") else ["the gateway image digest is unknown"]),
+        *(["the lake already exists"] if Path(str(services.lake.root)).exists() else []),
+    ]
 
 
 def _utc_now() -> dt.datetime:
@@ -241,20 +260,7 @@ def execute(
     started = clock()
     sha, dirty = git_commit_sha(), is_dirty()
     if mode is Mode.MEASURED:
-        problems = [
-            *(["the worktree is dirty"] if dirty else []),
-            *(
-                []
-                if plan.dataset.get("eval_v2_manifest_digest")
-                else ["no verified eval-v2 dataset"]
-            ),
-            *(
-                []
-                if services.gateway.get("image_digest")
-                else ["the gateway image digest is unknown"]
-            ),
-            *(["the lake already exists"] if Path(str(services.lake.root)).exists() else []),
-        ]
+        problems = measured_refusals(sha=sha, dirty=dirty, dataset=plan.dataset, services=services)
         if problems:
             raise RunRefusedError(f"a measured run refuses: {problems}")
 
@@ -337,7 +343,7 @@ def execute(
         "record_type": RECORD_TYPE,
         "run_id": run_id_for(plan.name, started, sha),
         "mode": mode.value,
-        "publishable": verdict == "PASS" and measured and not dirty,
+        "publishable": publishable_of(measured=measured, dirty=dirty, sha=sha),
         "track": "SYNTHETIC",
         "git_commit_sha": sha,
         "dirty_worktree": dirty,

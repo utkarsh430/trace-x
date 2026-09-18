@@ -11,7 +11,7 @@ concurrency:
 jobs:
   fast:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 25  # 10 cancelled 3 of 4 phase-3 runs mid-suite (2026-09-18)
     steps:
       - uses: actions/checkout@v4
 

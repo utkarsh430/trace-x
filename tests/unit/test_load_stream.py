@@ -236,7 +236,7 @@ def test_recovery_after_the_bound_is_a_failure() -> None:
     assert found.recovered_at_ms == T0 + 950_000
     assert not found.within_bound
     outage = verdict.outage_verdicts(
-        found, consumer_down_s=120.0, consumer_failure=None, bound_s=900
+        found, timing=_timing(), silver_commit_ms=[], consumer_failure=None, bound_s=900
     )
     assert verdict.overall([*outage, _passing_target()]) is Status.FAIL
 
@@ -290,19 +290,139 @@ def test_a_rate_the_harness_did_not_offer_makes_the_run_invalid_never_a_pass() -
 
 def test_a_consumer_that_died_is_a_failure_not_an_invalid_run() -> None:
     died = verdict.outage_verdicts(
-        None, consumer_down_s=None, consumer_failure="exit 3", bound_s=900
+        None, timing=None, silver_commit_ms=[], consumer_failure="exit 3", bound_s=900
     )
     assert verdict.overall([*died, _passing_target()]) is Status.FAIL
 
 
-def test_an_outage_of_the_wrong_length_is_invalid() -> None:
-    found = _recovery(_series(T0, T0 + 200_000, 1_000))
-    wrong = verdict.outage_verdicts(found, consumer_down_s=90.0, consumer_failure=None, bound_s=900)
-    assert verdict.overall(wrong) is Status.INVALID
-    right = verdict.outage_verdicts(
-        found, consumer_down_s=float(OUTAGE_S), consumer_failure=None, bound_s=900
+def _timing(*, stop_ms: int = 5_000, restarted: int = T0) -> verdict.OutageTiming:
+    """An outage the harness can produce: signalled, exited `stop_ms` later, and restarted when
+    `restart_due_ms` says, ending at `restarted` (the recovery's `restored_ms`)."""
+    exited = restarted - OUTAGE_S * 1000
+    assert verdict.restart_due_ms(exited) == restarted
+    return verdict.OutageTiming(exited - stop_ms, exited, restarted)
+
+
+def _outage(timing: verdict.OutageTiming, commits: list[int]) -> list[Verdict]:
+    found = _recovery(_series(T0 + 2_000, T0 + 200_000, 1_000))
+    return verdict.outage_verdicts(
+        found, timing=timing, silver_commit_ms=commits, consumer_failure=None, bound_s=900
     )
-    assert verdict.overall(right) is Status.PASS
+
+
+def test_the_outage_is_measured_from_the_exit_so_a_slow_stop_still_yields_the_full_outage() -> None:
+    # The stop was signalled, and the consumer took 60 s to exit (its queries finishing, Silver
+    # committing throughout). The restart is due OUTAGE_S after the exit, not after the signal.
+    signalled = T0 - 180_000
+    exited = signalled + 60_000
+    restarted = verdict.restart_due_ms(exited)
+    timing = verdict.OutageTiming(signalled, exited, restarted)
+    assert timing.stop_s == 60.0
+    assert timing.down_s == float(OUTAGE_S) == 120.0
+    # Silver committed during the slow stop (before the exit) and after the restart: legitimate.
+    commits = [signalled + 10_000, exited - 1, exited, restarted, restarted + 5_000]
+    result = _outage(timing, commits)
+    assert all(v.passed for v in result), [v for v in result if not v.passed]
+    assert verdict.overall(result) is Status.PASS
+    record = timing.as_record()
+    assert (record["signalled_at_ms"], record["exited_at_ms"], record["restarted_at_ms"]) == (
+        signalled,
+        exited,
+        restarted,
+    )
+    assert record["consumer_down_s"] == 120.0 and record["stop_s"] == 60.0
+
+
+def test_a_silver_commit_while_the_consumer_was_down_makes_the_run_invalid() -> None:
+    timing = _timing(stop_ms=60_000)
+    inside = timing.exited_ms + 30_000
+    result = _outage(timing, [timing.exited_ms - 1_000, inside, timing.restarted_ms + 1_000])
+    down = next(v for v in result if v.name == "outage_consumer_down")
+    assert not down.passed and str(inside) in down.detail
+    assert verdict.commits_while_down(timing, [inside, timing.exited_ms]) == [inside]
+    assert verdict.overall([*result, _passing_target()]) is Status.INVALID
+
+
+def test_an_outage_outside_the_timing_tolerance_fails_the_timing_verdict() -> None:
+    exited = T0 - 200_000
+    tolerance_ms = int(verdict.OUTAGE_TIMING_TOLERANCE_S * 1000)
+    for down_ms, ok in [
+        (OUTAGE_S * 1000 + tolerance_ms, True),
+        (OUTAGE_S * 1000 - tolerance_ms, True),
+        (OUTAGE_S * 1000 + tolerance_ms + 1, False),
+        (OUTAGE_S * 1000 - tolerance_ms - 1, False),
+        (60_000, False),  # the old defect: 120 s after the signal, 60 s after a slow exit
+    ]:
+        timing = verdict.OutageTiming(exited - 60_000, exited, exited + down_ms)
+        duration = next(v for v in _outage(timing, []) if v.name == "outage_duration")
+        assert duration.passed is ok, (down_ms, duration.detail)
+        assert verdict.overall(_outage(timing, [])) is (Status.PASS if ok else Status.INVALID)
+
+
+def test_out_of_order_outage_times_are_invalid() -> None:
+    backwards = verdict.OutageTiming(T0, T0 - 1_000, T0 - 1_000 + OUTAGE_S * 1000)
+    assert verdict.overall(_outage(backwards, [])) is Status.INVALID
+
+
+def test_the_consumer_stop_reports_the_real_exit_not_the_signal(tmp_path: Path) -> None:
+    """A real child process that takes a while to exit on SIGTERM, as the consumer's graceful
+    query stop does: the exit time is after the child exited, not when it was signalled."""
+    import subprocess
+    import sys
+
+    from benchmarks.stream_throughput.run import ConsumerProcess
+
+    script = (
+        "import signal, sys, time\n"
+        "signal.signal(signal.SIGTERM, lambda *_: (time.sleep(0.6), sys.exit(0)))\n"
+        "print('ready', flush=True)\n"
+        "time.sleep(60)\n"
+    )
+    consumer = ConsumerProcess(RunConfig(), bootstrap="x:1", lake_root=tmp_path, logs=tmp_path)
+    consumer.process = subprocess.Popen(  # noqa: S603 -- this interpreter, a literal script
+        [sys.executable, "-c", script], stdout=subprocess.PIPE, start_new_session=True
+    )
+    assert consumer.process.stdout is not None
+    assert consumer.process.stdout.readline().strip() == b"ready"
+    stopped = consumer.stop(timeout_s=30)
+    assert stopped.exit_code == 0 and not stopped.killed
+    assert stopped.exited_ms - stopped.signalled_ms >= 600
+    assert consumer.events[-1]["exited_ms"] == stopped.exited_ms
+
+
+# -------------------------------------------------------------- exit codes ---
+
+
+def test_exit_codes_distinguish_a_harness_failure_from_a_missed_target() -> None:
+    from benchmarks.stream_throughput import run
+
+    assert run.exit_code_for(Status.PASS, publishable=True) == run.EXIT_PASS == 0
+    assert run.exit_code_for(Status.FAIL, publishable=True) == run.EXIT_TARGET_MISSED == 1
+    assert run.exit_code_for(Status.INVALID, publishable=False) == run.EXIT_HARNESS == 2
+    assert run.exit_code_for(Status.INVALID, publishable=True) == run.EXIT_HARNESS
+    assert run.exit_code_for(Status.PASS, publishable=False) == run.EXIT_UNPUBLISHABLE == 3
+    assert run.exit_code_for(Status.FAIL, publishable=False) == run.EXIT_UNPUBLISHABLE
+
+
+@pytest.mark.parametrize("raised", [RuntimeError("boom"), KeyError("k"), KeyboardInterrupt()])
+def test_an_unexpected_exception_exits_as_a_harness_error_never_as_a_missed_target(
+    monkeypatch: pytest.MonkeyPatch, raised: BaseException
+) -> None:
+    from benchmarks.stream_throughput import run
+
+    logged: list[tuple[str, dict[str, Any]]] = []
+
+    class _Log:
+        def exception(self, event: str, **kw: Any) -> None:
+            logged.append((event, kw))
+
+    def crash(_argv: Any) -> int:
+        raise raised
+
+    monkeypatch.setattr(run, "_run", crash)
+    monkeypatch.setattr(run, "_log", _Log())
+    assert run.main([]) == run.EXIT_HARNESS
+    assert logged == [("load_stream_harness_error", {"error": type(raised).__name__})]
 
 
 # ------------------------------------------------------------------- Gold ---
@@ -650,6 +770,32 @@ def test_only_a_valid_run_on_a_clean_worktree_is_publishable() -> None:
     assert _record(status="FAIL").publishable
     assert not _record(status="INVALID").publishable
     assert not _record(dirty_worktree=True).publishable
+    assert not _record(status="FAIL", dirty_worktree=True).publishable
+
+
+@pytest.mark.parametrize(
+    ("status", "dirty", "expected"),
+    [
+        ("PASS", False, True),
+        ("FAIL", False, True),  # a missed target is evidence: publishable, never hidden
+        ("INVALID", False, False),
+        ("INVALID", True, False),
+        ("PASS", True, False),
+    ],
+)
+def test_every_written_record_carries_its_publishable_flag(
+    tmp_path: Path, status: str, dirty: bool, expected: bool
+) -> None:
+    written = json.loads(_record(status=status, dirty_worktree=dirty).write(tmp_path).read_text())
+    assert written["publishable"] is expected
+
+
+def test_the_publishable_flag_cannot_disagree_with_the_status_it_is_written_beside(
+    tmp_path: Path,
+) -> None:
+    run = _record(status="PASS")
+    run.status = "INVALID"  # e.g. judged after construction
+    assert json.loads(run.write(tmp_path).read_text())["publishable"] is False
 
 
 def test_every_report_section_is_scoped_to_the_run_id() -> None:

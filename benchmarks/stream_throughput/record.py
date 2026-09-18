@@ -161,6 +161,8 @@ class StreamBenchmarkRecord:
     env_lock_digest: str = ""
     timing_semantics_version: int = 0
     feature_set_version: str = ""
+    publishable: bool = field(init=False, default=False)
+    """True only for a PASS or FAIL on a clean worktree; see `derive_publishable`."""
 
     def __post_init__(self) -> None:
         from trace_core.features.spec import FEATURE_SET_VERSION
@@ -170,13 +172,19 @@ class StreamBenchmarkRecord:
             self.git_commit_sha, self.dirty_worktree, self.env_lock_digest = git_facts()
         self.timing_semantics_version = TIMING_SEMANTICS_VERSION
         self.feature_set_version = FEATURE_SET_VERSION
+        self.publishable = self.derive_publishable()
 
-    @property
-    def publishable(self) -> bool:
-        """Only a valid run from a clean worktree (docs/EVALUATION.md §8 rule 4)."""
+    def derive_publishable(self) -> bool:
+        """Only a valid run (PASS or FAIL: a missed target is evidence, never hidden) from a
+        worktree that was clean at the start and at the end on the same commit, which the caller
+        folds into `dirty_worktree` (docs/EVALUATION.md §8 rule 4). INVALID, including a harness
+        error, is never citable as a measurement."""
         return not self.dirty_worktree and self.status in {"PASS", "FAIL"}
 
     def write(self, directory: Path | None = None) -> Path:
+        # Re-derived at write time, so the recorded flag can never disagree with the status and
+        # worktree it is recorded beside.
+        self.publishable = self.derive_publishable()
         target = (directory or MANIFEST_DIR) / f"{self.run_id}.json"
         target.parent.mkdir(parents=True, exist_ok=True)
         try:

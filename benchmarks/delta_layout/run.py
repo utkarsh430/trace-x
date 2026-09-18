@@ -1,7 +1,7 @@
 """Run the Delta layout benchmark (ADR-0015, `P3.layout-benchmark`): `make bench-layout`.
 
     make bench-layout                                  # 10,000,000 rows, 5 repetitions
-    make bench-layout ARGS="--rows 200000 --reps 2"    # smoke: a run that is never published
+    make bench-layout ARGS="--rows 200000 --reps 2"    # smoke: never published, exits 3
 
 A run, in order (every step refuses rather than records a wrong or partial number):
 
@@ -20,11 +20,17 @@ A run, in order (every step refuses rather than records a wrong or partial numbe
    and bytes selected from the executed plan's scan metrics, bytes and records read from Spark
    task metrics; a missing metric is refused, never zero), variants interleaved in an order that
    rotates each repetition.
-5. **Rank** by the rule declared in `spec.RANKING_RULE`, and write the record, the results and the
-   report. A run of at least ten million rows writes `eval/manifest/<run_id>.json`,
-   `benchmarks/delta_layout/results/<run_id>.json` and `benchmarks/delta_layout/REPORT.md`; a
-   smaller (smoke) run writes all three under its own lake directory and nothing into the
-   repository.
+5. **Rank** by the rule declared in `spec.RANKING_RULE`, check the worktree again, and write the
+   record, the results and the report. Only a *publishable* run (`spec.publishable`: at least ten
+   million rows, at least the declared default of repetitions, a clean worktree at the start and
+   at the end on the same commit, every integrity check passed) writes into the repository:
+   `eval/manifest/<run_id>.json`, `benchmarks/delta_layout/results/<run_id>.json` and
+   `benchmarks/delta_layout/REPORT.md`. Any other run writes all three under its own lake
+   directory (`data/bench/delta_layout/<run_id>/`, gitignored) and nothing into the repository.
+
+**Exit codes.** 0 a publishable run; 2 the harness could not measure (a refusal or an integrity
+failure: the run is invalid and nothing is written into the repository); 3 a valid run that is not
+publishable (written under its lake directory only).
 """
 
 from __future__ import annotations
@@ -64,6 +70,8 @@ from benchmarks.delta_layout.generator import (  # noqa: E402
 )
 from benchmarks.delta_layout.spec import (  # noqa: E402
     CONTROL,
+    DEFAULT_REPS,
+    EXIT_HARNESS_ERROR,
     MIN_PUBLISHABLE_ROWS,
     RANKING_RULE,
     SHAPES,
@@ -76,16 +84,18 @@ from benchmarks.delta_layout.spec import (  # noqa: E402
     ResultCheck,
     Variant,
     create_table_sql,
+    exit_code,
     extract_scan_metrics,
     missing_manifest_fields,
     optimize_sql,
+    output_paths,
     parameters,
-    publishable,
     rank,
     require_complete_runs,
     require_identical_results,
     shape_leaders,
     summarize,
+    unpublishable_reasons,
     vocabulary,
 )
 from data.generator.record import env_lock_digest, git_commit_sha, is_dirty  # noqa: E402
@@ -452,7 +462,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--rows", type=int, default=MIN_PUBLISHABLE_ROWS)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--days", type=int, default=60)
-    parser.add_argument("--reps", type=int, default=5)
+    parser.add_argument("--reps", type=int, default=DEFAULT_REPS)
     parser.add_argument("--batch-rows", type=int, default=1_000_000)
     parser.add_argument("--master", default="local[4]")
     parser.add_argument("--driver-memory", default="4g")
@@ -472,32 +482,53 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _write_json(path: Path, payload: Any) -> str:
+def _dump(payload: Any) -> tuple[str, str]:
+    """The exact text a record is written as, and its digest (computed before the write, so the
+    record can cite its results file before either location is decided)."""
     text = json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n"
+    return text, "sha256:" + hashlib.sha256(text.encode()).hexdigest()
+
+
+def _write_new(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("x") as handle:
         handle.write(text)
-    return "sha256:" + hashlib.sha256(text.encode()).hexdigest()
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Exit codes: 0 a publishable run, written into the repository; 2 the harness could not
+    measure (a refusal or an integrity failure; nothing is written into the repository); 3 a
+    valid run that is not publishable, written under its own lake directory only."""
+    try:
+        return _run(argv)
+    except BenchmarkRefusedError as exc:
+        _log.error("bench_layout_refused", error=str(exc), error_type=type(exc).__name__)
+        print(f"REFUSED ({type(exc).__name__}): {exc}", file=sys.stderr)
+        return EXIT_HARNESS_ERROR
+    except Exception as exc:  # Spark/py4j/OS failures: the run measured nothing, never a 0 or 3
+        _log.exception("bench_layout_harness_crashed", error_type=type(exc).__name__)
+        print(f"HARNESS ERROR ({type(exc).__name__}): {exc}", file=sys.stderr)
+        return EXIT_HARNESS_ERROR
+
+
+def _run(argv: Sequence[str] | None) -> int:
     args = _parser().parse_args(argv)
     spec = GeneratorSpec.for_rows(args.rows, args.seed, days=args.days)
     spec.validate()
     if args.reps < 1:
-        raise SystemExit("--reps must be positive")
+        raise BenchmarkRefusedError("--reps must be positive")
     vocab = vocabulary()
     params = parameters(spec, args.reps)
     fields = _fields()
     started = dt.datetime.now(dt.UTC)
-    sha, dirty = git_commit_sha(), is_dirty()
+    sha, dirty_at_start = git_commit_sha(), is_dirty()
     full = spec.rows >= MIN_PUBLISHABLE_ROWS
     mode = "full" if full else "smoke"
     run_id = f"{'bench' if full else 'smoke'}-{started:%Y%m%d-%H%M%S}-delta-layout-{sha[:8]}"
     lake = args.lake.resolve()
     run_dir = lake / run_id
     if run_dir.exists():
-        raise SystemExit(f"{run_dir} exists; refusing to reuse another run's tables")
+        raise BenchmarkRefusedError(f"{run_dir} exists; refusing to reuse another run's tables")
     run_dir.mkdir(parents=True)
     _log.info("bench_layout_started", run_id=run_id, rows=spec.rows, reps=args.reps, mode=mode)
 
@@ -542,18 +573,37 @@ def main(argv: Sequence[str] | None = None) -> int:
     summaries = summarize(runs)
     ranking = rank(summaries, names, shape_names, CONTROL)
     finished = dt.datetime.now(dt.UTC)
+    # The worktree again, before anything is written into the repository (a write there would
+    # itself dirty it). Every integrity check above raises on failure (exit 2), so reaching here
+    # means each passed; the record's completeness, the last one, is checked before any write.
+    end_sha, dirty_at_end = git_commit_sha(), is_dirty()
+    reasons = unpublishable_reasons(
+        rows=spec.rows,
+        reps=args.reps,
+        dirty_at_start=dirty_at_start,
+        dirty_at_end=dirty_at_end,
+        same_commit=end_sha == sha,
+        integrity_passed=True,
+    )
+    is_publishable = not reasons
+    paths = output_paths(
+        publishable=is_publishable,
+        run_id=run_id,
+        run_dir=run_dir,
+        manifest_dir=MANIFEST_DIR,
+        results_dir=RESULTS_DIR,
+        report_path=REPORT_PATH,
+    )
     results = {
         "run_id": run_id,
+        "publishable": is_publishable,
         "params": [p.summary() for p in params],
         "builds": list(builds.values()),
         "checks": [dataclasses.asdict(c) for c in checks],
         "runs": [r.summary() for r in runs],
         "plans": plans,
     }
-    results_path = (RESULTS_DIR if full else run_dir) / (
-        f"{run_id}.json" if full else "results.json"
-    )
-    results_digest = _write_json(results_path, results)
+    results_text, results_digest = _dump(results)
     record: dict[str, Any] = {
         "run_id": run_id,
         "record_type": "BENCHMARK",
@@ -562,13 +612,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         "tool": "spark+delta",
         "tool_version": f"spark {toolchain['spark']} / delta {toolchain['delta']}",
         "git_commit_sha": sha,
-        "dirty_worktree": dirty,
+        "git_commit_sha_at_end": end_sha,
+        # Dirty if dirty at the start or the end, or HEAD moved during the run.
+        "dirty_worktree": dirty_at_start or dirty_at_end or end_sha != sha,
+        "dirty_at_start": dirty_at_start,
+        "dirty_at_end": dirty_at_end,
         "env_lock_digest": env_lock_digest(),
         "python_version": platform.python_version(),
         "started_at": started.isoformat(),
         "finished_at": finished.isoformat(),
         "mode": mode,
-        "publishable": publishable(rows=spec.rows, reps=args.reps, dirty_worktree=dirty),
+        "publishable": is_publishable,
+        "unpublishable_reasons": reasons,
         "seed": spec.seed,
         "row_count": spec.rows,
         "generator_version": generator.GENERATOR_VERSION,
@@ -609,29 +664,33 @@ def main(argv: Sequence[str] | None = None) -> int:
             "ranking": [dataclasses.asdict(r) for r in ranking],
             "shape_leaders": {s: shape_leaders(summaries, names, s) for s in shape_names},
             "executions": len(runs),
-            "results_file": str(results_path.relative_to(ROOT) if full else results_path),
+            "results_file": str(
+                paths.results.relative_to(ROOT) if paths.in_repository else paths.results
+            ),
             "results_digest": results_digest,
         },
     }
     if missing := missing_manifest_fields(record):
         raise BenchmarkRefusedError(f"the run record is incomplete: {missing}")
-    manifest_path = MANIFEST_DIR / f"{run_id}.json" if full else run_dir / "manifest.json"
-    _write_json(manifest_path, record)
-    report_path = REPORT_PATH if full else run_dir / "REPORT.md"
-    report_path.write_text(report.render(record) + "\n")
+    _write_new(paths.results, results_text)
+    _write_new(paths.manifest, _dump(record)[0])
+    paths.report.write_text(report.render(record) + "\n")
     if not args.keep_tables:
         for name in ("staging", *names):
             shutil.rmtree(run_dir / name)
 
     print(f"run_id: {run_id}")
-    print(f"record: {manifest_path}")
-    print(f"results: {results_path}")
-    print(f"report: {report_path}")
+    print(f"record: {paths.manifest}")
+    print(f"results: {paths.results}")
+    print(f"report: {paths.report}")
     for r in ranking:
         print(f"  rank {r.rank}: {r.variant:<24} bytes-read score {r.bytes_score:.3f}")
-    if not record["publishable"]:
-        print("NOTE: not publishable (smoke rows, too few repetitions, or a dirty worktree).")
-    return 0
+    if not is_publishable:
+        print(
+            "NOT publishable (" + "; ".join(reasons) + f"): written under {run_dir}, "
+            "nothing into the repository."
+        )
+    return exit_code(publishable=is_publishable)
 
 
 if __name__ == "__main__":

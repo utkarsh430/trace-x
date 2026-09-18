@@ -5,15 +5,39 @@ the run and to attribute every number: the commit and its dirty flag, the eval-v
 the overlay version and seed, the lateness model's digest, the Spark, Delta, Hadoop, Scala, Java and
 Python versions, the gateway, counts per feature and stratum, the results and the guard. A
 diagnostic record is never publishable.
+
+**Publishable means citable, not passing.** A measured run on a clean worktree at a resolved commit
+is publishable whatever its verdict: a FAIL is as much a result as a PASS, and making it uncitable
+would conceal an unfavourable result (CLAUDE.md §13.7, §17). The verdict says whether it passed.
 """
 
 from __future__ import annotations
 
 import datetime as dt
 import json
+import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Final
+
+COMMIT_SHA: Final = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+"""A full SHA-1 or SHA-256 object name, as `rev-parse HEAD` prints it."""
+
+
+def resolved_commit(sha: object) -> bool:
+    """Whether `sha` names a commit, rather than `git_commit_sha`'s "unknown" when the call failed.
+
+    `data.generator.record._git` returns "" on any failure, so a failed call reads as SHA "unknown"
+    *and* as a clean worktree (`is_dirty` sees no porcelain output). A measured run must not record
+    that pair: its provenance would be unresolvable while it looked publishable."""
+    return isinstance(sha, str) and COMMIT_SHA.fullmatch(sha) is not None
+
+
+def publishable_of(*, measured: bool, dirty: bool, sha: str) -> bool:
+    """Whether a run's record may be cited: measured, clean, at a resolved commit -- never whether
+    it passed."""
+    return measured and not dirty and resolved_commit(sha)
+
 
 RECORD_TYPE: Final = "PARITY"
 REQUIRED_FIELDS: Final = (
@@ -67,6 +91,8 @@ def missing_fields(record: Mapping[str, Any]) -> list[str]:
         record.get("mode") != "measured" or record.get("dirty_worktree")
     ):
         missing.append("publishable requires a measured run on a clean worktree")
+    if record.get("publishable") and not resolved_commit(record.get("git_commit_sha")):
+        missing.append("publishable requires a resolved git_commit_sha")
     return missing
 
 
