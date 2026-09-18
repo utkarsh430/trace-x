@@ -20,87 +20,33 @@ planning surfaced recorded under *What Phase 3 planning found in Phase 2's artef
 
 ### Phase 3
 
-### Phase 3 — HANDOFF (2026-09-16 ~23:20 UTC; development moving to a new machine). Read this first.
+### Phase 3 — HANDOFF (2026-09-18; continuing on a Mac Pro with Docker). Read this first.
 
-**Why this handoff exists.** The machine this session ran on cannot carry Phase 3's heavy runs: the
-host was swapping ~3.7 GB, one background run was killed for memory pressure, a full
-`-m stream tests/stream` session died in a JVM GC death spiral (the session factory's 1 GB driver
-heap; old generation at 98.8%; 13,526 full GCs in 72 minutes) at collected position 132 without
-reaching the `resource_bounds` tests, and three lock-waiting jobs timed out behind it. Everything was
-stopped deliberately and pushed. Nothing below was lost.
+**The operational continuation document is `docs/PHASE3_HANDOFF.md`**: status by step and capability,
+the Step 11 WIP branch and its changes, the evidence gathered, the validation matrix and the
+ordered checklist for the next session. This entry records only what changed since the 2026-09-16
+handoff.
 
-**Where the code is — all on `origin`.**
-- `phase/03-stream-medallion` = `f053faf`: the integrated Phase 3 line. **Clone this.**
-  (`worktree-agent-aae9faa608636c9c8` is the same commit under the lead worktree's branch name.)
-- `phase3-step11-maintenance` = `684eef9`: Step 11 as a labelled **unverified WIP snapshot**. Not
-  integrated; see below.
+- **h3noyce (2026-09-17/18), an interim Ubuntu lab host, could not run Docker** (no root; no docker,
+  podman or apptainer; no subuid/subgid or `uidmap` for rootless containers). `make doctor` fails its
+  required `docker` check there, so `make verify` was 10/11 and **nothing was committed**. No capability
+  status changed; `tests/acceptance/status.json` is unchanged.
+- **Step 11** (`684eef9`) was squash-staged on h3noyce and preserved, unvalidated, on branch
+  `phase3-step11-integration-prep`; it is not on this branch. Findings: the "known class-C
+  failure" named in its message was already fixed inside it; `make verify`'s bandit gate failed on it
+  (B608 on the retention `DELETE`), classified D after checking every interpolated value is validated,
+  and fixed with `# nosec B608`; `spikes/step11-maintenance/run_spike.sh` hard-codes the old laptop's
+  absolute paths and was made portable on the WIP branch. ADR-0053 §7 was amended to ADR-0052
+  Amendment 1 point 6 and the ADR index rows were updated, on the WIP branch with it.
+- **Step 11's stream regression, one JVM per file, on the staged tree:** 171 passed, 0 failed, 1 loud
+  skip; the skipped file re-run with a second real JDK passed 9 with none skipped. The Kafka-backed
+  integration tests and the hydration re-run need Docker and did not run.
+- **Found while writing the handoff:** `P3.stream-throughput`'s recorded command `make load-stream`
+  is not a Makefile target, and `make bench-layout` is still a phase-guard stub; Step 12's Phase 2
+  load-gate re-run is still owed.
 
-**Committed this session on `phase/03-stream-medallion`, each gated on `make verify` (11 passed,
-0 failed, 0 skipped):**
-- `eef0d8a` Step 8, the parity framework (ADR-0056).
-- `f7fd9d5` Step 9, Redis reconstruction (ADR-0057) and Step 10, resume under fault injection; the
-  ADR-0053 §4 commit-order correction.
-- `4fc23de` the adversarial review's seven findings, three of them Category A (entry below).
-- `f053faf` `P3.redis-hydration` PASS.
-
-**Capability status** (`tests/acceptance/status.json`: `updated_at` 2026-09-16, `last_verified_commit`
-`4fc23de`).
-- PASS this session: `P3.redis-hydration` (11 passed, 0 skipped, 233.55 s on `4fc23de`).
-- **Not recorded, deliberately, each with its reason:**
-  - `P3.checkpoint-resume`: all seven injection cases passed, but only in five `-k` splits (Step 10
-    entry). CLAUDE.md §16.3 wants the command executed, and
-    `pytest -m chaos tests/chaos/test_spark_resume.py` has never run as **one session**. It was
-    started on `4fc23de` and stopped for the move before pytest began. Run it once, on a quiet host.
-  - `P3.feature-parity`: no measured run exists, and none could honestly have been made before
-    `4fc23de` — finding A1 had the comparator discarding every Gold-side absence. ADR-0056 §5's
-    declarations are frozen and the guard bound `MAX_NOT_VOUCHED_FRACTION_PER_FEATURE` (0.5) is
-    pre-registered. Run `make parity` on a quiet host.
-  - `P3.medallion`: its command still names a test that does not exist; repoint it after parity.
-  - `P3.stream-throughput` (Step 13) and `P3.layout-benchmark` (Step 14): **not started.** Both are
-    benchmarks and need a quiet host with real memory — the reason for this move. Their briefs lived
-    in the old machine's session scratchpad, not in the repository; derive them from
-    `docs/PHASE3_PLAN.md`.
-  - `P3.eval-v2`: FAIL and non-gating, by the user's decision (the exit-rule entry below).
-
-**Step 11 — integrate from `phase3-step11-maintenance` (ADR-0052 Amendment 1).**
-- Proven there by the agent: 44 unit/integration (`-k resource_bounds`, 61 s); 14 `resource_bounds`
-  stream on Delta 4.0.1 / Temurin 17 (379 s); 9 Bronze+Silver Kafka regression (134 s); the full unit
-  suite 2139 passed, 1 loud skip; ruff, mypy clean.
-- Known to fail, class C:
-  `tests/stream/test_bronze_tables.py::test_coverage_rows_read_in_spark_equal_the_rows_that_were_written`.
-  `BronzeRecord` gained a tenth field, `topic_id`; add it to the eight expected records. Do not change
-  the adapter to satisfy the old expectation.
-- Not closed: its debt item 4, the full stream regression run solo. **Run it split by file, one JVM
-  per file** (`for f in tests/stream/test_*.py; do pytest -m stream "$f"; done`), never as one
-  session — see "why this handoff exists".
-- The amendment: `docs/adr/0052-bronze-ingest-topology.md` lines 169–515, lifted verbatim. Its point
-  6 changes ADR-0053 §7 (Silver resets no longer start at version 0 once floors exist); the lead
-  amends ADR-0053 (Proposed) at integration.
-- Amendment 1 §2 closes Step 9's recorded debt "retired Bronze offsets read as coverage gaps": a
-  retired region is one gap, and hydration refuses to claim before the floor. Re-run the hydration
-  suite after integration to show the two agree.
-
-**Operating notes a cold session would otherwise get wrong.**
-- Environment: Temurin 17 (`/usr/libexec/java_home -v 17` on macOS); `.env` from `.env.example`
-  (gitignored — regenerate, never commit); `set -a; . ./.env; set +a`; `PYTHONPATH=packages:.`;
-  `make setup`, `python scripts/stream_jars.py fetch`, `make up`, `alembic upgrade head`.
-- Heavy runs (Spark, Kafka, chaos, benchmarks, `make verify` when anything else is running)
-  serialise on one lock directory (`mkdir` plus an owner file naming the pid). Release only when the
-  owner file names your own pid. An `EXIT` trap in a `zsh -c` wrapper does **not** fire on SIGTERM;
-  the pid check is what makes release safe. A lock whose owner pid is dead may be reclaimed, loudly.
-- Never two Spark/Kafka suites at once; never a benchmark beside anything.
-- Wrappers must propagate `make`'s exit code (`rc=$?; ...; exit $rc`), not a trailing `echo`'s —
-  that mistake was made once this session and caught by gating the commit on the log.
-- Lint with the gate's exact invocation, `ruff format --check . && ruff check .`; `ruff format`
-  does not reflow docstrings, so a per-file check after formatting can pass what the gate fails.
-- The Claude Code memory directory is per-machine and will not exist on the new one. The operating
-  model in force (the lead owns implementation and sequencing; escalation only for material
-  architecture, contracts, security boundaries or accepted criteria, always with a recommendation;
-  failure classes A–F; the IMPLEMENTED / EVIDENCE / DECISIONS / DEBT / NEXT / ESCALATION report) was a
-  user instruction and should be re-issued.
-
-**Superseded:** the 2026-09-15 handoff that stood here. Its Step 8/9/11 decisions are recorded in
-the Step 8, 9 and 10 entries below and in ADRs 0056, 0057 and 0052 Amendment 1.
+**Superseded:** the 2026-09-16 handoff that stood here (readable at `aca29b0`). Its content is carried
+into `docs/PHASE3_HANDOFF.md` or recorded in the step entries below.
 
 **Planning is complete and approved, and Step 0 (toolchain and dependency contract, ADR-0045) is
 complete locally** — `make verify`, the real-JVM stream tests on macOS, a hashed install in a Linux
@@ -279,7 +225,7 @@ Docker is needed for the integration and chaos suites, for `make seed`, and for 
 | Question a cold session will ask | Answer |
 |---|---|
 | What phase are we in? | **Phase 3 in progress** (approved 2026-09-13). Phase 2 complete on its exit conditions, with the caveats recorded above. |
-| What do I do next? | The next unfinished step in `docs/PHASE3_PLAN.md` §5, in wave order. Read §3 (decisions) and §4 (safeguards) first — they are binding. |
+| What do I do next? | Follow `docs/PHASE3_HANDOFF.md` §7, the ordered continuation checklist. Read `docs/PHASE3_PLAN.md` §3 (decisions) and §4 (safeguards) first — they are binding. |
 | What exists now? | Everything from Phases 0–1, plus: `trace-gateway` with auth, rate limiting, idempotency, RFC 9457 problems and triage; two Redis instances — a `noeviction` feature store with a completeness epoch and a declaration-driven write plan, and a disposable cache — holding 26 declared features with hybrid distinct-count storage; 18 declarative rules with Kleene semantics and fail-safe hot reload; noisy-OR scoring and banding; the transactional outbox; two workload profiles and a three-stream replay harness. |
 | Which benchmark is the gate? | `benchmarks/gateway/REPORT.md` (representative profile). `benchmarks/gateway/ADVERSARIAL.md` is **not** a gate — it characterises saturation at 97% triage. |
 | What must I never do? | `CLAUDE.md` §17, and §11 (ground-truth isolation) above all. |
@@ -309,8 +255,10 @@ afterwards as `trace_eval`: known fraud triaged at **37.3%** against **0.0%** fo
 
 ## LAST VERIFIED COMMIT
 
-**Phase 3:** `f053faf` on `phase/03-stream-medallion` is the last commit whose `make verify` was green
-(11 passed, 0 failed, 0 skipped), and the commit carrying this handoff is gated the same way.
+**Phase 3:** `aca29b0` on `phase/03-stream-medallion`, the 2026-09-16 handoff commit, is the last
+commit gated on a green `make verify` (11 passed, 0 failed, 0 skipped, on the old laptop); `f053faf`
+before it was gated the same way. Nothing was committed on h3noyce, where `make verify` could not be
+green (no Docker; `docs/PHASE3_HANDOFF.md` §4).
 `tests/acceptance/status.json` records `last_verified_commit` `4fc23de`, the commit its evidence was
 measured on.
 
@@ -1230,7 +1178,9 @@ both reports.
       - once a floor exists, Silver resets start at the lowest Bronze version with a live file (an
         ADR-0053 §7 change);
       - retention of 30 days of log and 7 days of deleted files, declared per table.
-  * **Phase B:** being implemented by the agent in worktree `phase3-step11-maintenance`.
+  * **Phase B:** implemented by the agent and pushed as the unverified WIP snapshot `684eef9`
+    (`phase3-step11-maintenance`); not yet integrated. Integration state and remaining evidence:
+    `docs/PHASE3_HANDOFF.md` §3, §5 and §7 B.
   * **B6, decided by the user (2026-09-15):** an audited local Bronze retention floor, recorded in
     ADR-0052's open questions and implemented in Step 11.
     * The retirement state is authoritative in the Bronze table or its own commit log, never in a
