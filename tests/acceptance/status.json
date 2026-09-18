@@ -337,11 +337,11 @@
       "id": "P3.stream-throughput",
       "phase": "3",
       "name": "Sustained stream throughput and outage recovery at the 5,000 events/s target rate, recorded honestly",
-      "status": "NOT_STARTED",
+      "status": "FAIL",
       "evidence": {
         "command": "make load-stream",
         "verified_at": null,
-        "result": null
+        "result": "FAIL (2026-09-18), recorded honestly (ROADMAP: insufficient capacity is recorded as a failure, the rate is never lowered). run_id bench-20260918-141621-stream-throughput-50aad177 at commit 50aad17, clean tree, publishable: every integrity check passed (clock offset bounded over 790,935 delivery reports, every record delivered, LogAppendTime, all partitions offered, samples anchored to broker records). The consumer (Bronze + Silver in one JVM, harness defaults: local[4], 2g driver) exited with java.lang.OutOfMemoryError: Java heap space before the measured window completed, so neither the 5,000 events/s sustain target nor the outage-recovery target was met. Likely cause under investigation: Silver's canonical MERGE is unpruned (PROGRESS D24, D25). Earlier runs that day were INVALID on harness defects, since fixed (36816cc, 50aad17)."
       }
     },
     {

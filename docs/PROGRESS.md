@@ -160,7 +160,9 @@ gate re-run is blocked on a macOS permission.
   - *Status.* A fix, which tracks unheld windows per window and bumps the feature set to 6.0.0, is
     prepared but not landed: it changes served behaviour, so it waits for the **user's decision**.
     The record is kept in the session scratch until then.
-- **`P3.stream-throughput`: not measured yet. The first real runs found three problems.**
+- **`P3.stream-throughput`: FAIL, recorded honestly**, `run_id: bench-20260918-141621-stream-throughput-50aad177`
+  (clean tree, every integrity check passed; the consumer ran out of heap before the measured window).
+  The first real runs had found three problems.
   1. A harness defect, fixed in `36816cc`. confluent-kafka returns no headers in delivery reports,
      so the clock-offset bound saw 0 reports and every run read INVALID.
   2. The consumer (Bronze and Silver in one JVM, 2 GiB heap) died of
