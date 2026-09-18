@@ -13,6 +13,8 @@ must hold throughout:
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
 import time
 from collections.abc import Iterator
 from typing import Any
@@ -29,6 +31,18 @@ CHAOS_LOCK_KEY = WRITER_LOCK_KEY + 2
 """Not the gateway's key, so a running gateway is neither disturbed nor contended with."""
 INTERVAL_S, LEASE_S, GRACE_S = 0.2, 1.0, 2.0
 INSTANCE_PREFIX = "gw-chaos-"
+GATEWAY_CONTAINER = os.environ.get("TRACEX_GATEWAY_CONTAINER", "tracex-gateway-1")
+"""A running gateway holds a live writer session. A writer taking over waits out ANY live session,
+whatever its producer or lock key (`others_live`), and must: gateways of two versions carry two
+producer names during a rolling deploy. So the fence is tested with the gateway stopped."""
+
+
+def _docker(*args: str) -> subprocess.CompletedProcess[str]:
+    binary = shutil.which("docker") or "docker"
+    # S603: every argument is a fixed literal or a container name from the environment.
+    return subprocess.run(  # noqa: S603
+        [binary, *args], capture_output=True, text=True, timeout=60
+    )
 
 
 def _dsn(user_env: str, password_env: str) -> str:
@@ -54,11 +68,37 @@ def owner() -> Iterator[Any]:
             f"SKIPPED (NOT PASSED): no migrated PostgreSQL reachable as the owner ({exc}). Run "
             f"`make up && make migrate`; the fence is a database guarantee and is never mocked."
         )
-    yield connection
-    connection.execute(
-        "DELETE FROM app.producer_sessions WHERE instance_id LIKE %s", (f"{INSTANCE_PREFIX}%",)
+    running = (
+        _docker("inspect", "--format", "{{.State.Running}}", GATEWAY_CONTAINER).stdout.strip()
+        == "true"
     )
-    connection.close()
+    if running:
+        assert _docker("stop", GATEWAY_CONTAINER).returncode == 0, "could not stop the gateway"
+    try:
+        deadline = time.monotonic() + LEASE_S + GRACE_S + 5
+        while _foreign_live(connection) and time.monotonic() < deadline:
+            time.sleep(0.2)
+        assert not _foreign_live(connection), (
+            "another writer session is live (not this test's, and not the stopped gateway's): "
+            "the fence cannot be tested in isolation"
+        )
+        yield connection
+    finally:
+        connection.execute(
+            "DELETE FROM app.producer_sessions WHERE instance_id LIKE %s", (f"{INSTANCE_PREFIX}%",)
+        )
+        connection.close()
+        if running:
+            _docker("start", GATEWAY_CONTAINER)
+
+
+def _foreign_live(owner: Any) -> bool:
+    row = owner.execute(
+        "SELECT EXISTS (SELECT 1 FROM app.producer_sessions WHERE closed_at IS NULL "
+        "AND instance_id NOT LIKE %s AND heartbeat_at > now() - make_interval(secs => %s))",
+        (f"{INSTANCE_PREFIX}%", GRACE_S),
+    ).fetchone()
+    return bool(row and row[0])
 
 
 def _holder_pid(owner: Any) -> int | None:
