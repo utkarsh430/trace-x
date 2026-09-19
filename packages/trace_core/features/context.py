@@ -40,6 +40,11 @@ from trace_core.features.semantics import WINDOWS, Dimension, Entity, Stream
 
 _WINDOW_SECONDS: Final[dict[str, int]] = {w.label: w.seconds for w in WINDOWS}
 
+WindowKey = tuple[Entity, Stream, str]
+"""`(entity, stream, window label)`: one declared window, for whichever entity the context read."""
+PreviousKey = tuple[Entity, Stream]
+"""`(entity, stream)`: one previous-observation read."""
+
 
 class Completeness(StrEnum):
     """Whether the store can vouch for everything inside a lookback.
@@ -77,6 +82,40 @@ class InsufficientHistory:
 
 INSUFFICIENT_HISTORY: Final = InsufficientHistory()
 
+
+class DepthCapped(InsufficientHistory):
+    """Sentinel: absent because the bounded score-time read did not reach it (ADR-0046 §8).
+
+    Still an `InsufficientHistory`, so every consumer of absence keeps reading it as absent.
+    Distinct, so the value can say its lookback was not vouched for and the decision can say why.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return "HISTORY_DEPTH_CAPPED"
+
+
+HISTORY_DEPTH_CAPPED: Final = DepthCapped()
+
+
+class LifetimeUnobserved(InsufficientHistory):
+    """Sentinel: the account's lifetime may have begun before the store could vouch for it.
+
+    Tenure and a negative membership are claims about the whole lifetime (ADR-0046 §3), which runs
+    back to the last inactivity gap. A store whose completeness begins inside the gap before the
+    first transaction it holds cannot tell whether the account was active earlier, so it says absent
+    rather than serving the time since it started, or calling a device unknown.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return "LIFETIME_UNOBSERVED"
+
+
+LIFETIME_UNOBSERVED: Final = LifetimeUnobserved()
+
 MIN_OBSERVATIONS_FOR_ROBUST_Z: Final = 8
 """Below this, a median and MAD describe the sample rather than the account.
 
@@ -104,12 +143,29 @@ class WindowState:
     Integer arithmetic, so it is exact -- a running float variance loses
     precision at exactly the scale where uniform-amount laundering lives."""
     declined_count: int = 0
+    """Declined observations with a known outcome. Never counts the current observation's
+    outcome, which is not known when it is scored (`observation.POST_DECISION_FIELDS`)."""
     outcome_known_count: int = 0
     """Denominator for DECLINED_RATIO. Distinct from `count` because a source
     may not supply `authorization_outcome` for every row, and dividing by the
     wrong denominator would report a ratio that was never measured."""
     distinct: dict[Dimension, int] = field(default_factory=dict)
-    """Approximate distinct cardinality per dimension (HyperLogLog online)."""
+    """Distinct cardinality per dimension: exact for EXACT storage, the declared
+    edge-inclusive five-minute-bucket estimand for APPROXIMATE storage (ADR-0046 §2)."""
+    aligned_count: int = 0
+    aligned_amount_sum_minor: int = 0
+    aligned_amount_sum_squares: int = 0
+    """Same-currency count, sum and sum of squares over the declared MINUTE-ALIGNED window
+    (ADR-0046 §2): whole minutes strictly between the minute containing `as_of - W` and the
+    minute containing `as_of`, plus the current observation when the feature declares it
+    INCLUDED (it lies in the excluded minute containing `as_of`, so it is added once, by
+    itself). Read only by `AMOUNT_CV`, and kept apart from the exact fields because the two
+    windows differ at both edges -- and because the coefficient of variation must divide
+    same-currency sums by a same-currency count, which the all-currency `count` is not."""
+    content_capped: bool = False
+    """The window held more than `SCORE_READ_CAP` observations when an as-served read was made
+    (ADR-0046 §8). `count` stays exact; the sums and exact distinct counts are not carried, and the
+    features over them read as absent."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,6 +204,10 @@ class Profile:
     known_devices: frozenset[str] = frozenset()
     home_latitude: float | None = None
     home_longitude: float | None = None
+    depth_capped: bool = False
+    """Read from a capped as-served read (ADR-0046 §8). The sets hold only what that read and the
+    folded prefix saw, so a member is exact and a non-member is unknown. The amount baseline, home
+    and first-seen are carried only where they are still exact, and are None otherwise."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,17 +249,52 @@ class FeatureContext:
     complete-and-empty window can say "zero distinct merchants" rather than
     leave the dimension absent -- which `_distinct` would correctly read as
     "not declared" and refuse to answer."""
+    unheld_windows: frozenset[WindowKey] = frozenset()
+    """Declared windows this read reaches behind what the store still holds (ADR-0046 §5).
 
-    def completeness(self, lookback_s: int) -> Completeness:
-        """Can the store vouch for the whole of `(as_of - lookback_s, as_of]`?"""
+    Each is absent and not vouched for, whatever `complete_since` says; every other window keeps
+    the store's completeness. Per window rather than folded into `complete_since`, which would
+    withdraw the vouching of every window as long as the shortest unheld one -- a late read whose
+    card window was trimmed would then call a held, genuinely empty account window unknown."""
+    unheld_previous: frozenset[PreviousKey] = frozenset()
+    """Previous-observation reads the store can no longer answer for this read (ADR-0046 §5)."""
+
+    def completeness(
+        self,
+        lookback_s: int,
+        *,
+        window: WindowKey | None = None,
+        previous: PreviousKey | None = None,
+    ) -> Completeness:
+        """Can the store vouch for the whole of `(as_of - lookback_s, as_of]`?
+
+        `window` / `previous`: what the asking feature reads. A read the store no longer holds is
+        never vouched for (INCOMPLETE), whatever the store's age; with neither, only the store's
+        age is asked -- the right question for a profile, which reads no window.
+        """
         if self.complete_since is None:
             return Completeness.UNKNOWN
+        if (window is not None and window in self.unheld_windows) or (
+            previous is not None and previous in self.unheld_previous
+        ):
+            return Completeness.INCOMPLETE
         began = self.as_of - dt.timedelta(seconds=lookback_s)
         return (
             Completeness.COMPLETE
             if began.timestamp() >= self.complete_since.timestamp()
             else Completeness.INCOMPLETE
         )
+
+    def vouched_lifetime_start(self, first_seen: dt.datetime, gap_s: int) -> bool:
+        """Whether completeness covers the whole inactivity gap before `first_seen`.
+
+        Only then does the absence of earlier observations prove the lifetime began there, rather
+        than reflecting a store that started watching part-way through it.
+        """
+        if self.complete_since is None:
+            return False
+        began = first_seen - dt.timedelta(seconds=gap_s)
+        return self.complete_since.timestamp() <= began.timestamp()
 
     def window(
         self, entity: Entity, entity_id: str | None, stream: Stream, window_label: str
@@ -211,6 +306,10 @@ class FeatureContext:
         `_distinct` must be able to tell that from a dimension nobody declared.
         """
         if entity_id is None:
+            return None
+        if (entity, stream, window_label) in self.unheld_windows:
+            # Reaches behind what the store still holds: what is left is neither the value nor a
+            # lower bound the store can vouch for (ADR-0046 §5).
             return None
         state = self.windows.get((entity, entity_id, stream, window_label))
         if state is not None:
@@ -228,6 +327,6 @@ class FeatureContext:
     def previous_observation(
         self, entity: Entity, entity_id: str | None, stream: Stream
     ) -> Observation | None:
-        if entity_id is None:
+        if entity_id is None or (entity, stream) in self.unheld_previous:
             return None
         return self.previous.get((entity, entity_id, stream))

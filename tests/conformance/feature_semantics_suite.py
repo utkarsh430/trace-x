@@ -1,35 +1,43 @@
-"""The shared suite every feature-store implementation must pass.
+"""The shared suite every feature implementation must pass, with literal fixtures as the oracle.
 
-**What this is for.** ADR-0002 accepts that the same feature is computed twice --
-once from Redis on the hot path, once from Spark on the warm path -- and names
-silent divergence as the risk. `docs/DATA_ENGINEERING.md` §4 answers it with a
-single feature definition plus a parity test. This file is the parity test's
-reusable half: a set of scenarios stated in terms of *observations in, feature
-values out*, with no reference to how any store works.
+**What this is for.** ADR-0002 accepts that the same feature is computed more than once -- from
+Redis on the hot path, and offline from the durable history -- and names silent divergence as the
+risk. This file states the declared meaning (ADR-0032, ADR-0046) as *observations in, feature
+values out*, with no reference to how any implementation works.
 
-Three implementations run it:
+**The literals are the oracle; agreement is not.** Every expected number below is derived by hand
+from the declaration and written as its arithmetic, so a reviewer can check it without running
+anything. Two implementations that share a defect agree with each other; Phase 3 planning found
+exactly that (the coefficient of variation divided same-currency sums by an all-currency count in
+both). They cannot both agree with a literal that was derived independently.
 
-| Implementation | Phase | How it builds a context |
-|---|---|---|
-| `ReferenceFeatureStore` | 2 | scans a list |
-| `RedisOnlineFeatureStore` | 2 | sorted sets, HLL, hashes |
-| Spark Gold | 3 | event-time windows over Delta |
+**Two evaluation modes** (`EvaluationMode`, ADR-0046 §1). Every implementation is given the same
+thing: the log of deliveries in the order they arrived, and the position in it of the scored
+transaction's delivery.
 
-Phase 3 adds the third by subclassing this file **unmodified** -- which is the
-whole point. If proving parity required editing the suite, the suite would be
-describing whatever the implementations happen to do rather than what the
-features mean.
+* `AsServedConformanceSuite` -- what an online store serves. Observations delivered after the
+  scored transaction cannot contribute. The Redis store and the reference store run it; Phase 3's
+  as-served replay runs it too, which is what forbids that replay from being a range over
+  `occurred_at`.
+* `EventTimeCompleteConformanceSuite` -- what a complete history says. Arrival order is
+  irrelevant except for which delivery of an identity came first; ties at the scored
+  transaction's millisecond break by identity. Phase 3's Gold runs it.
 
-**Tolerances are declared per feature and are never widened to make a test
-pass** (docs/DATA_ENGINEERING.md §4). A HyperLogLog distinct count is inexact by
-construction (~0.81%, ADR-0003) and its tolerance says so; everything else is
-exact, and an "almost equal" there is a bug being hidden.
+Fixtures whose answer is the same in both modes live on the shared base class. Fixtures whose
+answer depends on the mode live on the mode's class, and the pair is written side by side so the
+difference is visible.
+
+Phase 3 subclasses these classes **unmodified**. If proving parity required editing the suite, the
+suite would be describing whatever the implementations happen to do rather than what the features
+mean.
 """
 
 from __future__ import annotations
 
 import datetime as dt
+import math
 from abc import ABC, abstractmethod
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Final
 
@@ -38,20 +46,22 @@ from trace_core.domain.enums import AuthorizationOutcome, TransactionChannel
 from trace_core.domain.time import EventTime, event_time
 from trace_core.features import FeatureContext, FeatureState
 from trace_core.features.definitions import ONLINE_FEATURES
-from trace_core.features.reference import Event
-from trace_core.features.semantics import Stream
+from trace_core.features.observation import (
+    Event,
+    authorization_observation,
+    transaction_observation,
+)
+from trace_core.features.semantics import ParityComparison, Stream
 
 T0: Final = event_time(dt.datetime(2026, 3, 1, 12, 0, 0, tzinfo=dt.UTC))
+"""A whole minute and a whole five-minute bucket, so bucket edges below are easy to read."""
 
-WATCHED_LONG_ENOUGH: Final = event_time(T0 - dt.timedelta(days=31))
-"""A store that has been recording for longer than any feature needs: every
-window and the profile horizon (30 d) began after it. Absent state on this
-store is a measured zero."""
+WATCHED_LONG_ENOUGH: Final = event_time(T0 - dt.timedelta(days=90))
+"""A store recording for longer than any feature looks back, and than a 30-day lifetime gap."""
 
 WATCHED_ONE_HOUR: Final = event_time(T0 - dt.timedelta(hours=1, seconds=1))
-"""A store that started an hour ago. Complete for the 1 m, 5 m and 1 h windows,
-incomplete for 24 h and for the profile horizon. Absent 24 h state on this store
-is not evidence of anything."""
+"""Complete for the 1 m, 5 m and 1 h windows; incomplete for 24 h and the profile horizon."""
+
 FULL_COVERAGE: Final = frozenset(CanonicalField)
 ACCOUNT: Final = "acct_000001"
 OTHER_ACCOUNT: Final = "acct_000002"
@@ -59,20 +69,45 @@ DEVICE: Final = "dev_000001"
 MERCHANT: Final = "mrch_00001"
 CARD: Final = "card_000001"
 IP: Final = "ip_00001"
+SUBJECT: Final = "tx_mmm"
+"""The scored transaction's identity. Chosen to sort between `tx_a...` and `tx_z...`, so
+tie-break fixtures can place observations on either side of it."""
 
 EXACT: Final = 0.0
-HLL_TOLERANCE: Final = 0.0081
-"""HyperLogLog's documented relative error (ADR-0003). Applied to distinct
-counts only, and stated as the ADR's number rather than as a value chosen to
-make a run pass."""
+FLOAT_ABSOLUTE_FLOOR: Final = 1e-9
+"""A relative tolerance on an expected zero is no tolerance at all; a FLOAT feature expected to be
+exactly 0 is compared within this absolute margin instead."""
+FLOAT: Final = 1e-9
+"""Relative tolerance for values that pass through floating-point arithmetic (a square root,
+a division, a trigonometric distance). Arithmetic, not estimation (ADR-0046 §5)."""
+
+EARTH_RADIUS_KM: Final = 6371.0088
+"""The IUGG mean radius ADR-0046 declares. Written here, not imported: if the declared radius
+changed, these fixtures must fail rather than follow."""
+
+
+def along_equator_km(degrees: float) -> float:
+    """Great-circle distance between two equatorial points `degrees` of longitude apart.
+
+    On the equator the haversine formula reduces to R * |delta longitude| in radians, which is
+    what makes the geographic fixtures below derivable by hand.
+    """
+    return EARTH_RADIUS_KM * degrees * math.pi / 180.0
 
 
 def at(seconds: float) -> EventTime:
-    """An event time offset from T0. Negative is in the past."""
+    """An event time offset from T0 in seconds. Negative is in the past."""
     return event_time(T0 + dt.timedelta(seconds=seconds))
 
 
+def at_ms(milliseconds: int, *, microseconds: int = 0) -> EventTime:
+    return event_time(
+        T0 + dt.timedelta(milliseconds=milliseconds) + dt.timedelta(microseconds=microseconds)
+    )
+
+
 def tx_event(
+    event_id: str,
     *,
     occurred_at: EventTime,
     account_id: str = ACCOUNT,
@@ -93,6 +128,7 @@ def tx_event(
         stream=Stream.TRANSACTION,
         occurred_at=occurred_at,
         account_id=account_id,
+        event_id=event_id,
         currency=currency,
         amount_minor=amount_minor,
         card_id=card_id,
@@ -108,16 +144,39 @@ def tx_event(
     )
 
 
+def identity_event(
+    event_id: str, *, stream: Stream, occurred_at: EventTime, account_id: str = ACCOUNT
+) -> Event:
+    return Event(stream=stream, occurred_at=occurred_at, account_id=account_id, event_id=event_id)
+
+
+def outcome_event(
+    transaction_id: str,
+    *,
+    decided_at: EventTime,
+    outcome: AuthorizationOutcome = AuthorizationOutcome.DECLINED,
+    account_id: str = ACCOUNT,
+) -> Event:
+    """An authorization outcome for `transaction_id`, decided at `decided_at` (ADR-0049)."""
+    return authorization_observation(
+        transaction_id=transaction_id,
+        account_id=account_id,
+        authorization_outcome=outcome,
+        decided_at=decided_at,
+    )
+
+
 def transaction(
     *,
-    occurred_at: EventTime,
+    occurred_at: EventTime = T0,
+    transaction_id: str = SUBJECT,
     account_id: str = ACCOUNT,
     amount_minor: int = 5_000,
     currency: str = "GBP",
     coverage: frozenset[CanonicalField] = FULL_COVERAGE,
     **over: object,
 ) -> CanonicalTransaction:
-    """The transaction being scored, as the gateway would have mapped it."""
+    """The transaction being scored, as the gateway maps it."""
     fields: dict[str, object] = {
         "merchant_id": MERCHANT,
         "merchant_mcc": "5411",
@@ -138,9 +197,9 @@ def transaction(
     fields = {k: v for k, v in fields.items() if CanonicalField(k) in coverage or v is None}
     return CanonicalTransaction(
         source_dataset="conformance",
-        source_row_id="row-1",
+        source_row_id=transaction_id,
         field_coverage=coverage,
-        transaction_id="tx_0000000001",
+        transaction_id=transaction_id,
         account_id=account_id,
         amount_minor=amount_minor,
         currency=currency,
@@ -150,465 +209,1282 @@ def transaction(
     )
 
 
+def located(event_id: str, *, hours_ago: float, longitude: float, latitude: float = 0.0) -> Event:
+    return tx_event(
+        event_id, occurred_at=at(-3_600 * hours_ago), latitude=latitude, longitude=longitude
+    )
+
+
+def unlocated(event_id: str, *, hours_ago: float) -> Event:
+    return tx_event(event_id, occurred_at=at(-3_600 * hours_ago), latitude=None, longitude=None)
+
+
 @dataclass(frozen=True, slots=True)
 class Expectation:
     """One feature's expected outcome, with the tolerance it is judged at."""
 
     feature_id: str
     value: float | None
-    """`None` means the feature must be absent -- INSUFFICIENT_HISTORY or
-    UNAVAILABLE. Never 0.0, which is the failure ADR-0022 exists to prevent."""
+    """`None` means the feature must be absent -- never 0.0, which is the failure ADR-0022
+    exists to prevent."""
     tolerance: float = EXACT
     state: FeatureState | None = None
+    capped: bool | None = None
+    """For an absent expectation: whether the absence must be the bounded score-time read's
+    (ADR-0046 §8). None checks neither."""
+
+
+INSUFFICIENT: Final = FeatureState.INSUFFICIENT_HISTORY
+
+FAILURE_HEADER: Final = "feature expectations failed:"
+FAILURE_BULLET: Final = "  - "
+
+
+def failed_feature_ids(error: AssertionError) -> frozenset[str]:
+    """The features a `check_log` failure names; empty for any other assertion."""
+    text = str(error)
+    if not text.startswith(FAILURE_HEADER):
+        return frozenset()
+    return frozenset(
+        line[len(FAILURE_BULLET) :].split(":", 1)[0]
+        for line in text.splitlines()[1:]
+        if line.startswith(FAILURE_BULLET)
+    )
+
+
+def metres_east(metres: float) -> float:
+    """The longitude, in degrees, of an equatorial point `metres` east of longitude 0."""
+    return metres / (EARTH_RADIUS_KM * 1_000.0) * 180.0 / math.pi
+
+
+# -- bounded score-time reads (ADR-0046 §8) --------------------------------------
+
+CAP: Final = 512
+"""`SCORE_READ_CAP`, written here and not imported: if the declared cap moved, these fixtures must
+fail rather than follow."""
+
+RAW_HISTORY_MS: Final = 25 * 3_600_000
+"""How far behind `as_of` an account's transactions are still held raw: the 24-hour lookback plus
+the one-hour late-arrival margin. Older ones are the folded prefix (ADR-0046 §5, §8)."""
+
+CAPPED_CONTENT: Final = (
+    "account_amount_sum_1h",
+    "account_distinct_merchants_1h",
+    "account_distinct_mcc_5m",
+    "account_distinct_devices_24h",
+    "account_distinct_countries_24h",
+    "device_distinct_accounts_24h",
+)
+"""The six features ADR-0046 §8 names as reading observation content."""
+
+Shape = Callable[[int], dict[str, object]]
+
+
+def deep(
+    depth: int, *, spacing_ms: int, shape: Shape | None = None, prefix: str = "tx_d"
+) -> list[Event]:
+    """`depth` transactions delivered oldest first. The `j`-th newest is `<prefix><j:04d>`, dated
+    `T0 - j * spacing_ms`, with `shape(j)` applied."""
+    return [
+        tx_event(
+            f"{prefix}{j:04d}",
+            occurred_at=at_ms(-spacing_ms * j),
+            **(shape(j) if shape is not None else {}),  # type: ignore[arg-type]
+        )
+        for j in range(depth, 0, -1)
+    ]
+
+
+def spread(j: int) -> dict[str, object]:
+    """Five merchants, six categories and three countries in rotation, and an amount of 100 + j."""
+    return {
+        "merchant_id": f"mrch_s{j % 5}",
+        "merchant_mcc": f"59{j % 6:02d}",
+        "merchant_country": ("GB", "FR", "DE")[j % 3],
+        "amount_minor": 100 + j,
+    }
+
+
+def other_accounts(j: int) -> dict[str, object]:
+    """A different account for every transaction, on the scored device."""
+    return {"account_id": f"acct_v{j:04d}"}
+
+
+def probe(j: int) -> dict[str, object]:
+    """The probe that found §8's profile gap: of 600, the oldest 88 on `dev_old` at `mrch_old`."""
+    if j > CAP:
+        return {"device_id": "dev_old", "merchant_id": "mrch_old"}
+    return {"device_id": "dev_new", "merchant_id": f"mrch_{j:04d}"}
+
+
+def z_sample(in_read: int) -> Shape:
+    """The newest `in_read` in GBP at 1 000 (odd j) or 3 000 (even j); the rest of the capped read
+    (j < 512) in EUR; everything beyond it in GBP at 3 000."""
+
+    def shape(j: int) -> dict[str, object]:
+        if j <= in_read:
+            return {"currency": "GBP", "amount_minor": 1_000 if j % 2 else 3_000}
+        if j < CAP:
+            return {"currency": "EUR", "amount_minor": 5_000}
+        return {"currency": "GBP", "amount_minor": 3_000}
+
+    return shape
+
+
+def home_sample(in_read: int) -> Shape:
+    """The newest `in_read` located on the equator, at longitude 11 for j = 1 and 10 otherwise; the
+    rest of the capped read (j < 512) unlocated; everything beyond it at longitude 10."""
+
+    def shape(j: int) -> dict[str, object]:
+        if j <= in_read:
+            return {"latitude": 0.0, "longitude": 11.0 if j == 1 else 10.0}
+        if j < CAP:
+            return {"latitude": None, "longitude": None}
+        return {"latitude": 0.0, "longitude": 10.0}
+
+    return shape
+
+
+def capped_absent(feature_id: str) -> Expectation:
+    """Absent because the read was capped: `INSUFFICIENT_HISTORY`, marked as the cap's."""
+    return Expectation(feature_id, None, state=INSUFFICIENT, capped=True)
+
+
+ROBUST_Z_OF_8000: Final = (8_000 - 2_000) / (1.4826 * 1_000)
+"""64 amounts at 1 000 and 64 at 3 000: the median is (1 000 + 3 000) / 2 = 2 000, every absolute
+deviation is 1 000, so the MAD is 1 000, and 8 000 scores (8 000 - 2 000) / (1.4826 * 1 000)."""
 
 
 class FeatureSemanticsConformanceSuite(ABC):
-    """Subclass and implement `build_context` to test an implementation.
-
-    Phase 3's Spark implementation subclasses this file unmodified.
-    """
+    """Fixtures whose answer is the same in both evaluation modes."""
 
     @abstractmethod
-    def build_context(
+    def context_for(
         self,
-        history: list[Event],
-        *,
-        as_of: EventTime,
+        log: Sequence[Event],
+        subject_index: int,
         subject: CanonicalTransaction,
-        complete_since: EventTime | None = None,
+        *,
+        complete_since: EventTime | None,
     ) -> FeatureContext:
-        """Load `history` into the implementation and read a snapshot.
+        """The context the implementation produces for the scored transaction.
 
-        `complete_since` is when the store began recording, or None for a store
-        that makes no completeness claim. It is a parameter of every test rather
-        than a property of the suite because the two states give different,
-        equally correct answers to the same question -- an unseen device is
-        "not known" on a store that has watched for the horizon and "cannot
-        tell" on one that has not (ADR-0044) -- and a test that did not say
-        which store it meant would be asserting a coincidence.
+        `log` is every delivery in the order it arrived, possibly with redeliveries;
+        `log[subject_index]` is the delivery being scored. `complete_since` is when the store
+        began recording, or None for a store that makes no completeness claim (ADR-0044).
         """
 
     # -- harness ------------------------------------------------------------
 
-    def check(
+    def check_log(
         self,
-        history: list[Event],
+        log: Sequence[Event],
+        subject_index: int,
         subject: CanonicalTransaction,
-        expectations: list[Expectation],
+        expectations: Sequence[Expectation],
         *,
         complete_since: EventTime | None = None,
     ) -> None:
-        context = self.build_context(
-            history,
-            as_of=event_time(subject.occurred_at),
-            subject=subject,
-            complete_since=complete_since,
+        assert expectations, "a fixture that asserts nothing passes whatever the implementation"
+        assert log[subject_index] == transaction_observation(subject), (
+            "fixture bug: the delivery at subject_index is not the scored transaction"
         )
+        context = self.context_for(log, subject_index, subject, complete_since=complete_since)
+        failures: list[str] = []
         for expected in expectations:
             spec = ONLINE_FEATURES.get(expected.feature_id)
+            assert expected.tolerance <= FLOAT, "fixture bug: a tolerance wider than arithmetic"
+            assert spec.parity is not ParityComparison.EXACT or expected.tolerance == EXACT, (
+                f"fixture bug: {expected.feature_id} is declared EXACT but given a tolerance"
+            )
             actual = spec.evaluate(subject, context)
             if expected.value is None:
-                assert not actual.is_available, (
-                    f"{expected.feature_id}: expected no value, got {actual.or_none()}. "
-                    f"An absent feature must never be reported as a number (ADR-0022)."
-                )
-                if expected.state is not None:
-                    assert actual.state is expected.state, (
-                        f"{expected.feature_id}: expected {expected.state}, got {actual.state}. "
-                        f"UNAVAILABLE and INSUFFICIENT_HISTORY have different causes and "
-                        f"different remedies; conflating them misreports coverage."
+                if actual.is_available:
+                    failures.append(
+                        f"{expected.feature_id}: expected no value, got {actual.or_none()}. "
+                        f"An absent feature must never be reported as a number (ADR-0022)."
+                    )
+                elif expected.state is not None and actual.state is not expected.state:
+                    failures.append(
+                        f"{expected.feature_id}: expected {expected.state}, got {actual.state}"
+                    )
+                elif expected.capped is not None and actual.depth_capped is not expected.capped:
+                    failures.append(
+                        f"{expected.feature_id}: expected depth_capped={expected.capped}, got "
+                        f"{actual.depth_capped} (ADR-0046 §8)"
                     )
                 continue
-            assert actual.is_available, (
-                f"{expected.feature_id}: expected {expected.value}, got {actual.state}"
+            if not actual.is_available:
+                failures.append(
+                    f"{expected.feature_id}: expected {expected.value}, got {actual.state}"
+                )
+                continue
+            allowed = (
+                max(abs(expected.value) * FLOAT, FLOAT_ABSOLUTE_FLOOR)
+                if spec.parity is ParityComparison.FLOAT
+                else abs(expected.value) * expected.tolerance
             )
-            allowed = abs(expected.value) * expected.tolerance
-            assert abs(actual.value - expected.value) <= allowed, (
-                f"{expected.feature_id}: expected {expected.value} +/- {allowed}, "
-                f"got {actual.value}"
+            if abs(actual.value - expected.value) > allowed:
+                failures.append(
+                    f"{expected.feature_id}: expected {expected.value} +/- {allowed}, "
+                    f"got {actual.value}"
+                )
+        if failures:
+            raise AssertionError(
+                FAILURE_HEADER + "".join(f"\n{FAILURE_BULLET}{line}" for line in failures)
             )
 
-    # -- velocity -----------------------------------------------------------
+    def check(
+        self,
+        history: Sequence[Event],
+        subject: CanonicalTransaction,
+        expectations: Sequence[Expectation],
+        *,
+        complete_since: EventTime | None = None,
+    ) -> None:
+        """`history` delivered in order, then the scored transaction."""
+        log = [*history, transaction_observation(subject)]
+        self.check_log(log, len(history), subject, expectations, complete_since=complete_since)
 
-    def test_window_counts_only_what_falls_inside_the_window(self) -> None:
+    # -- transactional windows include the scored transaction (ADR-0046 §2) ---
+
+    def test_the_scored_transaction_counts_in_its_own_windows(self) -> None:
         history = [
-            tx_event(occurred_at=at(-30)),
-            tx_event(occurred_at=at(-120)),
-            tx_event(occurred_at=at(-1_800)),
-            tx_event(occurred_at=at(-40_000)),
+            tx_event("tx_h1", occurred_at=at(-30)),
+            tx_event("tx_h2", occurred_at=at(-120)),
+            tx_event("tx_h3", occurred_at=at(-1_800)),
+            tx_event("tx_h4", occurred_at=at(-40_000)),
         ]
         self.check(
             history,
-            transaction(occurred_at=T0),
+            transaction(),
             [
-                Expectation("account_tx_count_1m", 1.0),
-                Expectation("account_tx_count_5m", 2.0),
-                Expectation("account_tx_count_1h", 3.0),
-                Expectation("account_tx_count_24h", 4.0),
+                Expectation("account_tx_count_1m", 1 + 1),  # h1 + scored
+                Expectation("account_tx_count_5m", 2 + 1),  # h1, h2 + scored
+                Expectation("account_tx_count_1h", 3 + 1),  # h1..h3 + scored
+                Expectation("account_tx_count_24h", 4 + 1),  # h1..h4 + scored
+                Expectation("card_tx_count_5m", 2 + 1),
             ],
         )
 
-    def test_the_window_boundary_is_half_open(self) -> None:
-        """Exactly `seconds` old is OUTSIDE; both implementations must agree."""
+    def test_an_observation_exactly_a_window_old_is_outside_and_a_millisecond_younger_inside(
+        self,
+    ) -> None:
+        history = [
+            tx_event("tx_edge", occurred_at=at_ms(-60_000)),
+            tx_event("tx_inside", occurred_at=at_ms(-59_999)),
+        ]
         self.check(
-            [tx_event(occurred_at=at(-60)), tx_event(occurred_at=at(-59))],
-            transaction(occurred_at=T0),
-            [Expectation("account_tx_count_1m", 1.0)],
+            history,
+            transaction(),
+            [
+                Expectation("account_tx_count_1m", 1 + 1),  # inside + scored; edge excluded
+                Expectation("account_tx_count_5m", 2 + 1),
+            ],
         )
 
-    def test_another_accounts_activity_is_not_counted(self) -> None:
-        self.check(
-            [tx_event(occurred_at=at(-10), account_id=OTHER_ACCOUNT)],
-            transaction(occurred_at=T0),
-            [Expectation("account_tx_count_1m", None)],
-        )
+    def test_event_time_is_floored_to_the_millisecond_before_any_comparison(self) -> None:
+        """Scored at T0 + 0.9 ms, which floors to T0.
 
-    def test_out_of_order_arrival_does_not_change_the_answer(self) -> None:
-        """Event time, not arrival order, decides the window (ADR-0026).
-
-        The single most consequential property here: a Redis counter that trims
-        by arrival order silently undercounts under replay, and the symptom is a
-        velocity feature that quietly stops firing.
+        `tx_floor` at T0 - 59 999.05 ms floors to T0 - 60 000 ms: exactly a minute old, outside.
+        Compared unfloored it would be 59 999.95 ms old and inside. `tx_keep` at
+        T0 - 59 999 ms is inside either way.
         """
-        events = [tx_event(occurred_at=at(-o)) for o in (10, 200, 40, 100, 25)]
-        subject = transaction(occurred_at=T0)
+        history = [
+            tx_event("tx_floor", occurred_at=at_ms(-59_999, microseconds=-50)),
+            tx_event("tx_keep", occurred_at=at_ms(-59_999)),
+        ]
+        self.check(
+            history,
+            transaction(occurred_at=at_ms(0, microseconds=900)),
+            [Expectation("account_tx_count_1m", 1 + 1)],  # keep + scored
+        )
+
+    def test_arrival_order_among_earlier_observations_does_not_change_the_answer(self) -> None:
+        events = [
+            tx_event(f"tx_o{i}", occurred_at=at(-offset))
+            for i, offset in enumerate((10, 200, 40, 100, 25))
+        ]
         expectations = [
-            Expectation("account_tx_count_1m", 3.0),
-            Expectation("account_tx_count_5m", 5.0),
+            Expectation("account_tx_count_1m", 3 + 1),  # -10, -40, -25 + scored
+            Expectation("account_tx_count_5m", 5 + 1),
         ]
-        self.check(events, subject, expectations)
-        self.check(list(reversed(events)), subject, expectations)
+        self.check(events, transaction(), expectations)
+        self.check(list(reversed(events)), transaction(), expectations)
 
-    # -- amounts ------------------------------------------------------------
-
-    def test_amount_sums_are_partitioned_by_currency(self) -> None:
-        """No FX source exists, so converting would invent a number."""
+    def test_an_older_observation_is_ignored_only_by_event_time_not_by_arrival(self) -> None:
+        """A later-dated observation delivered first must not hide an earlier one."""
         history = [
-            tx_event(occurred_at=at(-100), amount_minor=1_000, currency="GBP"),
-            tx_event(occurred_at=at(-200), amount_minor=9_999, currency="EUR"),
+            tx_event("tx_future", occurred_at=at(7_200)),
+            tx_event("tx_now", occurred_at=at(-30)),
         ]
         self.check(
             history,
-            transaction(occurred_at=T0, currency="GBP"),
-            [Expectation("account_amount_sum_1h", 1_000.0)],
-        )
-
-    def test_declined_ratio_uses_only_known_outcomes(self) -> None:
-        history = [
-            tx_event(occurred_at=at(-10), authorization_outcome=AuthorizationOutcome.DECLINED),
-            tx_event(occurred_at=at(-20), authorization_outcome=AuthorizationOutcome.DECLINED),
-            tx_event(occurred_at=at(-30), authorization_outcome=AuthorizationOutcome.APPROVED),
-            tx_event(occurred_at=at(-40), authorization_outcome=None),
-        ]
-        self.check(
-            history,
-            transaction(occurred_at=T0),
-            [Expectation("declined_ratio_1h", 2.0 / 3.0)],
-        )
-
-    def test_declined_ratio_is_absent_rather_than_zero_when_no_outcome_is_known(self) -> None:
-        """Zero known outcomes is not a zero ratio -- it is an unmeasured one."""
-        self.check(
-            [tx_event(occurred_at=at(-10), authorization_outcome=None)],
-            transaction(occurred_at=T0),
-            [Expectation("declined_ratio_1h", None, state=FeatureState.INSUFFICIENT_HISTORY)],
-        )
-
-    def test_merchant_amount_uniformity_is_low_when_amounts_are_identical(self) -> None:
-        """The MERCHANT_COLLUSION tell: uniform amounts, not large ones."""
-        history = [tx_event(occurred_at=at(-i * 100), amount_minor=25_000) for i in range(1, 6)]
-        self.check(
-            history,
-            transaction(occurred_at=T0),
-            [Expectation("merchant_amount_cv_24h", 0.0, tolerance=1e-9)],
-        )
-
-    # -- distinct cardinality ----------------------------------------------
-
-    def test_distinct_counts_deduplicate(self) -> None:
-        history = [
-            tx_event(occurred_at=at(-10), merchant_id="mrch_00001"),
-            tx_event(occurred_at=at(-20), merchant_id="mrch_00001"),
-            tx_event(occurred_at=at(-30), merchant_id="mrch_00002"),
-        ]
-        self.check(
-            history,
-            transaction(occurred_at=T0),
-            [Expectation("account_distinct_merchants_1h", 2.0, tolerance=HLL_TOLERANCE)],
-        )
-
-    def test_a_device_shared_across_accounts_is_visible_from_the_device(self) -> None:
-        """The device-farm signal is a property of the DEVICE, not the account."""
-        history = [
-            tx_event(occurred_at=at(-100 * i), account_id=f"acct_00000{i}") for i in range(1, 6)
-        ]
-        self.check(
-            history,
-            transaction(occurred_at=T0),
-            [Expectation("device_distinct_accounts_24h", 5.0, tolerance=HLL_TOLERANCE)],
-        )
-
-    def test_an_approximately_stored_distinct_count_is_read_back(self) -> None:
-        """The APPROXIMATE storage class, exercised positively (ADR-0034).
-
-        Kept at low cardinality deliberately: HyperLogLog is exact in its sparse
-        encoding there, so both implementations must agree EXACTLY and this test
-        measures the wiring rather than the estimator. The estimator's error is
-        characterised across the cardinality range by the benchmark, which is the
-        right instrument for it -- a tolerance chosen to make a unit test pass
-        would be a number nobody measured.
-        """
-        history = [
-            tx_event(occurred_at=at(-60 * i), account_id=f"acct_00000{i}") for i in range(1, 5)
-        ]
-        self.check(
-            history,
-            transaction(occurred_at=T0),
+            transaction(),
             [
-                Expectation("merchant_distinct_accounts_1h", 4.0),
-                Expectation("ip_distinct_accounts_1h", 4.0),
+                Expectation("account_tx_count_1m", 1 + 1),  # now + scored; future excluded
+                Expectation("account_tx_count_24h", 1 + 1),
             ],
         )
 
-    def test_approximate_values_declare_themselves_approximate(self) -> None:
-        """Callers, tests, observability and Phase 3 parity all need to know a
-        value is an estimate. Carried on the VALUE, not on the response, so it
-        survives being logged, stored and compared."""
+    def test_a_future_dated_observation_delivered_last_evicts_nothing(self) -> None:
+        """Retention trims must never be driven by a future-dated event (ADR-0046 §5)."""
         history = [
-            tx_event(occurred_at=at(-60 * i), account_id=f"acct_00000{i}") for i in range(1, 5)
+            tx_event("tx_now", occurred_at=at(-30)),
+            tx_event("tx_future", occurred_at=at(7_200)),
         ]
-        subject = transaction(occurred_at=T0)
-        ctx = self.build_context(history, as_of=T0, subject=subject)
+        self.check(
+            history,
+            transaction(),
+            [Expectation("account_tx_count_1m", 1 + 1), Expectation("account_tx_count_5m", 1 + 1)],
+        )
+
+    # -- identity and redelivery (ADR-0046 §1) -------------------------------
+
+    def test_a_redelivery_counts_once_and_the_first_delivery_is_the_observation(self) -> None:
+        """The second delivery of `tx_dup` carries a different time and amount; neither counts."""
+        history = [
+            tx_event("tx_dup", occurred_at=at(-100), amount_minor=1_000),
+            tx_event("tx_dup", occurred_at=at(-50), amount_minor=9_000),
+        ]
+        self.check(
+            history,
+            transaction(),
+            [
+                Expectation("account_tx_count_1m", 0 + 1),  # the first delivery is 100 s old
+                Expectation("account_tx_count_5m", 1 + 1),
+                Expectation("account_amount_sum_1h", 1_000 + 5_000),
+            ],
+        )
+
+    def test_a_redelivered_scored_transaction_counts_once(self) -> None:
+        subject = transaction()
+        log = [
+            transaction_observation(subject),
+            tx_event("tx_between", occurred_at=at(-10)),
+            transaction_observation(subject),
+        ]
+        self.check_log(
+            log,
+            2,
+            subject,
+            [
+                Expectation("account_tx_count_1m", 1 + 1),  # between + scored, once
+                Expectation("account_amount_sum_1h", 5_000 + 5_000),
+            ],
+        )
+
+    def test_a_redelivered_identity_event_counts_once(self) -> None:
+        login = identity_event("evt_fl1", stream=Stream.IDENTITY_FAILED_LOGIN, occurred_at=at(-60))
+        self.check([login, login], transaction(), [Expectation("failed_logins_1h", 1)])
+
+    # -- amounts, outcomes and currency ------------------------------------
+
+    def test_the_account_amount_sum_is_the_scored_currency_and_includes_the_scored_amount(
+        self,
+    ) -> None:
+        history = [
+            tx_event("tx_gbp", occurred_at=at(-100), amount_minor=1_000, currency="GBP"),
+            tx_event("tx_eur", occurred_at=at(-200), amount_minor=9_999, currency="EUR"),
+        ]
+        self.check(
+            history,
+            transaction(currency="GBP", amount_minor=5_000),
+            [Expectation("account_amount_sum_1h", 1_000 + 5_000)],
+        )
+        self.check(
+            history,
+            transaction(currency="EUR", amount_minor=700),
+            [Expectation("account_amount_sum_1h", 9_999 + 700)],
+        )
+
+    # -- the declined ratio: verified outcomes known before the score (ADR-0049 §5, §8) --------
+
+    def test_the_declined_ratio_never_reads_the_scored_transactions_own_outcome(self) -> None:
+        """F1. The scored transaction's own outcome is recorded before it is scored -- at its own
+        millisecond, and in a variant dated before it. Counted, the ratio would read 2/3."""
+        for own_decided_at in (T0, at_ms(-5)):
+            history = [
+                tx_event("tx_d1", occurred_at=at(-30), authorization_outcome=None),
+                tx_event("tx_a1", occurred_at=at(-25), authorization_outcome=None),
+                outcome_event("tx_d1", decided_at=at_ms(-19_700)),
+                outcome_event("tx_a1", decided_at=at(-10), outcome=AuthorizationOutcome.APPROVED),
+                outcome_event(SUBJECT, decided_at=own_decided_at),
+            ]
+            self.check(
+                history,
+                transaction(authorization_outcome=None),
+                [Expectation("declined_ratio_1h", 1 / 2, tolerance=FLOAT)],
+            )
+
+    def test_an_outcome_known_before_a_later_score_counts(self) -> None:
+        """F2."""
+        history = [
+            tx_event("tx_s0", occurred_at=at(-10), authorization_outcome=None),
+            outcome_event("tx_s0", decided_at=at_ms(-9_700)),
+        ]
+        self.check(history, transaction(), [Expectation("declined_ratio_1h", 1.0, tolerance=FLOAT)])
+
+    def test_a_duplicate_outcome_counts_once(self) -> None:
+        """F4. A redelivery carries the same outcome and contributes nothing."""
+        history = [
+            tx_event("tx_d1", occurred_at=at(-30), authorization_outcome=None),
+            tx_event("tx_a1", occurred_at=at(-25), authorization_outcome=None),
+            outcome_event("tx_d1", decided_at=at(-20)),
+            outcome_event("tx_d1", decided_at=at(-20)),
+            outcome_event("tx_a1", decided_at=at(-15), outcome=AuthorizationOutcome.APPROVED),
+        ]
+        self.check(
+            history, transaction(), [Expectation("declined_ratio_1h", 1 / 2, tolerance=FLOAT)]
+        )
+
+    def test_a_conflicting_outcome_never_replaces_the_first(self) -> None:
+        """F5. The first delivery stays the observation, so the ratio reads the approval."""
+        history = [
+            tx_event("tx_x1", occurred_at=at(-30), authorization_outcome=None),
+            outcome_event("tx_x1", decided_at=at(-20), outcome=AuthorizationOutcome.APPROVED),
+            outcome_event("tx_x1", decided_at=at(-20), outcome=AuthorizationOutcome.DECLINED),
+        ]
+        self.check(history, transaction(), [Expectation("declined_ratio_1h", 0.0, tolerance=FLOAT)])
+
+    def test_an_outcome_decided_at_the_scored_millisecond_is_not_yet_known(self) -> None:
+        """F7. Neither the scored transaction's own outcome at T nor another's counts, in either
+        recording order."""
+        subject = transaction()
+        known = tx_event("tx_y1", occurred_at=at(-5), authorization_outcome=None)
+        theirs = outcome_event("tx_y1", decided_at=T0)
+        own = outcome_event(SUBJECT, decided_at=T0)
+        self.check(
+            [known, theirs, own],
+            subject,
+            [Expectation("declined_ratio_1h", None, state=INSUFFICIENT)],
+        )
+        log = [known, transaction_observation(subject), theirs, own]
+        self.check_log(
+            log, 1, subject, [Expectation("declined_ratio_1h", None, state=INSUFFICIENT)]
+        )
+
+    def test_the_outcome_window_is_open_at_both_edges(self) -> None:
+        """F8. Decided exactly a window before is outside, a millisecond later is inside, and at
+        the scored millisecond is not yet known: only the declined outcome counts."""
+        history = [
+            tx_event("tx_e1", occurred_at=at(-7_200), authorization_outcome=None),
+            tx_event("tx_e2", occurred_at=at(-7_100), authorization_outcome=None),
+            tx_event("tx_e3", occurred_at=at(-10), authorization_outcome=None),
+            outcome_event(
+                "tx_e1", decided_at=at_ms(-3_600_000), outcome=AuthorizationOutcome.APPROVED
+            ),
+            outcome_event("tx_e2", decided_at=at_ms(-3_599_999)),
+            outcome_event("tx_e3", decided_at=T0, outcome=AuthorizationOutcome.APPROVED),
+        ]
+        self.check(history, transaction(), [Expectation("declined_ratio_1h", 1.0, tolerance=FLOAT)])
+
+    def test_a_pending_outcome_never_counts(self) -> None:
+        """F10. No transaction for it is known."""
+        self.check(
+            [outcome_event("tx_p1", decided_at=at(-20))],
+            transaction(),
+            [Expectation("declined_ratio_1h", None, state=INSUFFICIENT)],
+        )
+
+    def test_a_pending_outcome_counts_once_its_transaction_is_known(self) -> None:
+        """F11. Its verifying transaction never counts its own outcome; a later score does."""
+        pending = outcome_event("tx_p1", decided_at=at(-20))
+        promoted = tx_event("tx_p1", occurred_at=at(-25), authorization_outcome=None)
+        self.check(
+            [pending, promoted],
+            transaction(),
+            [Expectation("declined_ratio_1h", 1.0, tolerance=FLOAT)],
+        )
+        own = transaction(occurred_at=at(-25), transaction_id="tx_p1", authorization_outcome=None)
+        self.check([pending], own, [Expectation("declined_ratio_1h", None, state=INSUFFICIENT)])
+
+    def test_an_outcome_reported_for_another_account_never_counts(self) -> None:
+        """F12. Its transaction is known with a different account, so it is rejected."""
+        history = [
+            outcome_event("tx_m1", decided_at=at(-20)),
+            tx_event(
+                "tx_m1", occurred_at=at(-25), account_id=OTHER_ACCOUNT, authorization_outcome=None
+            ),
+        ]
+        self.check(
+            history, transaction(), [Expectation("declined_ratio_1h", None, state=INSUFFICIENT)]
+        )
+
+    def test_the_transaction_field_is_never_read(self) -> None:
+        """F16. Earlier transactions say DECLINED in their own field, and no outcome is known."""
+        history = [
+            tx_event(
+                "tx_f1", occurred_at=at(-10), authorization_outcome=AuthorizationOutcome.DECLINED
+            ),
+            tx_event(
+                "tx_f2", occurred_at=at(-20), authorization_outcome=AuthorizationOutcome.DECLINED
+            ),
+        ]
+        self.check(
+            history,
+            transaction(authorization_outcome=AuthorizationOutcome.DECLINED),
+            [Expectation("declined_ratio_1h", None, state=INSUFFICIENT)],
+        )
+
+    def test_the_declined_ratio_spans_currencies(self) -> None:
+        """F17. Outcomes carry no currency; the ratio covers every transaction's."""
+        history = [
+            tx_event("tx_eur", occurred_at=at(-30), currency="EUR", authorization_outcome=None),
+            tx_event("tx_gbp", occurred_at=at(-25), currency="GBP", authorization_outcome=None),
+            outcome_event("tx_eur", decided_at=at(-10)),
+            outcome_event("tx_gbp", decided_at=at(-20), outcome=AuthorizationOutcome.APPROVED),
+        ]
+        self.check(
+            history,
+            transaction(currency="GBP"),
+            [Expectation("declined_ratio_1h", 1 / 2, tolerance=FLOAT)],
+        )
+
+    def test_the_declined_ratio_is_absent_when_no_earlier_outcome_is_known(self) -> None:
+        """F17. No outcome in the window is not a zero ratio.
+
+        Also from a store watched over the whole window, whose empty window is a measured zero:
+        zero known outcomes is still no denominator."""
+        history = [tx_event("tx_n1", occurred_at=at(-10), authorization_outcome=None)]
+        for complete_since in (None, WATCHED_LONG_ENOUGH):
+            self.check(
+                history,
+                transaction(),
+                [Expectation("declined_ratio_1h", None, state=INSUFFICIENT)],
+                complete_since=complete_since,
+            )
+
+    def test_merchant_cv_reads_same_currency_whole_minutes_plus_the_scored_transaction(
+        self,
+    ) -> None:
+        """Scored at 12:00:30 for 2 000 GBP; the minute containing it (12:00) is excluded.
+
+        In: 1 000 GBP at 11:58:20 and 3 000 GBP at 11:43:20, plus the scored 2 000.
+        Out: 50 000 EUR (other currency) and 99 999 GBP at 12:00:10 (the as_of minute).
+        c = 3, mean = 2 000, variance = (1e6 + 9e6 + 4e6) / 3 - 2 000^2 = 2e6 / 3,
+        CV = sqrt(2e6 / 3) / 2 000 = 1 / sqrt(6).
+        Without the scored transaction it would be 0.5; with 99 999 very different.
+        """
+        history = [
+            tx_event("tx_c1", occurred_at=at(-100), account_id="acct_000011", amount_minor=1_000),
+            tx_event("tx_c2", occurred_at=at(-1_000), account_id="acct_000012", amount_minor=3_000),
+            tx_event(
+                "tx_eur",
+                occurred_at=at(-200),
+                account_id="acct_000013",
+                amount_minor=50_000,
+                currency="EUR",
+            ),
+            tx_event("tx_min", occurred_at=at(10), account_id="acct_000014", amount_minor=99_999),
+        ]
+        self.check(
+            history,
+            transaction(occurred_at=at(30), amount_minor=2_000),
+            [Expectation("merchant_amount_cv_24h", 1 / math.sqrt(6), tolerance=FLOAT)],
+        )
+
+    def test_merchant_cv_excludes_the_partial_minute_at_the_far_edge(self) -> None:
+        """Scored at 12:00:30. The far minute is floor((as_of - 24 h) / 1 min), 12:00 yesterday.
+
+        `tx_edge` at T0 - 86 369 s is 23 h 59 m 59 s old -- inside the exact 24 h window, so it
+        counts for the account -- but it lies in that far minute, so CV excludes it.
+        `tx_inner` at T0 - 86 340 s is in the next minute and counts. CV over 1 000 and the
+        scored 1 000 is exactly 0; with the edge's 3 000 it would not be.
+        """
+        history = [
+            tx_event("tx_edge", occurred_at=at(-86_369), amount_minor=3_000),
+            tx_event("tx_inner", occurred_at=at(-86_340), amount_minor=1_000),
+        ]
+        self.check(
+            history,
+            transaction(occurred_at=at(30), amount_minor=1_000),
+            [
+                Expectation("merchant_amount_cv_24h", 0.0),
+                Expectation("account_tx_count_24h", 2 + 1),
+            ],
+        )
+
+    def test_merchant_cv_needs_two_same_currency_observations(self) -> None:
+        self.check(
+            [tx_event("tx_eur", occurred_at=at(-100), currency="EUR", amount_minor=1_000)],
+            transaction(occurred_at=at(30), currency="GBP"),
+            [Expectation("merchant_amount_cv_24h", None, state=INSUFFICIENT)],
+        )
+
+    # -- distinct counts ------------------------------------------------------
+
+    def test_exact_distinct_counts_include_the_scored_transactions_value(self) -> None:
+        history = [
+            tx_event("tx_1", occurred_at=at(-10), merchant_id="mrch_00011"),
+            tx_event("tx_2", occurred_at=at(-20), merchant_id="mrch_00011"),
+            tx_event("tx_3", occurred_at=at(-30), merchant_id="mrch_00012"),
+        ]
+        self.check(
+            history,
+            transaction(merchant_id=MERCHANT),
+            [Expectation("account_distinct_merchants_1h", 3)],  # 00011, 00012, 00001
+        )
+        self.check(
+            history,
+            transaction(merchant_id="mrch_00011"),
+            [Expectation("account_distinct_merchants_1h", 2)],  # 00011, 00012
+        )
+
+    def test_an_exact_distinct_value_also_seen_later_in_event_time_still_counts(self) -> None:
+        """`mrch_00011` occurs at +300 s (delivered first) and at -100 s. Only the second is
+        inside the window, and it must count: a store that kept each value's LATEST time would
+        see +300 s, fall outside the window, and report 1."""
+        history = [
+            tx_event("tx_later", occurred_at=at(300), merchant_id="mrch_00011"),
+            tx_event("tx_inside", occurred_at=at(-100), merchant_id="mrch_00011"),
+        ]
+        self.check(
+            history,
+            transaction(merchant_id=MERCHANT),
+            [Expectation("account_distinct_merchants_1h", 2)],
+        )
+
+    def test_device_distinct_accounts_include_the_scored_account(self) -> None:
+        history = [
+            tx_event(f"tx_d{i}", occurred_at=at(-100 * i), account_id=f"acct_00000{i}")
+            for i in range(2, 7)
+        ]
+        self.check(
+            history,
+            transaction(account_id="acct_000001"),
+            [Expectation("device_distinct_accounts_24h", 5 + 1)],
+        )
+
+    def test_approximate_distinct_counts_read_back_exactly_at_low_cardinality(self) -> None:
+        """Low cardinality on purpose: HyperLogLog's sparse encoding is exact there, so this
+        measures wiring rather than the estimator. The estimator's error is bounded per
+        cardinality stratum by the parity framework (plan §4.3), not by a unit tolerance."""
+        history = [
+            tx_event(f"tx_a{i}", occurred_at=at(-60 * i), account_id=f"acct_00000{i + 1}")
+            for i in range(1, 5)
+        ]
+        self.check(
+            history,
+            transaction(account_id="acct_000001"),
+            [
+                Expectation("merchant_distinct_accounts_1h", 4 + 1),
+                Expectation("ip_distinct_accounts_1h", 4 + 1),
+            ],
+        )
+
+    def test_approximate_distinct_counts_use_the_declared_edge_inclusive_buckets(self) -> None:
+        """Scored at 12:02:30, in the 12:00 bucket. The window starts at 11:02:30, in the
+        11:00 bucket; both edge buckets count whole (ADR-0046 §2).
+
+        In: acct_000007 at 11:00:10 (11:00 bucket, 1 h 2 m 20 s old -- outside the exact window)
+        and acct_000008 at 12:03:20 (12:00 bucket, after as_of, delivered earlier).
+        Out: acct_000009 at 10:59:50 (the 10:55 bucket). Plus the scored acct_000001: 3.
+        """
+        history = [
+            tx_event("tx_far", occurred_at=at(-3_590), account_id="acct_000007"),
+            tx_event("tx_after", occurred_at=at(200), account_id="acct_000008"),
+            tx_event("tx_before", occurred_at=at(-3_610), account_id="acct_000009"),
+        ]
+        self.check(
+            history,
+            transaction(occurred_at=at(150), account_id="acct_000001"),
+            [
+                Expectation("merchant_distinct_accounts_1h", 3),
+                Expectation("ip_distinct_accounts_1h", 3),
+            ],
+        )
+
+    def test_approximate_and_exact_values_declare_which_they_are(self) -> None:
+        history = [
+            tx_event(f"tx_a{i}", occurred_at=at(-60 * i), account_id=f"acct_00000{i + 1}")
+            for i in range(1, 5)
+        ]
+        subject = transaction(account_id="acct_000001")
+        log = [*history, transaction_observation(subject)]
+        ctx = self.context_for(log, len(history), subject, complete_since=None)
         approximate = ONLINE_FEATURES.get("merchant_distinct_accounts_1h").evaluate(subject, ctx)
         exact = ONLINE_FEATURES.get("account_distinct_merchants_1h").evaluate(subject, ctx)
         assert approximate.is_available and approximate.approximate
         assert exact.is_available and not exact.approximate
 
-    # -- profiles -----------------------------------------------------------
+    # -- baselines exclude the scored transaction (ADR-0046 §3) --------------
 
-    def test_robust_z_is_absent_until_there_is_enough_history(self) -> None:
-        """Not zero. A new account is not a normal-spending account."""
-        history = [tx_event(occurred_at=at(-3_600 * i), amount_minor=5_000) for i in range(1, 4)]
-        self.check(
-            history,
-            transaction(occurred_at=T0, amount_minor=900_000),
-            [
-                Expectation(
-                    "amount_zscore_vs_account", None, state=FeatureState.INSUFFICIENT_HISTORY
-                )
-            ],
-        )
-
-    def test_robust_z_is_large_for_an_amount_far_outside_the_account_baseline(self) -> None:
-        history = [
-            tx_event(occurred_at=at(-3_600 * i), amount_minor=5_000 + i) for i in range(1, 13)
-        ]
-        context_tx = transaction(occurred_at=T0, amount_minor=900_000)
-        ctx = self.build_context(history, as_of=T0, subject=context_tx)
-        value = ONLINE_FEATURES.get("amount_zscore_vs_account").evaluate(context_tx, ctx)
-        assert value.is_available
-        assert value.value > 10.0, f"expected a large robust z, got {value.value}"
-
-    def test_a_transaction_does_not_contribute_to_the_profile_it_is_scored_against(self) -> None:
-        """Leakage, and it would make every transaction look normal vs itself."""
-        history = [tx_event(occurred_at=at(-3_600 * i), amount_minor=5_000) for i in range(1, 13)]
-        subject = transaction(occurred_at=T0, amount_minor=900_000)
-        ctx = self.build_context(
-            [*history, tx_event(occurred_at=T0, amount_minor=900_000)], as_of=T0, subject=subject
-        )
-        value = ONLINE_FEATURES.get("amount_zscore_vs_account").evaluate(subject, ctx)
-        assert value.is_available
-        assert value.value > 10.0, (
-            "the scored transaction entered its own baseline, which hides exactly the "
-            "anomaly the feature exists to detect"
-        )
-
-    def test_a_never_seen_device_is_not_known_on_a_store_that_has_watched_long_enough(
+    def test_the_robust_z_baseline_excludes_the_scored_transaction_and_its_millisecond(
         self,
     ) -> None:
-        """ "Not known" is a claim about everything the account has ever done.
-
-        It is only sound once the store has watched for its declared horizon.
-        This test used to make the claim on a store of unknown completeness,
-        which is the exact false positive a Redis restart produces: every
-        returning customer's device looks novel to a store that started
-        yesterday. The expectation is unchanged; the store it is made on is now
-        stated (ADR-0044).
-        """
-        history = [tx_event(occurred_at=at(-3_600), device_id="dev_000009")]
+        """Baseline 100..800 GBP, one per hour. Median (400 + 500) / 2 = 450; deviations
+        350 250 150 50 50 150 250 350, MAD (150 + 250) / 2 = 200; z = (1 000 - 450) / (1.4826 *
+        200). Letting the scored 1 000 in -- or `tx_aaa`, 100 000 GBP at the same millisecond,
+        delivered first -- makes the median 500 and z = 500 / (1.4826 * 200): not saturated,
+        so the difference is visible."""
+        history = [
+            tx_event(f"tx_z{k}", occurred_at=at(-3_600 * (9 - k)), amount_minor=100 * k)
+            for k in range(1, 9)
+        ]
+        history.append(tx_event("tx_aaa", occurred_at=T0, amount_minor=100_000))
         self.check(
             history,
-            transaction(occurred_at=T0, device_id="dev_000123"),
-            [Expectation("device_is_known_for_account", 0.0)],
+            transaction(amount_minor=1_000),
+            [Expectation("amount_zscore_vs_account", 550 / (1.4826 * 200), tolerance=FLOAT)],
+        )
+
+    def test_the_robust_z_needs_eight_amounts(self) -> None:
+        seven = [
+            tx_event(f"tx_z{k}", occurred_at=at(-3_600 * (9 - k)), amount_minor=100 * k)
+            for k in range(1, 8)
+        ]
+        self.check(
+            seven,
+            transaction(amount_minor=1_000),
+            [Expectation("amount_zscore_vs_account", None, state=INSUFFICIENT)],
+        )
+        eight = [*seven, tx_event("tx_z8", occurred_at=at(-3_600), amount_minor=800)]
+        self.check(
+            eight,
+            transaction(amount_minor=1_000),
+            [Expectation("amount_zscore_vs_account", 550 / (1.4826 * 200), tolerance=FLOAT)],
+        )
+
+    def test_the_robust_z_reads_only_the_last_128_same_currency_amounts(self) -> None:
+        """128 GBP amounts alternating 100 and 300 (median 200, MAD 100), preceded by a 129th
+        of 1 000 000 and followed by 777 EUR. The sample is the 128: z = (500 - 200) / (1.4826 *
+        100). With the 129th: median 300, MAD 200, z = 200 / 296.52. Ignoring currency: median
+        300, MAD 100, z = 200 / 148.26."""
+        history = [tx_event("tx_s_old", occurred_at=at(-3_600 * 131), amount_minor=1_000_000)]
+        history += [
+            tx_event(
+                f"tx_s{k:03d}",
+                occurred_at=at(-3_600 * (130 - k)),
+                amount_minor=100 if k % 2 == 0 else 300,
+            )
+            for k in range(128)
+        ]
+        history.append(
+            tx_event("tx_s_eur", occurred_at=at(-1_800), amount_minor=777, currency="EUR")
+        )
+        self.check(
+            history,
+            transaction(amount_minor=500),
+            [Expectation("amount_zscore_vs_account", 300 / (1.4826 * 100), tolerance=FLOAT)],
+        )
+
+    def test_a_profile_ends_at_an_inactivity_gap_of_thirty_days(self) -> None:
+        """`tx_old` then `tx_recent` exactly 30 days later: the lifetime is `tx_recent` alone,
+        so the old device is unknown and tenure is 10 days. One millisecond less than 30 days
+        apart and the lifetime holds both."""
+        subject = transaction(device_id="dev_000077")
+        recent = tx_event("tx_recent", occurred_at=at(-10 * 86_400))
+        self.check(
+            [tx_event("tx_old", occurred_at=at(-40 * 86_400), device_id="dev_000077"), recent],
+            subject,
+            [
+                Expectation("device_is_known_for_account", 0.0),
+                Expectation("account_tenure_days", 10.0, tolerance=FLOAT),
+            ],
             complete_since=WATCHED_LONG_ENOUGH,
         )
-
-    def test_a_never_seen_device_cannot_be_called_unknown_by_a_young_store(self) -> None:
-        """Same history, same device -- and a store that started an hour ago.
-
-        The store has seen this account use one device in the hour it has been
-        watching. It has not seen the previous year. "Unknown device" would be
-        the restart false positive; the honest answer is that it cannot tell.
-        A KNOWN device, by contrast, is sound the moment it is observed.
-        """
-        history = [tx_event(occurred_at=at(-1_800), device_id="dev_000009")]
         self.check(
-            history,
-            transaction(occurred_at=T0, device_id="dev_000123"),
             [
-                Expectation(
-                    "device_is_known_for_account", None, state=FeatureState.INSUFFICIENT_HISTORY
-                )
+                tx_event("tx_old", occurred_at=at_ms(-40 * 86_400_000 + 1), device_id="dev_000077"),
+                recent,
             ],
-            complete_since=WATCHED_ONE_HOUR,
-        )
-        self.check(
-            history,
-            transaction(occurred_at=T0, device_id="dev_000009"),
-            [Expectation("device_is_known_for_account", 1.0)],
-            complete_since=WATCHED_ONE_HOUR,
-        )
-
-    # -- completeness: absent state means zero only on a store that would know --
-
-    def test_an_unseen_account_on_a_complete_store_has_measured_zero_velocity(self) -> None:
-        """The store watched the whole window and saw nothing. That is a zero.
-
-        Not a fabricated one: the account genuinely made no transactions in the
-        last minute, hour or day, and the store can say so because it was
-        recording throughout. The rules over these counts settle FALSE rather
-        than abstain, which changes no firing but stops a warm store from
-        reporting every quiet account as "insufficient history".
-        """
-        history = [tx_event(occurred_at=at(-60), account_id="acct_000777")]
-        self.check(
-            history,
-            transaction(occurred_at=T0, account_id="acct_000001"),
+            subject,
             [
-                Expectation("account_tx_count_1m", 0.0),
-                Expectation("account_tx_count_1h", 0.0),
-                Expectation("account_tx_count_24h", 0.0),
-                Expectation("account_distinct_devices_24h", 0.0),
-            ],
-            complete_since=WATCHED_LONG_ENOUGH,
-        )
-
-    def test_a_young_store_reports_only_the_windows_it_has_watched(self) -> None:
-        """Complete for an hour: 1 m and 1 h are measured, 24 h is not."""
-        history = [tx_event(occurred_at=at(-60), account_id="acct_000777")]
-        self.check(
-            history,
-            transaction(occurred_at=T0, account_id="acct_000001"),
-            [
-                Expectation("account_tx_count_1m", 0.0),
-                Expectation("account_tx_count_1h", 0.0),
-                Expectation("account_tx_count_24h", None, state=FeatureState.INSUFFICIENT_HISTORY),
+                Expectation("device_is_known_for_account", 1.0),
                 Expectation(
-                    "account_distinct_devices_24h", None, state=FeatureState.INSUFFICIENT_HISTORY
+                    "account_tenure_days", (40 * 86_400_000 - 1) / 86_400_000, tolerance=FLOAT
                 ),
             ],
-            complete_since=WATCHED_ONE_HOUR,
+            complete_since=WATCHED_LONG_ENOUGH,
         )
 
-    def test_a_store_that_makes_no_completeness_claim_reports_nothing_as_zero(self) -> None:
-        """No epoch, no zeros. The pre-ADR-0044 behaviour, and still the default.
-
-        A store that cannot say when it began is treated as if it began just
-        now. Over-caution is the failure mode of a missing epoch; a fabricated
-        zero must never be.
-        """
-        history = [tx_event(occurred_at=at(-60), account_id="acct_000777")]
+    def test_a_profile_is_empty_once_the_account_has_been_quiet_for_thirty_days(self) -> None:
+        subject = transaction(device_id="dev_000077")
         self.check(
-            history,
-            transaction(occurred_at=T0, account_id="acct_000001"),
+            [tx_event("tx_only", occurred_at=at(-30 * 86_400), device_id="dev_000077")],
+            subject,
             [
-                Expectation("account_tx_count_1m", None, state=FeatureState.INSUFFICIENT_HISTORY),
-                Expectation("account_tx_count_24h", None, state=FeatureState.INSUFFICIENT_HISTORY),
+                Expectation("device_is_known_for_account", None, state=INSUFFICIENT),
+                Expectation("account_tenure_days", None, state=INSUFFICIENT),
             ],
-            complete_since=None,
-        )
-
-    def test_tenure_needs_the_store_to_have_watched_for_its_horizon(self) -> None:
-        """An account first seen three days ago is three days old only to a
-        store that would have seen it a year ago had it existed."""
-        history = [tx_event(occurred_at=at(-3 * 86_400))]
-        self.check(
-            history,
-            transaction(occurred_at=T0),
-            [Expectation("account_tenure_days", 3.0)],
             complete_since=WATCHED_LONG_ENOUGH,
         )
         self.check(
-            history,
-            transaction(occurred_at=T0),
-            [Expectation("account_tenure_days", None, state=FeatureState.INSUFFICIENT_HISTORY)],
-            complete_since=WATCHED_ONE_HOUR,
+            [tx_event("tx_only", occurred_at=at_ms(-30 * 86_400_000 + 1), device_id="dev_000077")],
+            subject,
+            [
+                Expectation("device_is_known_for_account", 1.0),
+                Expectation(
+                    "account_tenure_days", (30 * 86_400_000 - 1) / 86_400_000, tolerance=FLOAT
+                ),
+            ],
+            complete_since=WATCHED_LONG_ENOUGH,
         )
 
-    def test_device_novelty_is_absent_rather_than_zero_for_a_first_transaction(self) -> None:
-        """With no history at all, "novel device" is not a measurement."""
+    def test_habitual_needs_three_observations_and_a_redelivery_is_not_one(self) -> None:
+        habit = [
+            tx_event(f"tx_h{i}", occurred_at=at(-3_600 * (7 - i)), merchant_id="mrch_00099")
+            for i in range(1, 4)
+        ]
+        visits = [
+            tx_event("tx_v1", occurred_at=at(-3 * 3_600), merchant_id="mrch_00031"),
+            tx_event("tx_v2", occurred_at=at(-2 * 3_600), merchant_id="mrch_00031"),
+            tx_event("tx_v2", occurred_at=at(-1 * 3_600), merchant_id="mrch_00031"),
+        ]
+        subject = transaction(merchant_id="mrch_00031")
         self.check(
-            [],
-            transaction(occurred_at=T0),
+            [*habit, *visits],
+            subject,
+            [Expectation("merchant_is_habitual", 0.0)],
+            complete_since=WATCHED_LONG_ENOUGH,
+        )
+        self.check(
+            [*habit, *visits, tx_event("tx_v3", occurred_at=at(-1_800), merchant_id="mrch_00031")],
+            subject,
+            [Expectation("merchant_is_habitual", 1.0)],
+            complete_since=WATCHED_LONG_ENOUGH,
+        )
+
+    # -- home location: geodesic medoid of the last 20 (ADR-0046 §3, Q4c) ----
+
+    def test_home_needs_three_located_observations(self) -> None:
+        """Unlocated observations are in the lifetime but not in the home sample."""
+        subject = transaction(latitude=0.0, longitude=2.0)
+        points = [
+            located("tx_p0", hours_ago=3, longitude=0.0),
+            located("tx_p1", hours_ago=2, longitude=1.0),
+            located("tx_p10", hours_ago=1, longitude=10.0),
+        ]
+        padding = [unlocated(f"tx_u{i}", hours_ago=4 + i) for i in range(3)]
+        for count in (0, 1, 2):
+            self.check(
+                [*padding, *points[:count]],
+                subject,
+                [Expectation("distance_from_account_home_km", None, state=INSUFFICIENT)],
+            )
+        # Three: sums of distances in degrees are 1 + 10 = 11, 1 + 9 = 10 and 10 + 9 = 19,
+        # so home is (0, 1), one degree from the scored (0, 2).
+        self.check(
+            [*padding, *points],
+            subject,
+            [Expectation("distance_from_account_home_km", along_equator_km(1), tolerance=FLOAT)],
+        )
+
+    def test_home_ignores_an_outlier_and_is_a_point_the_account_visited(self) -> None:
+        """Longitudes 0, 0.1, 0.3, 0.35 and a newest outlier at 90. Sums of distances, in
+        degrees: 0 -> 90.75, 0.1 -> 90.45, 0.3 -> 90.25, 0.35 -> 90.3, 90 -> 359.25, so home is
+        0.3 and the scored point at 1.3 is one degree away. The mean longitude (18.15) and the
+        last-seen point (90) are both wrong."""
+        history = [
+            located("tx_p1", hours_ago=5, longitude=0.0),
+            located("tx_p2", hours_ago=4, longitude=0.1),
+            located("tx_p3", hours_ago=3, longitude=0.3),
+            located("tx_p4", hours_ago=2, longitude=0.35),
+            located("tx_p5", hours_ago=1, longitude=90.0),
+        ]
+        self.check(
+            history,
+            transaction(latitude=0.0, longitude=1.3),
+            [Expectation("distance_from_account_home_km", along_equator_km(1), tolerance=FLOAT)],
+        )
+
+    def test_home_is_the_medoid_of_exactly_twenty(self) -> None:
+        """Oldest first: ten at longitude 1, then ten at 5. Every point's sum is ten 4-degree
+        distances, a tie, so the earliest -- longitude 1 -- is home, four degrees from the
+        scored point at 5. A sample of 19 would drop that point and leave nine against ten, so
+        home would be 5; so would "the last located observation"."""
+        longitudes = [1.0] * 10 + [5.0] * 10
+        history = [
+            located(f"tx_p{i:02d}", hours_ago=30 - i, longitude=lon)
+            for i, lon in enumerate(longitudes)
+        ]
+        self.check(
+            history,
+            transaction(latitude=0.0, longitude=5.0),
+            [Expectation("distance_from_account_home_km", along_equator_km(4), tolerance=FLOAT)],
+        )
+
+    def test_home_uses_only_the_last_twenty_located_observations(self) -> None:
+        """Oldest first: 1 | 5, nine at 1, nine at 5, 1 | then one unlocated. The last twenty
+        located are ten at 5 and ten at 1, a tie that the earliest of them (5) wins, so the
+        scored point at 6 is one degree from home. Counting the oldest as well makes eleven at
+        1, which wins outright; counting the unlocated one as a slot drops the 5 that wins the
+        tie; and the last located point is at 1."""
+        longitudes = [1.0, 5.0] + [1.0] * 9 + [5.0] * 9 + [1.0]
+        history = [
+            located(f"tx_p{i:02d}", hours_ago=30 - i, longitude=lon)
+            for i, lon in enumerate(longitudes)
+        ]
+        history.append(unlocated("tx_u", hours_ago=1))
+        self.check(
+            history,
+            transaction(latitude=0.0, longitude=6.0),
+            [Expectation("distance_from_account_home_km", along_equator_km(1), tolerance=FLOAT)],
+        )
+
+    def test_home_ties_go_to_the_earliest_time_then_the_smaller_identity(self) -> None:
+        """Four points at longitudes 0 and 2, two of each: every sum is two 2-degree
+        distances. The earliest is the pair at the same millisecond; of those `tx_pa` (at 2)
+        sorts before `tx_pb` (at 0), though `tx_pb` was delivered first. The latest,
+        `tx_pd`, is at 0 too, so a tie that went to the latest would also be caught."""
+        history = [
+            located("tx_pb", hours_ago=3, longitude=0.0),
+            located("tx_pa", hours_ago=3, longitude=2.0),
+            located("tx_pc", hours_ago=2, longitude=2.0),
+            located("tx_pd", hours_ago=1, longitude=0.0),
+        ]
+        self.check(
+            history,
+            transaction(latitude=0.0, longitude=3.0),
+            [Expectation("distance_from_account_home_km", along_equator_km(1), tolerance=FLOAT)],
+        )
+
+    def test_home_is_computed_on_the_sphere_across_the_antimeridian(self) -> None:
+        """Longitudes 179, -179, -178.5, 178.5. Sums of shortest-arc distances: 5, 5, 6, 6;
+        the tie goes to the earlier, 179. The scored -179.5 is 1.5 degrees away. A
+        component-wise median of longitude would put home at 0, half a world away."""
+        history = [
+            located("tx_p1", hours_ago=4, longitude=179.0),
+            located("tx_p2", hours_ago=3, longitude=-179.0),
+            located("tx_p3", hours_ago=2, longitude=-178.5),
+            located("tx_p4", hours_ago=1, longitude=178.5),
+        ]
+        self.check(
+            history,
+            transaction(latitude=0.0, longitude=-179.5),
+            [Expectation("distance_from_account_home_km", along_equator_km(1.5), tolerance=FLOAT)],
+        )
+
+    def test_profiles_span_currencies(self) -> None:
+        """Three EUR purchases at one merchant, on one device, at longitudes 0, 1 and 10. A
+        GBP purchase there is habitual, on a known device, one degree from home (the medoid
+        is 1), on an account first seen three hours ago. A profile keyed by currency would
+        know nothing about this account."""
+        history = [
+            tx_event(
+                f"tx_e{i}",
+                occurred_at=at(-3_600 * (3 - i)),
+                currency="EUR",
+                merchant_id="mrch_00031",
+                device_id="dev_000077",
+                latitude=0.0,
+                longitude=lon,
+            )
+            for i, lon in enumerate((0.0, 1.0, 10.0))
+        ]
+        self.check(
+            history,
+            transaction(
+                currency="GBP",
+                merchant_id="mrch_00031",
+                device_id="dev_000077",
+                latitude=0.0,
+                longitude=2.0,
+            ),
+            [
+                Expectation("merchant_is_habitual", 1.0),
+                Expectation("device_is_known_for_account", 1.0),
+                Expectation("distance_from_account_home_km", along_equator_km(1), tolerance=FLOAT),
+                Expectation("account_tenure_days", 3 / 24, tolerance=FLOAT),
+            ],
+            complete_since=WATCHED_LONG_ENOUGH,
+        )
+
+    def test_a_profile_follows_event_time_not_arrival_order(self) -> None:
+        """The 30-day-gap fixture delivered newest first gives the same answer."""
+        self.check(
+            [
+                tx_event("tx_recent", occurred_at=at(-10 * 86_400)),
+                tx_event("tx_old", occurred_at=at(-40 * 86_400), device_id="dev_000077"),
+            ],
+            transaction(device_id="dev_000077"),
+            [
+                Expectation("device_is_known_for_account", 0.0),
+                Expectation("account_tenure_days", 10.0, tolerance=FLOAT),
+            ],
+            complete_since=WATCHED_LONG_ENOUGH,
+        )
+
+    def test_baselines_read_only_the_lifetime(self) -> None:
+        """Two eras 50 days apart. Old: eight 100 000 GBP at `mrch_00031`, longitude 90.
+        Recent: 100..800 GBP at the default merchant, longitude 0. Only the recent era is the
+        lifetime: z = 550 / (1.4826 * 200), home is 0 so (0, 1) is one degree away, and
+        `mrch_00031` is not habitual. Reading all history gives none of these."""
+        old = [
+            tx_event(
+                f"tx_old{k}",
+                occurred_at=at(-60 * 86_400 - 3_600 * k),
+                amount_minor=100_000,
+                merchant_id="mrch_00031",
+                latitude=0.0,
+                longitude=90.0,
+            )
+            for k in range(1, 9)
+        ]
+        recent = [
+            tx_event(
+                f"tx_new{k}",
+                occurred_at=at(-10 * 86_400 - 3_600 * k),
+                amount_minor=100 * k,
+                latitude=0.0,
+                longitude=0.0,
+            )
+            for k in range(1, 9)
+        ]
+        self.check(
+            [*old, *recent],
+            transaction(amount_minor=1_000, merchant_id="mrch_00031", latitude=0.0, longitude=1.0),
+            [
+                Expectation("amount_zscore_vs_account", 550 / (1.4826 * 200), tolerance=FLOAT),
+                Expectation("distance_from_account_home_km", along_equator_km(1), tolerance=FLOAT),
+                Expectation("merchant_is_habitual", 0.0),
+            ],
+            complete_since=WATCHED_LONG_ENOUGH,
+        )
+
+    def test_home_sums_distances_in_whole_metres_rounded_half_up(self) -> None:
+        """Equatorial points 788.3, 1 597.47, 1 286.9, 1 292.33 and 1 291.67 m east, oldest
+        first. Summed in whole metres rounded half up, the distances give 2315, 1731, 820, 815
+        and 815: a tie the older point wins, so home is 1 292.33 m and the scored point at
+        3 000 m is 1.70767 km away. Unrounded the sums are 2315.17, 1730.68, 819.37, 815.26 and
+        814.60, and rounded down 2314, 1729, 817, 814 and 812: both pick 1 291.67 m instead,
+        by a margin no floating-point noise can close."""
+        history = [
+            located(f"tx_m{i}", hours_ago=5 - i, longitude=metres_east(m))
+            for i, m in enumerate((788.3, 1_597.47, 1_286.9, 1_292.33, 1_291.67))
+        ]
+        self.check(
+            history,
+            transaction(latitude=0.0, longitude=metres_east(3_000.0)),
             [
                 Expectation(
-                    "device_is_known_for_account", None, state=FeatureState.INSUFFICIENT_HISTORY
+                    "distance_from_account_home_km", (3_000.0 - 1_292.33) / 1_000, tolerance=FLOAT
                 )
             ],
         )
 
-    def test_a_repeatedly_used_merchant_becomes_habitual(self) -> None:
-        history = [tx_event(occurred_at=at(-3_600 * i)) for i in range(1, 6)]
+    def test_transaction_counts_span_currencies(self) -> None:
+        """A EUR purchase ten seconds before a GBP one still happened: the account's minute count
+        and the card's five-minute count are both 2. A velocity set keyed by currency says 1."""
         self.check(
-            history,
-            transaction(occurred_at=T0),
-            [Expectation("merchant_is_habitual", 1.0)],
+            [tx_event("tx_eur", occurred_at=at(-10), currency="EUR")],
+            transaction(currency="GBP"),
+            [Expectation("account_tx_count_1m", 2), Expectation("card_tx_count_5m", 2)],
         )
 
-    # -- pairwise -----------------------------------------------------------
+    def test_habitual_categories_read_only_the_lifetime(self) -> None:
+        """Three visits in MCC 7995 sixty days ago, then three ordinary ones ten days ago. The gap
+        ends the old era, so 7995 is not habitual now (5411 is, so the set is not empty)."""
+        old = [
+            tx_event(f"tx_bet{k}", occurred_at=at(-60 * 86_400 - 3_600 * k), merchant_mcc="7995")
+            for k in range(1, 4)
+        ]
+        recent = [
+            tx_event(f"tx_shop{k}", occurred_at=at(-10 * 86_400 - 3_600 * k)) for k in range(1, 4)
+        ]
+        self.check(
+            [*old, *recent],
+            transaction(merchant_mcc="7995"),
+            [Expectation("mcc_is_habitual_for_account", 0.0)],
+            complete_since=WATCHED_LONG_ENOUGH,
+        )
+
+    def test_exact_distinct_counts_span_currencies(self) -> None:
+        self.check(
+            [tx_event("tx_eur", occurred_at=at(-10), currency="EUR", merchant_id="mrch_00011")],
+            transaction(currency="GBP", merchant_id=MERCHANT),
+            [Expectation("account_distinct_merchants_1h", 2)],
+        )
+
+    def test_merchant_cv_is_absent_when_the_mean_is_zero(self) -> None:
+        """A 1 000 GBP refund and a 1 000 GBP purchase: mean 0, no coefficient of variation."""
+        self.check(
+            [tx_event("tx_refund", occurred_at=at(-100), amount_minor=-1_000)],
+            transaction(occurred_at=at(30), amount_minor=1_000),
+            [Expectation("merchant_amount_cv_24h", None, state=INSUFFICIENT)],
+        )
+
+    def test_the_robust_z_is_capped_at_fifty(self) -> None:
+        """Baseline 100..800 (median 450, MAD 200); 1 000 000 would be z = 3 370."""
+        history = [
+            tx_event(f"tx_z{k}", occurred_at=at(-3_600 * (9 - k)), amount_minor=100 * k)
+            for k in range(1, 9)
+        ]
+        self.check(
+            history,
+            transaction(amount_minor=1_000_000),
+            [Expectation("amount_zscore_vs_account", 50.0)],
+        )
+
+    def test_a_zero_mad_keeps_the_sign_of_the_deviation(self) -> None:
+        """Eight 5 000 GBP amounts: MAD 0. A lower amount is -50, a higher one +50, the same
+        amount 0. Phase 2 gave +50 to a lower amount, so high-value rules fired on it."""
+        history = [tx_event(f"tx_z{k}", occurred_at=at(-3_600 * k)) for k in range(1, 9)]
+        for amount, expected in ((100, -50.0), (9_000, 50.0), (5_000, 0.0)):
+            self.check(
+                history,
+                transaction(amount_minor=amount),
+                [Expectation("amount_zscore_vs_account", expected)],
+            )
+
+    def test_as_of_exactly_on_a_minute_and_bucket_boundary(self) -> None:
+        """Scored at exactly 12:00:00.000 for 2 000 GBP at the default merchant.
+
+        Buckets 11:00 through 12:00 count whole: A at exactly 1 h old (11:00 bucket), C at
+        12:04:59.999 (12:00 bucket, after as_of), the 1 000 at -1 ms, `tx_aaa` at 0 and the
+        scored account -- five accounts. B (10:59:59.999) and D (12:05:00.000) are outside.
+        The CV reads whole minutes from 12:01 yesterday to 11:59, same currency, plus the
+        scored amount: A 5 000, B 5 000, 3 000 at -23 h 59 m, 1 000 at -1 ms and 2 000.
+        Excluded: 1 000 at exactly -24 h (the far minute), C and D (after), `tx_aaa` (the
+        12:00 minute). Mean 3 200, variance 64e6 / 5 - 3 200^2 = 2.56e6, CV = 1 600 / 3 200.
+        """
+        history = [
+            tx_event("tx_a", occurred_at=at_ms(-3_600_000), account_id="acct_000011"),
+            tx_event("tx_b", occurred_at=at_ms(-3_600_001), account_id="acct_000012"),
+            tx_event("tx_c", occurred_at=at_ms(299_999), account_id="acct_000013"),
+            tx_event("tx_d", occurred_at=at_ms(300_000), account_id="acct_000014"),
+            tx_event(
+                "tx_far",
+                occurred_at=at_ms(-86_400_000),
+                account_id="acct_000015",
+                amount_minor=1_000,
+            ),
+            tx_event(
+                "tx_in",
+                occurred_at=at_ms(-86_340_000),
+                account_id="acct_000016",
+                amount_minor=3_000,
+            ),
+            tx_event(
+                "tx_near", occurred_at=at_ms(-1), account_id="acct_000017", amount_minor=1_000
+            ),
+            tx_event("tx_aaa", occurred_at=T0, account_id="acct_000018", amount_minor=9_000),
+        ]
+        self.check(
+            history,
+            transaction(account_id=ACCOUNT, amount_minor=2_000),
+            [
+                Expectation("merchant_distinct_accounts_1h", 5),
+                Expectation("merchant_amount_cv_24h", 1_600 / 3_200, tolerance=FLOAT),
+            ],
+        )
+
+    def test_a_redelivery_is_scored_as_its_first_delivery(self) -> None:
+        """`tx_mmm` first arrived at -100 s for 1 000; it is redelivered at T0 for 5 000. The
+        first delivery is the observation: the read is at -100 s, so the 1-minute window holds
+        only itself, the hour holds `tx_h` (5 000) and 1 000, and the previous transaction is
+        `tx_h`, 100 s earlier -- never itself."""
+        subject = transaction(amount_minor=5_000)
+        log = [
+            tx_event("tx_h", occurred_at=at(-200)),
+            tx_event(SUBJECT, occurred_at=at(-100), amount_minor=1_000),
+            transaction_observation(subject),
+        ]
+        self.check_log(
+            log,
+            2,
+            subject,
+            [
+                Expectation("account_tx_count_1m", 1),
+                Expectation("account_tx_count_5m", 2),
+                Expectation("account_amount_sum_1h", 5_000 + 1_000),
+                Expectation("seconds_since_last_transaction", 100.0),
+            ],
+        )
+
+    def test_an_identity_event_cannot_swallow_a_transaction_with_the_same_id(self) -> None:
+        """Identities are per stream (plan §3 Q2): a failed login whose id is `tx_mmm` is not
+        an earlier delivery of the transaction `tx_mmm`."""
+        subject = transaction()
+        log = [
+            identity_event(SUBJECT, stream=Stream.IDENTITY_FAILED_LOGIN, occurred_at=at(-10)),
+            transaction_observation(subject),
+        ]
+        self.check_log(
+            log,
+            1,
+            subject,
+            [Expectation("account_tx_count_1m", 1), Expectation("failed_logins_1h", 1)],
+        )
+
+    # -- the previous observation (ADR-0046 §4) ------------------------------
+
+    def test_the_previous_observation_is_the_latest_and_an_older_arrival_does_not_replace_it(
+        self,
+    ) -> None:
+        history = [
+            located("tx_newer", hours_ago=100 / 3_600, longitude=1.0),
+            located("tx_older", hours_ago=1, longitude=0.0),
+        ]
+        self.check(
+            history,
+            transaction(latitude=0.0, longitude=0.0),
+            [
+                Expectation("geo_distance_from_last_km", along_equator_km(1), tolerance=FLOAT),
+                Expectation("seconds_since_last_transaction", 100.0),
+                Expectation(
+                    "implied_speed_kmh_from_last",
+                    along_equator_km(1) / (100 / 3_600),
+                    tolerance=FLOAT,
+                ),
+            ],
+        )
+
+    def test_an_observation_at_the_scored_millisecond_is_never_the_previous_one(self) -> None:
+        history = [
+            located("tx_before", hours_ago=100 / 3_600, longitude=1.0),
+            tx_event("tx_aaa", occurred_at=T0, latitude=0.0, longitude=5.0),
+        ]
+        self.check(
+            history,
+            transaction(latitude=0.0, longitude=0.0),
+            [
+                Expectation("geo_distance_from_last_km", along_equator_km(1), tolerance=FLOAT),
+                Expectation("seconds_since_last_transaction", 100.0),
+            ],
+        )
+
+    def test_the_previous_observation_lookback_is_half_open(self) -> None:
+        self.check(
+            [tx_event("tx_edge", occurred_at=at_ms(-86_400_000))],
+            transaction(),
+            [Expectation("seconds_since_last_transaction", None, state=INSUFFICIENT)],
+        )
+        self.check(
+            [tx_event("tx_inside", occurred_at=at_ms(-86_399_999))],
+            transaction(),
+            [Expectation("seconds_since_last_transaction", 86_399.999, tolerance=FLOAT)],
+        )
+
+    def test_previous_ties_at_one_millisecond_go_to_the_greater_identity(self) -> None:
+        """`tx_pb` (at 2) wins over `tx_pa` (at 1) in either delivery order."""
+        winner = located("tx_pb", hours_ago=100 / 3_600, longitude=2.0)
+        loser = located("tx_pa", hours_ago=100 / 3_600, longitude=1.0)
+        for history in ([winner, loser], [loser, winner]):
+            self.check(
+                history,
+                transaction(latitude=0.0, longitude=0.0),
+                [Expectation("geo_distance_from_last_km", along_equator_km(2), tolerance=FLOAT)],
+            )
 
     def test_implied_speed_needs_both_legs_card_present(self) -> None:
-        """A card-not-present leg has an innocent explanation; counting it would
-        make ordinary e-commerce look like supersonic travel."""
-        far_away = {"latitude": 40.7, "longitude": -74.0}
         history = [
             tx_event(
+                "tx_cnp",
                 occurred_at=at(-3_600),
                 channel=TransactionChannel.CARD_NOT_PRESENT,
-                **far_away,  # type: ignore[arg-type]
-            )
-        ]
-        self.check(
-            history,
-            transaction(occurred_at=T0),
-            [Expectation("implied_speed_kmh_from_last", 0.0)],
-        )
-
-    def test_implied_speed_is_high_for_two_distant_card_present_legs(self) -> None:
-        history = [
-            tx_event(
-                occurred_at=at(-3_600),
                 latitude=40.7,
                 longitude=-74.0,
-                channel=TransactionChannel.CARD_PRESENT,
             )
         ]
-        subject = transaction(occurred_at=T0)
-        ctx = self.build_context(history, as_of=T0, subject=subject)
-        value = ONLINE_FEATURES.get("implied_speed_kmh_from_last").evaluate(subject, ctx)
-        assert value.is_available
-        assert value.value > 5_000, f"London to New York in an hour, got {value.value} km/h"
+        self.check(history, transaction(), [Expectation("implied_speed_kmh_from_last", 0.0)])
 
     def test_geo_features_are_unavailable_without_coverage_not_zero(self) -> None:
-        """The ADR-0022 headline, on the production feature set.
-
-        A source with no geography -- IEEE-CIS -- must produce UNAVAILABLE, which
-        is a different state from "this account has no history yet".
-        """
         coverage = frozenset(ALWAYS_REQUIRED) | {CanonicalField.CHANNEL}
         self.check(
-            [tx_event(occurred_at=at(-100))],
-            transaction(occurred_at=T0, coverage=coverage),
+            [tx_event("tx_h", occurred_at=at(-100))],
+            transaction(coverage=coverage),
             [
                 Expectation("geo_distance_from_last_km", None, state=FeatureState.UNAVAILABLE),
                 Expectation("implied_speed_kmh_from_last", None, state=FeatureState.UNAVAILABLE),
@@ -616,94 +1492,854 @@ class FeatureSemanticsConformanceSuite(ABC):
             ],
         )
 
-    # -- identity streams ---------------------------------------------------
+    # -- identity streams ------------------------------------------------------
 
-    def test_failed_logins_are_counted_from_the_identity_stream(self) -> None:
+    def test_failed_logins_are_counted_from_their_own_stream(self) -> None:
         history = [
-            Event(
-                stream=Stream.IDENTITY_FAILED_LOGIN,
-                occurred_at=at(-60 * i),
-                account_id=ACCOUNT,
+            identity_event(
+                f"evt_fl{i}", stream=Stream.IDENTITY_FAILED_LOGIN, occurred_at=at(-60 * i)
             )
             for i in range(1, 6)
         ]
-        self.check(
-            history,
-            transaction(occurred_at=T0),
-            [Expectation("failed_logins_1h", 5.0)],
-        )
+        self.check(history, transaction(), [Expectation("failed_logins_1h", 5)])
 
-    def test_an_identity_change_is_not_counted_as_a_failed_login(self) -> None:
-        """Distinct streams, because they mean different things."""
-        history = [Event(stream=Stream.IDENTITY_CHANGE, occurred_at=at(-60), account_id=ACCOUNT)]
+    def test_an_identity_change_is_not_a_failed_login(self) -> None:
+        history = [identity_event("evt_ic", stream=Stream.IDENTITY_CHANGE, occurred_at=at(-60))]
         self.check(
             history,
-            transaction(occurred_at=T0),
+            transaction(),
             [
-                Expectation("failed_logins_1h", None),
-                Expectation("hours_since_identity_change", 1.0 / 60.0, tolerance=1e-6),
+                Expectation("failed_logins_1h", None, state=INSUFFICIENT),
+                Expectation("hours_since_identity_change", 60 / 3_600, tolerance=FLOAT),
             ],
         )
 
-    # -- the invariant that outranks all of the above -----------------------
+    # -- completeness (ADR-0044) ------------------------------------------------
 
-    def test_no_feature_is_ever_silently_zero_on_an_empty_store(self) -> None:
-        """With nothing observed, every feature must be ABSENT, not 0.0.
+    def test_a_window_the_store_watched_and_saw_nothing_in_is_a_measured_zero(self) -> None:
+        history = [tx_event("tx_other", occurred_at=at(-60), account_id="acct_000777")]
+        self.check(
+            history,
+            transaction(account_id=ACCOUNT),
+            [
+                Expectation("failed_logins_1h", 0.0),
+                Expectation("account_tx_count_24h", 0 + 1),  # the scored transaction alone
+            ],
+            complete_since=WATCHED_LONG_ENOUGH,
+        )
 
-        This is the single assertion that would catch a whole class of quiet
-        regressions: one `.get(key, 0)` anywhere in an implementation turns a
-        cold store into a confident "no risk detected" on every transaction.
+    def test_a_young_store_zeroes_only_the_windows_it_watched(self) -> None:
+        """Complete for an hour. A window holding the scored transaction is served as what it
+        holds -- a lower bound on an incomplete store (`Completeness.INCOMPLETE`)."""
+        self.check(
+            [tx_event("tx_other", occurred_at=at(-60), account_id="acct_000777")],
+            transaction(account_id=ACCOUNT),
+            [
+                Expectation("failed_logins_1h", 0.0),
+                Expectation("account_tx_count_24h", 1),
+                Expectation("hours_since_identity_change", None, state=INSUFFICIENT),
+            ],
+            complete_since=WATCHED_ONE_HOUR,
+        )
+
+    def test_a_store_that_makes_no_completeness_claim_reports_no_absence_as_zero(self) -> None:
+        self.check(
+            [tx_event("tx_other", occurred_at=at(-60), account_id="acct_000777")],
+            transaction(account_id=ACCOUNT),
+            [
+                Expectation("failed_logins_1h", None, state=INSUFFICIENT),
+                Expectation("account_tx_count_1m", 1),
+            ],
+            complete_since=None,
+        )
+
+    def test_tenure_needs_the_store_to_have_watched_for_its_horizon(self) -> None:
+        history = [tx_event("tx_h", occurred_at=at(-3 * 86_400))]
+        self.check(
+            history,
+            transaction(),
+            [Expectation("account_tenure_days", 3.0, tolerance=FLOAT)],
+            complete_since=WATCHED_LONG_ENOUGH,
+        )
+        self.check(
+            history,
+            transaction(),
+            [Expectation("account_tenure_days", None, state=INSUFFICIENT)],
+            complete_since=WATCHED_ONE_HOUR,
+        )
+
+    def test_an_unknown_device_is_only_called_unknown_by_a_store_that_would_know(self) -> None:
+        history = [tx_event("tx_h", occurred_at=at(-1_800), device_id="dev_000009")]
+        self.check(
+            history,
+            transaction(device_id="dev_000123"),
+            [Expectation("device_is_known_for_account", 0.0)],
+            complete_since=WATCHED_LONG_ENOUGH,
+        )
+        self.check(
+            history,
+            transaction(device_id="dev_000123"),
+            [Expectation("device_is_known_for_account", None, state=INSUFFICIENT)],
+            complete_since=WATCHED_ONE_HOUR,
+        )
+        self.check(
+            history,
+            transaction(device_id="dev_000009"),
+            [Expectation("device_is_known_for_account", 1.0)],
+            complete_since=WATCHED_ONE_HOUR,
+        )
+
+    def test_tenure_and_an_unknown_device_need_the_store_to_have_watched_the_lifetimes_start(
+        self,
+    ) -> None:
+        """A store that started inside a lifetime cannot know when it began, or every device it
+        used.
+
+        Watched for 35 days, the store first saw this account 20 days ago. It cannot tell whether
+        the
+        account was active in the 30 days before that, so the lifetime may have begun long before
+        the
+        store did. Tenure and "unknown device" are unknowable there: never a truncated number or a
+        confident zero served as COMPLETE (ADR-0046 §3). Watched for 90 days, the same history
+        proves
+        the lifetime began 20 days ago.
         """
-        subject = transaction(occurred_at=T0)
-        ctx = self.build_context([], as_of=T0, subject=subject)
-        for spec in ONLINE_FEATURES:
-            value = spec.evaluate(subject, ctx)
-            assert not value.is_available, (
-                f"{spec.feature_id} returned {value.or_none()} from an EMPTY store. "
-                f"With no observations there is nothing to measure, and a number here "
-                f"would be fabricated (ADR-0022)."
+        history = [tx_event("tx_first", occurred_at=at(-20 * 86_400), device_id="dev_000009")]
+        started_inside = event_time(T0 - dt.timedelta(days=35))
+        self.check(
+            history,
+            transaction(device_id="dev_000123"),
+            [
+                Expectation("account_tenure_days", None, state=INSUFFICIENT),
+                Expectation("device_is_known_for_account", None, state=INSUFFICIENT),
+            ],
+            complete_since=started_inside,
+        )
+        self.check(
+            history,
+            transaction(device_id="dev_000123"),
+            [
+                Expectation("account_tenure_days", 20.0, tolerance=FLOAT),
+                Expectation("device_is_known_for_account", 0.0),
+            ],
+            complete_since=WATCHED_LONG_ENOUGH,
+        )
+        # A positive stays sound either way: the store saw this account use this device.
+        self.check(
+            history,
+            transaction(device_id="dev_000009"),
+            [Expectation("device_is_known_for_account", 1.0)],
+            complete_since=started_inside,
+        )
+
+    # -- the whole feature set on an empty store --------------------------------
+
+    def test_on_an_empty_store_every_value_is_the_scored_transaction_alone(self) -> None:
+        """Nothing is ever a fabricated zero, and nothing counts the transaction twice.
+
+        One `.get(key, 0)` anywhere in an implementation turns a cold store into a confident
+        "no risk" -- and one double-recorded subject turns every count into 2. Listed for all
+        26 features, and asserted to be all of them, so a new feature cannot slip past it.
+        """
+        subject = transaction()
+        expectations = {
+            "account_tx_count_1m": 1.0,
+            "account_tx_count_5m": 1.0,
+            "account_tx_count_1h": 1.0,
+            "account_tx_count_24h": 1.0,
+            "account_amount_sum_1h": 5_000.0,
+            "card_tx_count_5m": 1.0,
+            "declined_ratio_1h": None,  # no outcome is known, and its own never counts
+            "account_distinct_merchants_1h": 1.0,
+            "account_distinct_mcc_5m": 1.0,
+            "account_distinct_devices_24h": 1.0,
+            "account_distinct_countries_24h": 1.0,
+            "device_distinct_accounts_24h": 1.0,
+            "ip_distinct_accounts_1h": 1.0,
+            "merchant_distinct_accounts_1h": 1.0,
+            "merchant_amount_cv_24h": None,  # one observation has no dispersion
+            "amount_zscore_vs_account": None,
+            "account_tenure_days": None,
+            "merchant_is_habitual": None,
+            "mcc_is_habitual_for_account": None,
+            "device_is_known_for_account": None,
+            "distance_from_account_home_km": None,
+            "geo_distance_from_last_km": None,
+            "implied_speed_kmh_from_last": None,
+            "seconds_since_last_transaction": None,
+            "hours_since_identity_change": None,
+            "failed_logins_1h": None,
+        }
+        assert set(expectations) == set(ONLINE_FEATURES.ids)
+        self.check(
+            [],
+            subject,
+            [
+                Expectation(fid, value, state=None if value is not None else INSUFFICIENT)
+                for fid, value in expectations.items()
+            ],
+        )
+
+
+class AsServedConformanceSuite(FeatureSemanticsConformanceSuite):
+    """What an online store serves: nothing delivered after the scored transaction counts."""
+
+    def test_an_outcome_recorded_after_the_score_cannot_change_it(self) -> None:
+        """F3 as served: the outcome arrived after the read."""
+        subject = transaction()
+        known = tx_event("tx_x1", occurred_at=at(-10), authorization_outcome=None)
+        late = outcome_event("tx_x1", decided_at=at_ms(-9_700))
+        self.check_log(
+            [known, transaction_observation(subject), late],
+            1,
+            subject,
+            [Expectation("declined_ratio_1h", None, state=INSUFFICIENT)],
+        )
+
+    def test_an_outcome_verified_after_the_score_does_not_count_in_it(self) -> None:
+        """F3 as served: the outcome was recorded first, its transaction only after the read."""
+        subject = transaction()
+        early = outcome_event("tx_x1", decided_at=at_ms(-9_700))
+        late = tx_event("tx_x1", occurred_at=at(-10), authorization_outcome=None)
+        self.check_log(
+            [early, transaction_observation(subject), late],
+            1,
+            subject,
+            [Expectation("declined_ratio_1h", None, state=INSUFFICIENT)],
+        )
+
+    def test_a_same_millisecond_observation_counts_only_if_it_was_recorded_first(self) -> None:
+        """At T0: `tx_zzz` (1 000) delivered first, the scored `tx_mmm` (5 000), then `tx_aaa`
+        (300). Served: 1 000 + 5 000. The event-time-complete answer is 300 + 5 000."""
+        subject = transaction(amount_minor=5_000)
+        log = [
+            tx_event("tx_zzz", occurred_at=T0, amount_minor=1_000),
+            transaction_observation(subject),
+            tx_event("tx_aaa", occurred_at=T0, amount_minor=300),
+        ]
+        self.check_log(
+            log,
+            1,
+            subject,
+            [
+                Expectation("account_amount_sum_1h", 1_000 + 5_000),
+                Expectation("account_tx_count_1m", 2),
+            ],
+        )
+
+    def test_an_observation_delivered_after_the_scored_transaction_cannot_leak_into_it(
+        self,
+    ) -> None:
+        subject = transaction()
+        log = [transaction_observation(subject), tx_event("tx_late", occurred_at=at(-30))]
+        self.check_log(
+            log,
+            0,
+            subject,
+            [Expectation("account_tx_count_1m", 1), Expectation("account_amount_sum_1h", 5_000)],
+        )
+
+    def test_different_arrival_orders_at_one_millisecond_serve_different_counts(self) -> None:
+        subject = transaction(transaction_id="tx_b")
+        a = tx_event("tx_a", occurred_at=T0)
+        b = transaction_observation(subject)
+        c = tx_event("tx_c", occurred_at=T0)
+        for log, index, served in (([c, b, a], 1, 2), ([a, c, b], 2, 3), ([b, a, c], 0, 1)):
+            self.check_log(log, index, subject, [Expectation("account_tx_count_1m", served)])
+
+    def test_a_failed_login_at_the_scored_millisecond_counts_if_recorded_first(self) -> None:
+        subject = transaction()
+        log = [
+            identity_event("zz_fl", stream=Stream.IDENTITY_FAILED_LOGIN, occurred_at=T0),
+            transaction_observation(subject),
+        ]
+        self.check_log(log, 1, subject, [Expectation("failed_logins_1h", 1)])
+
+    def test_the_last_bucket_holds_only_what_was_recorded_before_the_read(self) -> None:
+        subject = transaction(occurred_at=at(150), account_id="acct_000001")
+        log = [
+            transaction_observation(subject),
+            tx_event("tx_after", occurred_at=at(200), account_id="acct_000008"),
+        ]
+        self.check_log(log, 0, subject, [Expectation("merchant_distinct_accounts_1h", 1)])
+
+    # -- bounded score-time reads (ADR-0046 §8) -----------------------------
+
+    def test_a_window_at_the_cap_is_read_whole_and_one_more_caps_its_content(self) -> None:
+        """511 earlier transactions 100 s apart, then the scored one: 512 in 24 hours, read whole.
+
+        The `j`-th newest is `j * 100 s` old, so the hour holds j = 1..35 and five minutes j = 1, 2.
+        One more (j = 512, 51 200 s old) makes 513 in 24 hours: the account's and the device's
+        24-hour windows are capped, and the hour and five minutes, holding 36 and 3, are read whole.
+        A merchant the account never used is unknown at 512 and not called unknown at 513.
+        """
+        exact = [
+            Expectation("account_tx_count_1m", 1),
+            Expectation("account_tx_count_5m", 2 + 1),
+            Expectation("account_tx_count_1h", 35 + 1),
+            Expectation("card_tx_count_5m", 2 + 1),
+            # sum(100 + j for j in 1..35) = 3 500 + 630, plus the scored 5 000
+            Expectation("account_amount_sum_1h", 3_500 + 630 + 5_000),
+            Expectation("account_distinct_merchants_1h", 5 + 1),  # mrch_s0..s4, and mrch_00001
+            Expectation("account_distinct_mcc_5m", 2 + 1),  # 5901, 5902, and 5411
+            Expectation("device_is_known_for_account", 1.0),  # a device the read saw
+        ]
+        self.check(
+            deep(511, spacing_ms=100_000, shape=spread),
+            transaction(),
+            [
+                *exact,
+                Expectation("account_tx_count_24h", 511 + 1),
+                Expectation("account_distinct_devices_24h", 1),
+                Expectation("account_distinct_countries_24h", 3),  # GB, FR, DE
+                Expectation("device_distinct_accounts_24h", 1),
+                Expectation("merchant_is_habitual", 0.0),
+            ],
+            complete_since=WATCHED_LONG_ENOUGH,
+        )
+        self.check(
+            deep(512, spacing_ms=100_000, shape=spread),
+            transaction(),
+            [
+                *exact,
+                Expectation("account_tx_count_24h", 512 + 1),
+                capped_absent("account_distinct_devices_24h"),
+                capped_absent("account_distinct_countries_24h"),
+                capped_absent("device_distinct_accounts_24h"),  # the device's day holds 513 too
+                capped_absent("merchant_is_habitual"),
+            ],
+            complete_since=WATCHED_LONG_ENOUGH,
+        )
+
+    def test_a_burst_past_the_cap_caps_every_content_window_and_no_count(self) -> None:
+        """512 earlier transactions 100 ms apart: 513 in one minute, so every window is capped."""
+        self.check(
+            deep(512, spacing_ms=100, shape=spread),
+            transaction(),
+            [
+                *(Expectation(f"account_tx_count_{w}", 512 + 1) for w in ("1m", "5m", "1h", "24h")),
+                Expectation("card_tx_count_5m", 512 + 1),
+                Expectation("seconds_since_last_transaction", 0.1),  # j = 1, 100 ms old
+                *(capped_absent(feature_id) for feature_id in CAPPED_CONTENT),
+            ],
+        )
+
+    def test_a_device_past_the_cap_has_no_distinct_account_count(self) -> None:
+        """Other accounts transact on the scored device, one each, 100 s apart."""
+        self.check(
+            deep(511, spacing_ms=100_000, shape=other_accounts, prefix="tx_v"),
+            transaction(),
+            [
+                Expectation("device_distinct_accounts_24h", 511 + 1),
+                Expectation("account_tx_count_24h", 1),
+                Expectation("account_distinct_devices_24h", 1),
+            ],
+        )
+        self.check(
+            deep(512, spacing_ms=100_000, shape=other_accounts, prefix="tx_v"),
+            transaction(),
+            [
+                capped_absent("device_distinct_accounts_24h"),
+                Expectation("account_tx_count_24h", 1),
+                Expectation("account_distinct_devices_24h", 1),
+            ],
+        )
+
+    def test_a_redelivery_never_moves_the_cap_boundary(self) -> None:
+        """At 512, a redelivered earlier transaction and a redelivered scored one both count once.
+        A new transaction recorded between two deliveries of the scored one is visible to the
+        redelivery's read, which it takes to 513 (ADR-0046 §2)."""
+        history = deep(511, spacing_ms=100_000, shape=spread)
+        subject = transaction()
+        scored = transaction_observation(subject)
+        whole = [
+            Expectation("account_tx_count_24h", 511 + 1),
+            Expectation("account_distinct_countries_24h", 3),
+        ]
+        log = [*history, history[-1], scored]  # tx_d0001 delivered twice
+        self.check_log(log, len(log) - 1, subject, whole)
+        log = [*history, scored, scored]
+        self.check_log(log, len(log) - 1, subject, whole)
+        log = [*history, scored, tx_event("tx_late", occurred_at=at(-50)), scored]
+        self.check_log(
+            log,
+            len(log) - 1,
+            subject,
+            [
+                Expectation("account_tx_count_24h", 511 + 2),
+                capped_absent("account_distinct_countries_24h"),
+            ],
+        )
+
+    def test_an_observation_at_the_scored_millisecond_reaches_the_cap_only_if_recorded_first(
+        self,
+    ) -> None:
+        """At the boundary millisecond: INCLUDED windows count it when it was recorded before the
+        read, and the previous transaction, EXCLUDED, never is it (j = 1 is 100 s old)."""
+        history = deep(511, spacing_ms=100_000, shape=spread)
+        subject = transaction()
+        scored = transaction_observation(subject)
+        same = tx_event("tx_same", occurred_at=T0)
+        before = [*history, same, scored]
+        self.check_log(
+            before,
+            len(before) - 1,
+            subject,
+            [
+                Expectation("account_tx_count_24h", 511 + 2),
+                capped_absent("account_distinct_countries_24h"),
+                Expectation("seconds_since_last_transaction", 100.0),
+            ],
+        )
+        after = [*history, scored, same]
+        self.check_log(
+            after,
+            len(history),
+            subject,
+            [
+                Expectation("account_tx_count_24h", 511 + 1),
+                Expectation("account_distinct_countries_24h", 3),
+                Expectation("seconds_since_last_transaction", 100.0),
+            ],
+        )
+
+    def test_the_window_edge_and_the_raw_history_edge_count_separately(self) -> None:
+        """One more transaction beside 511 earlier ones. Exactly 24 hours old it is outside the
+        24-hour window but still held raw, so the window holds 512 and is read whole while the
+        profile's raw read holds 513 and is capped. A millisecond younger, it caps the window too.
+        Exactly 25 hours old it is still held raw; a millisecond older it is folded, and the profile
+        is read whole."""
+        history = deep(511, spacing_ms=100_000, shape=spread)
+        subject = transaction()
+
+        def one_more_at(milliseconds: int) -> list[Event]:
+            return [tx_event("tx_edge", occurred_at=at_ms(milliseconds)), *history]
+
+        self.check(
+            one_more_at(-86_400_000),
+            subject,
+            [
+                Expectation("account_tx_count_24h", 511 + 1),
+                Expectation("account_distinct_countries_24h", 3),
+                capped_absent("merchant_is_habitual"),
+                Expectation("device_is_known_for_account", 1.0),
+            ],
+            complete_since=WATCHED_LONG_ENOUGH,
+        )
+        self.check(
+            one_more_at(-86_399_999),
+            subject,
+            [
+                Expectation("account_tx_count_24h", 511 + 2),
+                capped_absent("account_distinct_countries_24h"),
+            ],
+            complete_since=WATCHED_LONG_ENOUGH,
+        )
+        self.check(
+            one_more_at(-RAW_HISTORY_MS),
+            subject,
+            [
+                Expectation("account_tx_count_24h", 511 + 1),
+                capped_absent("merchant_is_habitual"),
+            ],
+            complete_since=WATCHED_LONG_ENOUGH,
+        )
+        self.check(
+            one_more_at(-RAW_HISTORY_MS - 1),
+            subject,
+            [
+                Expectation("account_tx_count_24h", 511 + 1),
+                Expectation("merchant_is_habitual", 0.0),  # mrch_00001: one visit, 25 h old
+            ],
+            complete_since=WATCHED_LONG_ENOUGH,
+        )
+
+    def test_a_failed_login_burst_far_above_the_cap_is_counted_exactly(self) -> None:
+        """1 500 failed logins 2 s apart and 600 identity changes a minute apart from two hours ago.
+        Failed logins are a range count and the latest change one bounded lookup, so depth hides
+        neither: a capped failed-login count would blind R012 during credential stuffing."""
+        changes = [
+            identity_event(
+                f"evt_c{k:04d}", stream=Stream.IDENTITY_CHANGE, occurred_at=at(-7_200 - 60 * k)
+            )
+            for k in range(599, -1, -1)
+        ]
+        edge = identity_event(
+            "evt_f_edge", stream=Stream.IDENTITY_FAILED_LOGIN, occurred_at=at_ms(-3_600_000)
+        )
+        logins = [
+            identity_event(
+                f"evt_f{k:04d}", stream=Stream.IDENTITY_FAILED_LOGIN, occurred_at=at_ms(-2_000 * k)
+            )
+            for k in range(1_500, 0, -1)
+        ]
+        self.check(
+            [*changes, edge, *logins],
+            transaction(),
+            [
+                Expectation("failed_logins_1h", 1_500),  # the one exactly an hour old is outside
+                Expectation("hours_since_identity_change", 2.0),  # the latest change, k = 0
+            ],
+        )
+
+    def test_outcomes_far_above_the_cap_keep_the_declined_ratio_exact(self) -> None:
+        """600 transactions 5 s apart, each decided a millisecond later, every fourth declined. The
+        outcome counts are range counts; the hour's amount sum reads content and is capped."""
+        log: list[Event] = []
+        for k in range(600, 0, -1):
+            transaction_id = f"tx_o{k:04d}"
+            log.append(tx_event(transaction_id, occurred_at=at_ms(-5_000 * k)))
+            log.append(
+                outcome_event(
+                    transaction_id,
+                    decided_at=at_ms(-5_000 * k + 1),
+                    outcome=AuthorizationOutcome.DECLINED
+                    if k % 4 == 0
+                    else AuthorizationOutcome.APPROVED,
+                )
+            )
+        self.check(
+            log,
+            transaction(),
+            [
+                Expectation("declined_ratio_1h", 150 / 600),
+                Expectation("account_tx_count_1h", 600 + 1),
+                capped_absent("account_amount_sum_1h"),
+            ],
+        )
+
+    def test_depth_hides_an_old_device_and_merchant_rather_than_calling_them_unknown(self) -> None:
+        """600 transactions 2 minutes apart; the capped read holds the scored one and the newest
+        511. The oldest 88, on `dev_old` at `mrch_old`, are beyond it and not in the folded prefix.
+        A read of the newest 512 alone would call both unknown; capped, neither is called anything,
+        and the category the read saw 511 times is still habitual."""
+        self.check(
+            deep(600, spacing_ms=120_000, shape=probe),
+            transaction(device_id="dev_old", merchant_id="mrch_old"),
+            [
+                capped_absent("device_is_known_for_account"),
+                capped_absent("merchant_is_habitual"),
+                Expectation("mcc_is_habitual_for_account", 1.0),
+            ],
+            complete_since=WATCHED_LONG_ENOUGH,
+        )
+
+    def test_a_capped_profile_knows_a_device_it_saw_and_calls_no_device_unknown(self) -> None:
+        """One transaction 72 hours old, in the folded prefix, then 600 two minutes apart: the read
+        holds the newest 511 (`dev_new`) and not the 89 beyond them (`dev_unread`)."""
+        history = [
+            tx_event("tx_a_prefix", occurred_at=at(-72 * 3_600), device_id="dev_prefix"),
+            *deep(
+                600,
+                spacing_ms=120_000,
+                shape=lambda j: {"device_id": "dev_new" if j < CAP else "dev_unread"},
+            ),
+        ]
+        for device, expected in (
+            ("dev_new", Expectation("device_is_known_for_account", 1.0)),
+            ("dev_prefix", Expectation("device_is_known_for_account", 1.0)),
+            ("dev_never", capped_absent("device_is_known_for_account")),  # truly unknown: not 0.0
+        ):
+            self.check(
+                history,
+                transaction(device_id=device),
+                [expected],
+                complete_since=WATCHED_LONG_ENOUGH,
             )
 
+    def test_a_capped_profile_counts_visits_across_the_prefix_and_the_read(self) -> None:
+        """Two visits to `mrch_split` in the prefix and one in the read make three. `mrch_once` has
+        three visits, but the read holds one of them (j = 7) and not j = 520 or 530."""
 
-class ReferenceStoreConformanceTest(FeatureSemanticsConformanceSuite):
-    """The naive implementation, as the first subject of the shared suite."""
+        def merchant(j: int) -> dict[str, object]:
+            if j == 5:
+                return {"merchant_id": "mrch_split"}
+            if j in (7, 520, 530):
+                return {"merchant_id": "mrch_once"}
+            return {"merchant_id": "mrch_new" if j < CAP else "mrch_unread"}
 
-    def build_context(
+        history = [
+            tx_event("tx_a_prefix1", occurred_at=at(-72 * 3_600), merchant_id="mrch_split"),
+            tx_event("tx_a_prefix2", occurred_at=at(-71 * 3_600), merchant_id="mrch_split"),
+            *deep(600, spacing_ms=120_000, shape=merchant),
+        ]
+        for merchant_id, expected in (
+            ("mrch_new", Expectation("merchant_is_habitual", 1.0)),
+            ("mrch_split", Expectation("merchant_is_habitual", 1.0)),
+            ("mrch_once", capped_absent("merchant_is_habitual")),
+        ):
+            self.check(
+                history,
+                transaction(merchant_id=merchant_id),
+                [expected],
+                complete_since=WATCHED_LONG_ENOUGH,
+            )
+
+    def test_a_capped_profile_calls_a_category_habitual_only_on_visits_it_saw(self) -> None:
+        """`5812` 511 times in the read; `7011` 89 times, all beyond it."""
+        history = deep(
+            600, spacing_ms=120_000, shape=lambda j: {"merchant_mcc": "5812" if j < CAP else "7011"}
+        )
+        for mcc, expected in (
+            ("5812", Expectation("mcc_is_habitual_for_account", 1.0)),
+            ("7011", capped_absent("mcc_is_habitual_for_account")),
+        ):
+            self.check(
+                history,
+                transaction(merchant_mcc=mcc),
+                [expected],
+                complete_since=WATCHED_LONG_ENOUGH,
+            )
+
+    def test_capped_tenure_is_exact_only_when_the_prefix_holds_the_lifetimes_start(self) -> None:
+        """With a transaction 72 hours old in the prefix, tenure is 3 days. Without it, the lifetime
+        starts at the oldest of 600 (20 hours old), which the read does not reach."""
+        recent = deep(600, spacing_ms=120_000)
+        self.check(
+            [tx_event("tx_a_prefix", occurred_at=at(-72 * 3_600)), *recent],
+            transaction(),
+            [Expectation("account_tenure_days", 3.0)],
+            complete_since=WATCHED_LONG_ENOUGH,
+        )
+        self.check(
+            recent,
+            transaction(),
+            [capped_absent("account_tenure_days")],
+            complete_since=WATCHED_LONG_ENOUGH,
+        )
+
+    def test_a_capped_robust_z_needs_its_whole_sample_inside_the_read(self) -> None:
+        """128 GBP amounts in the read (64 at 1 000, 64 at 3 000) are the whole sample; 127 are not,
+        whatever lies beyond the read."""
+        self.check(
+            deep(600, spacing_ms=120_000, shape=z_sample(128)),
+            transaction(amount_minor=8_000),
+            [Expectation("amount_zscore_vs_account", ROBUST_Z_OF_8000)],
+        )
+        self.check(
+            deep(600, spacing_ms=120_000, shape=z_sample(127)),
+            transaction(amount_minor=8_000),
+            [capped_absent("amount_zscore_vs_account")],
+        )
+
+    def test_a_capped_home_needs_its_whole_sample_inside_the_read(self) -> None:
+        """The newest 20 located: 19 at longitude 10 and the newest at 11. A point at 10 is 1 degree
+        from the rest in total and the one at 11 is 19, so home is at 10, 10 degrees from the scored
+        point at 0. With 19 located in the read, home is absent."""
+        subject = transaction(latitude=0.0, longitude=0.0)
+        self.check(
+            deep(600, spacing_ms=120_000, shape=home_sample(20)),
+            subject,
+            [Expectation("distance_from_account_home_km", along_equator_km(10.0))],
+        )
+        self.check(
+            deep(600, spacing_ms=120_000, shape=home_sample(19)),
+            subject,
+            [capped_absent("distance_from_account_home_km")],
+        )
+
+
+class EventTimeCompleteConformanceSuite(FeatureSemanticsConformanceSuite):
+    """What a complete history says: arrival order only decides which delivery came first."""
+
+    def test_an_outcome_recorded_after_the_score_counts_in_a_complete_history(self) -> None:
+        """F3 complete: arrival order is irrelevant, so the late outcome counts."""
+        subject = transaction()
+        known = tx_event("tx_x1", occurred_at=at(-10), authorization_outcome=None)
+        late = outcome_event("tx_x1", decided_at=at_ms(-9_700))
+        self.check_log(
+            [known, transaction_observation(subject), late],
+            1,
+            subject,
+            [Expectation("declined_ratio_1h", 1.0, tolerance=FLOAT)],
+        )
+
+    def test_an_outcome_whose_transaction_arrived_later_counts_in_a_complete_history(self) -> None:
+        """F3 complete: its transaction exists in the complete history, whatever the order."""
+        subject = transaction()
+        early = outcome_event("tx_x1", decided_at=at_ms(-9_700))
+        late = tx_event("tx_x1", occurred_at=at(-10), authorization_outcome=None)
+        self.check_log(
+            [early, transaction_observation(subject), late],
+            1,
+            subject,
+            [Expectation("declined_ratio_1h", 1.0, tolerance=FLOAT)],
+        )
+
+    def test_same_millisecond_ties_break_by_identity_whatever_the_arrival_order(self) -> None:
+        """At T0: `tx_aaa` (300) sorts before the scored `tx_mmm` (5 000); `tx_zzz` (1 000)
+        after it. 300 + 5 000, in every arrival order."""
+        subject = transaction(amount_minor=5_000)
+        a = tx_event("tx_aaa", occurred_at=T0, amount_minor=300)
+        s = transaction_observation(subject)
+        z = tx_event("tx_zzz", occurred_at=T0, amount_minor=1_000)
+        for log in ([z, s, a], [s, a, z], [a, z, s]):
+            self.check_log(
+                log,
+                log.index(s),
+                subject,
+                [
+                    Expectation("account_amount_sum_1h", 300 + 5_000),
+                    Expectation("account_tx_count_1m", 2),
+                ],
+            )
+
+    def test_an_earlier_observation_delivered_after_the_scored_transaction_counts(self) -> None:
+        subject = transaction()
+        log = [transaction_observation(subject), tx_event("tx_late", occurred_at=at(-30))]
+        self.check_log(
+            log,
+            0,
+            subject,
+            [
+                Expectation("account_tx_count_1m", 2),
+                Expectation("account_amount_sum_1h", 5_000 + 5_000),
+            ],
+        )
+
+    def test_the_identity_tie_break_applies_only_at_the_scored_millisecond(self) -> None:
+        """`tx_000` sorts before the scored identity but is exactly a minute old: outside."""
+        self.check(
+            [tx_event("tx_000", occurred_at=at_ms(-60_000))],
+            transaction(),
+            [Expectation("account_tx_count_1m", 1)],
+        )
+
+    def test_the_last_bucket_is_whole_whatever_arrived_after(self) -> None:
+        subject = transaction(occurred_at=at(150), account_id="acct_000001")
+        log = [
+            transaction_observation(subject),
+            tx_event("tx_after", occurred_at=at(200), account_id="acct_000008"),
+        ]
+        self.check_log(log, 0, subject, [Expectation("merchant_distinct_accounts_1h", 2)])
+
+    def test_identity_events_at_the_scored_millisecond_sort_before_it(self) -> None:
+        """The declared order is `(occurred_ms, namespace, id)`, and `identity_event` sorts
+        before `transaction`: both failed logins at T0 count, whatever their ids and whatever
+        order they arrived in."""
+        subject = transaction()
+        aa = identity_event("aa_fl", stream=Stream.IDENTITY_FAILED_LOGIN, occurred_at=T0)
+        zz = identity_event("zz_fl", stream=Stream.IDENTITY_FAILED_LOGIN, occurred_at=T0)
+        s = transaction_observation(subject)
+        for log in ([zz, aa, s], [s, zz, aa]):
+            self.check_log(log, log.index(s), subject, [Expectation("failed_logins_1h", 2)])
+
+    # -- a complete history is never capped (ADR-0046 §8) -------------------
+
+    def test_a_complete_history_reads_every_window_past_the_cap(self) -> None:
+        """The as-served cap fixtures' logs, over a complete history: every value exact."""
+        self.check(
+            deep(512, spacing_ms=100, shape=spread),
+            transaction(),
+            [
+                Expectation("account_tx_count_24h", 512 + 1),
+                # sum(100 + j for j in 1..512) = 51 200 + 131 328, plus the scored 5 000
+                Expectation("account_amount_sum_1h", 51_200 + 131_328 + 5_000),
+                Expectation("account_distinct_merchants_1h", 5 + 1),
+                Expectation("account_distinct_mcc_5m", 6 + 1),  # 5900..5905, and 5411
+                Expectation("account_distinct_devices_24h", 1),
+                Expectation("account_distinct_countries_24h", 3),
+                Expectation("device_distinct_accounts_24h", 1),
+            ],
+        )
+        self.check(
+            deep(512, spacing_ms=100_000, shape=other_accounts, prefix="tx_v"),
+            transaction(),
+            [Expectation("device_distinct_accounts_24h", 512 + 1)],
+        )
+
+    def test_a_complete_history_reads_the_whole_profile_past_the_cap(self) -> None:
+        """The capped profile fixtures' logs, over a complete history: every value exact."""
+        self.check(
+            deep(600, spacing_ms=120_000, shape=probe),
+            transaction(device_id="dev_old", merchant_id="mrch_old"),
+            [
+                Expectation("device_is_known_for_account", 1.0),
+                Expectation("merchant_is_habitual", 1.0),  # 88 visits
+                Expectation("account_tenure_days", 600 * 120 / 86_400),  # the oldest, 20 h old
+            ],
+            complete_since=WATCHED_LONG_ENOUGH,
+        )
+        self.check(
+            deep(600, spacing_ms=120_000, shape=probe),
+            transaction(device_id="dev_never"),
+            [Expectation("device_is_known_for_account", 0.0)],
+            complete_since=WATCHED_LONG_ENOUGH,
+        )
+        # The last 128 GBP amounts are j = 1..127 and j = 512: 64 at 1 000 and 64 at 3 000.
+        self.check(
+            deep(600, spacing_ms=120_000, shape=z_sample(127)),
+            transaction(amount_minor=8_000),
+            [Expectation("amount_zscore_vs_account", ROBUST_Z_OF_8000)],
+        )
+        # The last 20 located are j = 1..19 and j = 512: 19 at longitude 10 and one at 11.
+        self.check(
+            deep(600, spacing_ms=120_000, shape=home_sample(19)),
+            transaction(latitude=0.0, longitude=0.0),
+            [Expectation("distance_from_account_home_km", along_equator_km(10.0))],
+        )
+
+
+class ReferenceAsServedConformanceTest(AsServedConformanceSuite):
+    """The naive store, recording deliveries in order and scoring the subject."""
+
+    def context_for(
         self,
-        history: list[Event],
-        *,
-        as_of: EventTime,
+        log: Sequence[Event],
+        subject_index: int,
         subject: CanonicalTransaction,
-        complete_since: EventTime | None = None,
+        *,
+        complete_since: EventTime | None,
     ) -> FeatureContext:
         from trace_core.features.reference import ReferenceFeatureStore
 
         store = ReferenceFeatureStore(complete_since=complete_since)
-        store.observe_all(history)
-        return store.snapshot(
-            as_of=as_of,
-            account_id=subject.account_id,
-            currency=subject.currency,
-            card_id=subject.card_id,
-            device_id=subject.device_id,
-            merchant_id=subject.merchant_id,
-            ip_id=subject.ip_id,
-        )
+        store.observe_all(log[:subject_index])
+        served = store.score(log[subject_index])
+        assert served.receipt.position == len({e.identity for e in log[: subject_index + 1]})
+        # Later deliveries land after the read; the context already served must not move.
+        store.observe_all(log[subject_index + 1 :])
+        return served.context
+
+
+class ReferenceEventTimeCompleteConformanceTest(EventTimeCompleteConformanceSuite):
+    """The naive implementation over every delivery, whatever order they arrived in."""
+
+    def context_for(
+        self,
+        log: Sequence[Event],
+        subject_index: int,
+        subject: CanonicalTransaction,
+        *,
+        complete_since: EventTime | None,
+    ) -> FeatureContext:
+        from trace_core.features.reference import event_time_complete_context
+
+        return event_time_complete_context(log, log[subject_index], complete_since=complete_since)
 
 
 __all__ = [
     "EXACT",
-    "HLL_TOLERANCE",
+    "FLOAT",
+    "SUBJECT",
     "T0",
+    "AsServedConformanceSuite",
+    "EventTimeCompleteConformanceSuite",
     "Expectation",
     "FeatureSemanticsConformanceSuite",
-    "ReferenceStoreConformanceTest",
+    "ReferenceAsServedConformanceTest",
+    "ReferenceEventTimeCompleteConformanceTest",
+    "along_equator_km",
     "at",
+    "at_ms",
+    "failed_feature_ids",
+    "identity_event",
+    "located",
+    "metres_east",
     "transaction",
     "tx_event",
+    "unlocated",
 ]
 
-# Neither class name begins with `Test`, so pytest collects neither of them
-# directly -- they are collected only through the concrete subclasses in
-# `test_feature_semantics_*.py`, which is the same arrangement
-# `source_adapter_suite.py` uses.
+# No class name here begins with `Test`, so pytest collects them only through the concrete
+# subclasses in `test_feature_semantics_*.py`, the arrangement `source_adapter_suite.py` uses.

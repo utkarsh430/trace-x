@@ -41,6 +41,14 @@ class ErrorType(StrEnum):
     """409 -- the same idempotency key was reused with a different payload. A
     client bug, surfaced rather than absorbed (docs/API_CONTRACTS.md §5)."""
 
+    AUTHORIZATION_CONFLICT = f"{ERROR_BASE}authorization-conflict"
+    """409 -- a different authorization outcome is already recorded for the transaction. The first
+    delivery stays the observation, and PostgreSQL decides, not a cache (ADR-0049 §2, §4)."""
+
+    AUTHORIZATION_ACCOUNT_MISMATCH = f"{ERROR_BASE}authorization-account-mismatch"
+    """409 -- the outcome names another account than the transaction the online store holds. It is
+    recorded as reported and never reaches a feature (ADR-0049 §4)."""
+
     RATE_LIMITED = f"{ERROR_BASE}rate-limited"
     """429 -- over the caller's budget. Carries `Retry-After`."""
 
@@ -55,6 +63,8 @@ TITLES: Final[dict[ErrorType, str]] = {
     ErrorType.INVALID_REQUEST: "Invalid request",
     ErrorType.UNAUTHENTICATED: "Unauthenticated",
     ErrorType.IDEMPOTENCY_CONFLICT: "Idempotency conflict",
+    ErrorType.AUTHORIZATION_CONFLICT: "Authorization conflict",
+    ErrorType.AUTHORIZATION_ACCOUNT_MISMATCH: "Authorization account mismatch",
     ErrorType.RATE_LIMITED: "Rate limited",
     ErrorType.SERVICE_UNAVAILABLE: "Service unavailable",
 }
@@ -64,6 +74,8 @@ STATUSES: Final[dict[ErrorType, int]] = {
     ErrorType.INVALID_REQUEST: 422,
     ErrorType.UNAUTHENTICATED: 401,
     ErrorType.IDEMPOTENCY_CONFLICT: 409,
+    ErrorType.AUTHORIZATION_CONFLICT: 409,
+    ErrorType.AUTHORIZATION_ACCOUNT_MISMATCH: 409,
     ErrorType.RATE_LIMITED: 429,
     ErrorType.SERVICE_UNAVAILABLE: 503,
 }

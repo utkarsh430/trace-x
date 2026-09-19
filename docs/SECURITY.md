@@ -235,7 +235,7 @@ event. The chain is exportable for external attestation.
 | Surface | Key | Guarantee |
 |---|---|---|
 | Transaction ingest | `transaction_id` | Duplicate ⇒ identical response, one side effect |
-| Event processing | `event_id` | Redis dedup (hot) + Spark `dropDuplicatesWithinWatermark` (warm) |
+| Event processing | each topic's declared identity (`deploy/kafka/topics.yaml`) | The online store's observation identity (hot, ADR-0046) + Silver's exact canonical dedup: one row per identity, enforced by a uniqueness assertion (warm, ADR-0053) |
 | Investigation creation | `investigation_id` from trigger transaction | One investigation per trigger |
 | Action execution | `hash(investigation, action_type, target, params)` | At-most-once effect via transactional outbox |
 | Approval | `approval_id` | Double-approve is a no-op |

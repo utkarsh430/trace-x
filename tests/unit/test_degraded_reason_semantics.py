@@ -38,12 +38,16 @@ class _WorkingStore:
         self.inner = ReferenceFeatureStore()
         self.reads = 0
 
+    def score(self, event: Any) -> Any:
+        self.reads += 1
+        return self.inner.score(event)
+
     def snapshot(self, **kwargs: Any) -> Any:
         self.reads += 1
         return self.inner.snapshot(**kwargs)
 
-    def observe(self, event: Any) -> None:
-        self.inner.observe(event)
+    def observe(self, event: Any) -> Any:
+        return self.inner.observe(event)
 
 
 def _pipeline(store: Any) -> ScoringPipeline:

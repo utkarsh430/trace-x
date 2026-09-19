@@ -376,3 +376,22 @@ def test_the_catalogue_lists_the_same_causal_keys_as_the_code(scenario: object) 
 def test_the_catalogue_parser_actually_found_the_sections() -> None:
     """Guards against the comparison above becoming a no-op."""
     assert len(_catalogue_sections()) == 10
+
+
+@pytest.mark.parametrize("scenario", ALL_SCENARIOS, ids=lambda s: s.pattern.value)
+def test_the_catalogue_lists_the_eval_v2_causal_keys_where_they_differ(scenario: object) -> None:
+    """ADR-0050 G7: eval-v2 keys are documented exactly where the code changes them."""
+    from data.generator.planted import EVAL_V2_CAUSAL_KEYS
+
+    pattern = scenario.pattern  # type: ignore[attr-defined]
+    lines = [
+        ln
+        for ln in _catalogue_sections()[pattern.value].splitlines()
+        if ln.startswith("**Causal keys (eval-v2).**")
+    ]
+    if pattern not in EVAL_V2_CAUSAL_KEYS:
+        assert not lines, f"{pattern.value}: eval-v2 keys documented, but the code keeps eval-v1's"
+        return
+    assert len(lines) == 1, pattern.value
+    documented = set(re.findall(r"`([A-Z][A-Z_]{2,})`", lines[0]))
+    assert documented == {k.value for k in EVAL_V2_CAUSAL_KEYS[pattern]}

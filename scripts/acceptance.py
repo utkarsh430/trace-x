@@ -79,10 +79,16 @@ def cmd_report(doc: dict) -> int:
     for phase in sorted(phases, key=lambda x: (len(x), x)):
         caps = phases[phase]
         done = sum(1 for c in caps if c["status"] == "PASS")
-        print(f"\n  Phase {phase}  [{done}/{len(caps)} PASS]")
+        required = [c for c in caps if c.get("gating", True)]
+        required_done = sum(1 for c in required if c["status"] == "PASS")
+        print(
+            f"\n  Phase {phase}  [{done}/{len(caps)} PASS; "
+            f"required for exit {required_done}/{len(required)}]"
+        )
         for c in caps:
             col = COLOUR[c["status"]]
-            print(f"    {col}{c['status']:<12}\033[0m {c['id']:<24} {c['name'][:44]}")
+            marker = "" if c.get("gating", True) else "  (non-gating)"
+            print(f"    {col}{c['status']:<12}\033[0m {c['id']:<24} {c['name'][:44]}{marker}")
     print("\n" + "-" * 76)
     print("  " + "  ".join(f"{COLOUR[s]}{s}={counts.get(s, 0)}\033[0m" for s in VALID))
     errs = validate(doc)

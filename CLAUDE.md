@@ -130,6 +130,15 @@ the next evaluation report.
 - Money is integer minor units (`amount_minor`). **Never a float.**
 - Naming: `snake_case` Python, `camelCase` TypeScript, `SCREAMING_SNAKE` env vars,
   `kebab-case` file paths and topic names.
+- **Data-platform identifiers are `snake_case`.** The kebab-case path convention applies to
+  human-authored repository filesystem paths. Persisted or externally addressable data-platform
+  identifiers follow `snake_case` when they must stay compatible and identical across Spark, Delta
+  Lake, Unity Catalog, Databricks, checkpoints and transaction identifiers: schema and table
+  identifiers, Structured Streaming query names, checkpoint logical identifiers, Delta transaction
+  app ids, Databricks job and task identifiers derived from pipeline names, and the metric and
+  manifest identifiers that represent the same logical name (`silver.late_events`, `bronze_ingest`,
+  `gold_tx_features`). Physical lake directories derived from table identifiers keep the same
+  spelling (`silver/late_events/`). No mapping layer between spellings (ADR-0048, U9).
 
 ---
 
@@ -339,6 +348,36 @@ Never:
 - Log PII or commit a secret or a dataset.
 - Write documentation describing something that does not exist as though it does.
 - Claim completion while any part of the requested scope is unfinished or unverified.
+
+---
+
+## 18. Working protocol (user-issued operating model)
+
+**Ownership.** The lead session owns implementation strategy and sequencing (data structures,
+algorithms, SQL, Spark, Kafka, Redis, tests, benchmarks, refactors), decides them, and says what it
+decided. It escalates **only** external/event/schema contract changes, product behaviour or feature
+semantics, security/auth boundaries, data-loss guarantees, persistence topology, destructive
+migrations, changes to accepted evaluation criteria, large scope increases, or paid cloud cost — as
+*Problem / Evidence / Recommendation / Why / Alternatives / Cost-risk / What continues meanwhile*,
+always with a recommendation.
+
+**Failure classes.** Classify every failure before fixing it: **A** product/correctness/security
+defect, **B** implementation bug, **C** stale test, **D** harness/tooling, **E** machine/environment,
+**F** expected consequence of an approved change. Apply the smallest fix for the class. Never redesign
+production code to satisfy a broken test; never weaken a valid test to hide a defect. Reproduce a
+Category A defect before fixing it.
+
+**Step reports.** End each step with *IMPLEMENTED / EVIDENCE / DECISIONS / DEBT / NEXT / ESCALATION*.
+
+**Heavy runs.** Spark, Kafka, chaos suites and benchmarks never run concurrently. Serialise them on a
+lock whose owner file names a pid, and release it only when it names your own. A background wrapper
+propagates the real exit code (`rc=$?; …; exit $rc`), never a trailing command's. Lint with the gate's
+exact invocation, `ruff format --check . && ruff check .`. Gate every commit on `make verify`'s exit
+code.
+
+**Sub-agents.** Few, well-scoped, each in its own git worktree off the phase branch with
+non-overlapping file ownership. Agents do not commit and do not edit `docs/PROGRESS.md`,
+`tests/acceptance/status.json` or the ADR index; the lead integrates and commits. Never force-push.
 
 ## Accuracy-First Engineering & Diagnostic Autonomy
 

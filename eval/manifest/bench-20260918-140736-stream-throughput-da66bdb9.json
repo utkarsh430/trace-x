@@ -1,0 +1,749 @@
+{
+  "broker": {
+    "bootstrap": "localhost:9092",
+    "topics": {
+      "identity.events.v1": {
+        "message.timestamp.type": "LogAppendTime",
+        "partitions": 3,
+        "retention.bytes": "67108864"
+      },
+      "tx.authorization.v1": {
+        "message.timestamp.type": "LogAppendTime",
+        "partitions": 6,
+        "retention.bytes": "67108864"
+      },
+      "tx.scored.v1": {
+        "message.timestamp.type": "LogAppendTime",
+        "partitions": 6,
+        "retention.bytes": "201326592"
+      }
+    }
+  },
+  "capability": "P3.stream-throughput",
+  "config": {
+    "account_pool": 100000,
+    "bronze_trigger_s": 2.0,
+    "consumer_stop_timeout_s": 90,
+    "driver_memory": "2g",
+    "gold": true,
+    "gold_driver_memory": "2g",
+    "gold_min_interval_s": 0,
+    "master": "local[4]",
+    "max_offsets_per_trigger": null,
+    "measured_s": 600,
+    "mix": {
+      "identity.events.v1": 1,
+      "tx.authorization.v1": 5,
+      "tx.scored.v1": 14
+    },
+    "poll_interval_s": 2.0,
+    "pre_outage_s": 60,
+    "producer_workers": 4,
+    "rate_events_per_s": 5000,
+    "recovery_bound_s": 900,
+    "recovery_hold_s": 60,
+    "scored_templates": 64,
+    "seed": 20260918,
+    "shuffle_partitions": 2,
+    "silver_trigger_s": 2.0,
+    "warmup_max_s": 600,
+    "warmup_min_s": 120
+  },
+  "dirty_worktree": false,
+  "env_lock_digest": "sha256:b8c74723800f0505649f050bba317fd575e6e5dfa295bb45ed073ba5cb650e6f",
+  "feature_set_version": "5.0.0",
+  "finished_at": "2026-09-18T14:10:02.950804+00:00",
+  "git_commit_sha": "da66bdb943f67540f73c9719bb4a4f054aba33d1",
+  "host": {
+    "cpu_count": 12,
+    "machine": "arm64",
+    "physical_memory_bytes": 19327352832,
+    "platform": "macOS-26.6.2-arm64-arm-64bit",
+    "processor": "arm"
+  },
+  "lake_root": "/private/var/folders/j9/wgfy5qqj1sd6b6xwy6brqdkc0000gn/T/trace-x-load-stream/bench-20260918-140736-stream-throughput-da66bdb9",
+  "logs": "/private/var/folders/j9/wgfy5qqj1sd6b6xwy6brqdkc0000gn/T/trace-x-load-stream/bench-20260918-140736-stream-throughput-da66bdb9-logs",
+  "measured": {
+    "broker_end_offsets": {
+      "identity.events.v1[0]": 12044,
+      "identity.events.v1[1]": 11943,
+      "identity.events.v1[2]": 12053,
+      "tx.authorization.v1[0]": 30206,
+      "tx.authorization.v1[1]": 29694,
+      "tx.authorization.v1[2]": 29920,
+      "tx.authorization.v1[3]": 30271,
+      "tx.authorization.v1[4]": 29926,
+      "tx.authorization.v1[5]": 30175,
+      "tx.scored.v1[0]": 84403,
+      "tx.scored.v1[1]": 83370,
+      "tx.scored.v1[2]": 83650,
+      "tx.scored.v1[3]": 85087,
+      "tx.scored.v1[4]": 83623,
+      "tx.scored.v1[5]": 84419
+    },
+    "clock_offset": {
+      "consistent": false,
+      "lower_ms": -0.509033203125,
+      "midpoint_ms": null,
+      "required": false,
+      "samples": 720784,
+      "upper_ms": -1.950927734375,
+      "workers_final": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "workers_streamed": [
+        0,
+        1,
+        2,
+        3
+      ]
+    },
+    "consumer_crash": {
+      "exit_code": 1,
+      "first_error_line": "Caused by: java.lang.OutOfMemoryError: Java heap space",
+      "generation": 1,
+      "log": "/private/var/folders/j9/wgfy5qqj1sd6b6xwy6brqdkc0000gn/T/trace-x-load-stream/bench-20260918-140736-stream-throughput-da66bdb9-logs/consumer-1.log"
+    },
+    "consumer_events": [
+      {
+        "at_ms": 1789740457282,
+        "event": "start",
+        "generation": 1
+      }
+    ],
+    "gold_builds": [
+      {
+        "abandoned_ms": null,
+        "build_id": 0,
+        "exit_code": 0,
+        "finished_ms": 1789740565762,
+        "lag_ms": 56827,
+        "started_ms": 1789740489389
+      },
+      {
+        "abandoned_ms": 1789740602428,
+        "build_id": null,
+        "exit_code": null,
+        "finished_ms": null,
+        "lag_ms": null,
+        "started_ms": 1789740565763
+      }
+    ],
+    "lag_series": [
+      [
+        1789740471685,
+        null,
+        null,
+        "silver.identity_events_v1",
+        0
+      ],
+      [
+        1789740476154,
+        null,
+        null,
+        "silver.quarantine",
+        0
+      ],
+      [
+        1789740478195,
+        null,
+        null,
+        "silver.duplicates",
+        0
+      ],
+      [
+        1789740482582,
+        null,
+        null,
+        "silver.tx_authorization_v1",
+        0
+      ],
+      [
+        1789740488779,
+        null,
+        null,
+        "silver.tx_scored_v1",
+        0
+      ],
+      [
+        1789740489822,
+        null,
+        null,
+        "silver.identity_events_v1",
+        1
+      ],
+      [
+        1789740505571,
+        null,
+        null,
+        "silver.tx_authorization_v1",
+        1
+      ],
+      [
+        1789740539063,
+        null,
+        null,
+        "silver.identity_events_v1",
+        2
+      ],
+      [
+        1789740546214,
+        58829,
+        null,
+        "silver.tx_scored_v1",
+        1
+      ],
+      [
+        1789740560578,
+        70809,
+        73193,
+        "silver.tx_authorization_v1",
+        2
+      ],
+      [
+        1789740583679,
+        93910,
+        93910,
+        "silver.identity_events_v1",
+        3
+      ]
+    ],
+    "lake_bytes": 431778793,
+    "notes": [
+      "the consumer (generation 1) exited with code 1 while it should have been running, so it did not sustain the offered rate; first error in its log: Caused by: java.lang.OutOfMemoryError: Java heap space; log: /private/var/folders/j9/wgfy5qqj1sd6b6xwy6brqdkc0000gn/T/trace-x-load-stream/bench-20260918-140736-stream-throughput-da66bdb9-logs/consumer-1.log"
+    ],
+    "phases": {
+      "consumer_started_ms": 1789740457282,
+      "observed_until_ms": 1789740602423,
+      "producers_started_ms": 1789740458271
+    },
+    "preexisting_records": {
+      "identity.events.v1[0]": 0,
+      "identity.events.v1[1]": 0,
+      "identity.events.v1[2]": 0,
+      "tx.authorization.v1[0]": 0,
+      "tx.authorization.v1[1]": 0,
+      "tx.authorization.v1[2]": 0,
+      "tx.authorization.v1[3]": 0,
+      "tx.authorization.v1[4]": 0,
+      "tx.authorization.v1[5]": 0,
+      "tx.scored.v1[0]": 0,
+      "tx.scored.v1[1]": 0,
+      "tx.scored.v1[2]": 0,
+      "tx.scored.v1[3]": 0,
+      "tx.scored.v1[4]": 0,
+      "tx.scored.v1[5]": 0
+    },
+    "producers": [
+      {
+        "clock": {
+          "consistent": false,
+          "lower_ms": -0.60498046875,
+          "midpoint_ms": null,
+          "samples": 180196,
+          "upper_ms": -1.85693359375
+        },
+        "delivered": {
+          "identity.events.v1": 9010,
+          "tx.authorization.v1": 45048,
+          "tx.scored.v1": 126138
+        },
+        "delivered_by_partition": {
+          "identity.events.v1[0]": 3105,
+          "identity.events.v1[1]": 2925,
+          "identity.events.v1[2]": 2980,
+          "tx.authorization.v1[0]": 7664,
+          "tx.authorization.v1[1]": 7383,
+          "tx.authorization.v1[2]": 7404,
+          "tx.authorization.v1[3]": 7500,
+          "tx.authorization.v1[4]": 7596,
+          "tx.authorization.v1[5]": 7501,
+          "tx.scored.v1[0]": 21109,
+          "tx.scored.v1[1]": 20699,
+          "tx.scored.v1[2]": 20805,
+          "tx.scored.v1[3]": 21273,
+          "tx.scored.v1[4]": 21136,
+          "tx.scored.v1[5]": 21116
+        },
+        "delivery_problems": [],
+        "duplicate_values": 0,
+        "failed": {},
+        "max_behind_s": 0.9455721378326416,
+        "max_delivery_ms": 149.06787109375,
+        "max_log_append_ms": {
+          "identity.events.v1[0]": 1789740602427,
+          "identity.events.v1[1]": 1789740602413,
+          "identity.events.v1[2]": 1789740602347,
+          "tx.authorization.v1[0]": 1789740602413,
+          "tx.authorization.v1[1]": 1789740602426,
+          "tx.authorization.v1[2]": 1789740602422,
+          "tx.authorization.v1[3]": 1789740602429,
+          "tx.authorization.v1[4]": 1789740602427,
+          "tx.authorization.v1[5]": 1789740602402,
+          "tx.scored.v1[0]": 1789740602423,
+          "tx.scored.v1[1]": 1789740602428,
+          "tx.scored.v1[2]": 1789740602428,
+          "tx.scored.v1[3]": 1789740602414,
+          "tx.scored.v1[4]": 1789740602428,
+          "tx.scored.v1[5]": 1789740602429
+        },
+        "max_offset": {
+          "identity.events.v1[0]": 12043,
+          "identity.events.v1[1]": 11940,
+          "identity.events.v1[2]": 12043,
+          "tx.authorization.v1[0]": 30204,
+          "tx.authorization.v1[1]": 29691,
+          "tx.authorization.v1[2]": 29918,
+          "tx.authorization.v1[3]": 30270,
+          "tx.authorization.v1[4]": 29924,
+          "tx.authorization.v1[5]": 30166,
+          "tx.scored.v1[0]": 84397,
+          "tx.scored.v1[1]": 83367,
+          "tx.scored.v1[2]": 83648,
+          "tx.scored.v1[3]": 85080,
+          "tx.scored.v1[4]": 83619,
+          "tx.scored.v1[5]": 84417
+        },
+        "not_log_append_time": 0,
+        "produced": {
+          "identity.events.v1": 9010,
+          "tx.authorization.v1": 45048,
+          "tx.scored.v1": 126138
+        },
+        "substituted": 0,
+        "unstamped": 0,
+        "worker": 0
+      },
+      {
+        "clock": {
+          "consistent": false,
+          "lower_ms": -0.509033203125,
+          "midpoint_ms": null,
+          "samples": 180196,
+          "upper_ms": -1.950927734375
+        },
+        "delivered": {
+          "identity.events.v1": 9010,
+          "tx.authorization.v1": 45048,
+          "tx.scored.v1": 126138
+        },
+        "delivered_by_partition": {
+          "identity.events.v1[0]": 3053,
+          "identity.events.v1[1]": 2962,
+          "identity.events.v1[2]": 2995,
+          "tx.authorization.v1[0]": 7547,
+          "tx.authorization.v1[1]": 7410,
+          "tx.authorization.v1[2]": 7439,
+          "tx.authorization.v1[3]": 7590,
+          "tx.authorization.v1[4]": 7480,
+          "tx.authorization.v1[5]": 7582,
+          "tx.scored.v1[0]": 21214,
+          "tx.scored.v1[1]": 20861,
+          "tx.scored.v1[2]": 20864,
+          "tx.scored.v1[3]": 21306,
+          "tx.scored.v1[4]": 20828,
+          "tx.scored.v1[5]": 21065
+        },
+        "delivery_problems": [],
+        "duplicate_values": 0,
+        "failed": {},
+        "max_behind_s": 1.0424041748046875,
+        "max_delivery_ms": 167.93310546875,
+        "max_log_append_ms": {
+          "identity.events.v1[0]": 1789740602395,
+          "identity.events.v1[1]": 1789740602332,
+          "identity.events.v1[2]": 1789740602428,
+          "tx.authorization.v1[0]": 1789740602392,
+          "tx.authorization.v1[1]": 1789740602405,
+          "tx.authorization.v1[2]": 1789740602339,
+          "tx.authorization.v1[3]": 1789740602425,
+          "tx.authorization.v1[4]": 1789740602428,
+          "tx.authorization.v1[5]": 1789740602429,
+          "tx.scored.v1[0]": 1789740602429,
+          "tx.scored.v1[1]": 1789740602424,
+          "tx.scored.v1[2]": 1789740602427,
+          "tx.scored.v1[3]": 1789740602428,
+          "tx.scored.v1[4]": 1789740602429,
+          "tx.scored.v1[5]": 1789740602429
+        },
+        "max_offset": {
+          "identity.events.v1[0]": 12041,
+          "identity.events.v1[1]": 11936,
+          "identity.events.v1[2]": 12051,
+          "tx.authorization.v1[0]": 30199,
+          "tx.authorization.v1[1]": 29687,
+          "tx.authorization.v1[2]": 29909,
+          "tx.authorization.v1[3]": 30269,
+          "tx.authorization.v1[4]": 29925,
+          "tx.authorization.v1[5]": 30174,
+          "tx.scored.v1[0]": 84402,
+          "tx.scored.v1[1]": 83363,
+          "tx.scored.v1[2]": 83647,
+          "tx.scored.v1[3]": 85086,
+          "tx.scored.v1[4]": 83621,
+          "tx.scored.v1[5]": 84418
+        },
+        "not_log_append_time": 0,
+        "produced": {
+          "identity.events.v1": 9010,
+          "tx.authorization.v1": 45048,
+          "tx.scored.v1": 126138
+        },
+        "substituted": 0,
+        "unstamped": 0,
+        "worker": 3
+      },
+      {
+        "clock": {
+          "consistent": false,
+          "lower_ms": -0.56689453125,
+          "midpoint_ms": null,
+          "samples": 180196,
+          "upper_ms": -1.759033203125
+        },
+        "delivered": {
+          "identity.events.v1": 9010,
+          "tx.authorization.v1": 45048,
+          "tx.scored.v1": 126138
+        },
+        "delivered_by_partition": {
+          "identity.events.v1[0]": 2939,
+          "identity.events.v1[1]": 3069,
+          "identity.events.v1[2]": 3002,
+          "tx.authorization.v1[0]": 7484,
+          "tx.authorization.v1[1]": 7476,
+          "tx.authorization.v1[2]": 7609,
+          "tx.authorization.v1[3]": 7467,
+          "tx.authorization.v1[4]": 7477,
+          "tx.authorization.v1[5]": 7535,
+          "tx.scored.v1[0]": 20967,
+          "tx.scored.v1[1]": 20921,
+          "tx.scored.v1[2]": 21042,
+          "tx.scored.v1[3]": 21140,
+          "tx.scored.v1[4]": 20857,
+          "tx.scored.v1[5]": 21211
+        },
+        "delivery_problems": [],
+        "duplicate_values": 0,
+        "failed": {},
+        "max_behind_s": 0.8531970977783203,
+        "max_delivery_ms": 168.0478515625,
+        "max_log_append_ms": {
+          "identity.events.v1[0]": 1789740602396,
+          "identity.events.v1[1]": 1789740602428,
+          "identity.events.v1[2]": 1789740602380,
+          "tx.authorization.v1[0]": 1789740602398,
+          "tx.authorization.v1[1]": 1789740602428,
+          "tx.authorization.v1[2]": 1789740602404,
+          "tx.authorization.v1[3]": 1789740602414,
+          "tx.authorization.v1[4]": 1789740602422,
+          "tx.authorization.v1[5]": 1789740602429,
+          "tx.scored.v1[0]": 1789740602429,
+          "tx.scored.v1[1]": 1789740602424,
+          "tx.scored.v1[2]": 1789740602429,
+          "tx.scored.v1[3]": 1789740602427,
+          "tx.scored.v1[4]": 1789740602412,
+          "tx.scored.v1[5]": 1789740602428
+        },
+        "max_offset": {
+          "identity.events.v1[0]": 12042,
+          "identity.events.v1[1]": 11942,
+          "identity.events.v1[2]": 12047,
+          "tx.authorization.v1[0]": 30201,
+          "tx.authorization.v1[1]": 29692,
+          "tx.authorization.v1[2]": 29916,
+          "tx.authorization.v1[3]": 30265,
+          "tx.authorization.v1[4]": 29923,
+          "tx.authorization.v1[5]": 30172,
+          "tx.scored.v1[0]": 84401,
+          "tx.scored.v1[1]": 83360,
+          "tx.scored.v1[2]": 83649,
+          "tx.scored.v1[3]": 85083,
+          "tx.scored.v1[4]": 83615,
+          "tx.scored.v1[5]": 84415
+        },
+        "not_log_append_time": 0,
+        "produced": {
+          "identity.events.v1": 9010,
+          "tx.authorization.v1": 45048,
+          "tx.scored.v1": 126138
+        },
+        "substituted": 0,
+        "unstamped": 0,
+        "worker": 2
+      },
+      {
+        "clock": {
+          "consistent": false,
+          "lower_ms": -0.632080078125,
+          "midpoint_ms": null,
+          "samples": 180196,
+          "upper_ms": -1.868896484375
+        },
+        "delivered": {
+          "identity.events.v1": 9010,
+          "tx.authorization.v1": 45048,
+          "tx.scored.v1": 126138
+        },
+        "delivered_by_partition": {
+          "identity.events.v1[0]": 2947,
+          "identity.events.v1[1]": 2987,
+          "identity.events.v1[2]": 3076,
+          "tx.authorization.v1[0]": 7511,
+          "tx.authorization.v1[1]": 7425,
+          "tx.authorization.v1[2]": 7468,
+          "tx.authorization.v1[3]": 7714,
+          "tx.authorization.v1[4]": 7373,
+          "tx.authorization.v1[5]": 7557,
+          "tx.scored.v1[0]": 21113,
+          "tx.scored.v1[1]": 20889,
+          "tx.scored.v1[2]": 20939,
+          "tx.scored.v1[3]": 21368,
+          "tx.scored.v1[4]": 20802,
+          "tx.scored.v1[5]": 21027
+        },
+        "delivery_problems": [],
+        "duplicate_values": 0,
+        "failed": {},
+        "max_behind_s": 0.852161169052124,
+        "max_delivery_ms": 192.510986328125,
+        "max_log_append_ms": {
+          "identity.events.v1[0]": 1789740602380,
+          "identity.events.v1[1]": 1789740602235,
+          "identity.events.v1[2]": 1789740602429,
+          "tx.authorization.v1[0]": 1789740602421,
+          "tx.authorization.v1[1]": 1789740602429,
+          "tx.authorization.v1[2]": 1789740602424,
+          "tx.authorization.v1[3]": 1789740602416,
+          "tx.authorization.v1[4]": 1789740602407,
+          "tx.authorization.v1[5]": 1789740602429,
+          "tx.scored.v1[0]": 1789740602420,
+          "tx.scored.v1[1]": 1789740602429,
+          "tx.scored.v1[2]": 1789740602427,
+          "tx.scored.v1[3]": 1789740602428,
+          "tx.scored.v1[4]": 1789740602430,
+          "tx.scored.v1[5]": 1789740602428
+        },
+        "max_offset": {
+          "identity.events.v1[0]": 12039,
+          "identity.events.v1[1]": 11924,
+          "identity.events.v1[2]": 12052,
+          "tx.authorization.v1[0]": 30205,
+          "tx.authorization.v1[1]": 29693,
+          "tx.authorization.v1[2]": 29919,
+          "tx.authorization.v1[3]": 30266,
+          "tx.authorization.v1[4]": 29920,
+          "tx.authorization.v1[5]": 30173,
+          "tx.scored.v1[0]": 84394,
+          "tx.scored.v1[1]": 83369,
+          "tx.scored.v1[2]": 83646,
+          "tx.scored.v1[3]": 85084,
+          "tx.scored.v1[4]": 83622,
+          "tx.scored.v1[5]": 84416
+        },
+        "not_log_append_time": 0,
+        "produced": {
+          "identity.events.v1": 9010,
+          "tx.authorization.v1": 45048,
+          "tx.scored.v1": 126138
+        },
+        "substituted": 0,
+        "unstamped": 0,
+        "worker": 1
+      }
+    ],
+    "resources": {
+      "all": {
+        "max_cpu_percent": 911.5,
+        "mean_cpu_percent": 768.3,
+        "peak_rss_mib": 4898.7
+      },
+      "consumer": {
+        "max_cpu_percent": 591.9,
+        "mean_cpu_percent": 465.1,
+        "peak_rss_mib": 3098.5
+      },
+      "gold": {
+        "max_cpu_percent": 224.4,
+        "mean_cpu_percent": 157.4,
+        "peak_rss_mib": 1665.0
+      },
+      "producers": {
+        "max_cpu_percent": 299.0,
+        "mean_cpu_percent": 216.7,
+        "peak_rss_mib": 335.0
+      }
+    },
+    "silver_commits": 11
+  },
+  "publishable": false,
+  "python_version": "3.12.14",
+  "record_type": "BENCHMARK",
+  "run_id": "bench-20260918-140736-stream-throughput-da66bdb9",
+  "started_at": "2026-09-18T14:07:36.336784+00:00",
+  "status": "INVALID",
+  "subject": "stream-kafka-bronze-silver-throughput-outage-and-gold-freshness",
+  "targets": {
+    "clock_offset_tolerance_ms": 500.0,
+    "gold_max_lag_ms": 3600000,
+    "gold_p95_lag_ms": 900000,
+    "gold_stall_ms": 1800000,
+    "lag_target_ms": 10000,
+    "max_schedule_lag_s": 1.0,
+    "min_samples_per_window": 10,
+    "offered_rate_tolerance": 0.01,
+    "outage_s": 120,
+    "rate_events_per_s": 5000,
+    "throughput_quantisation_tolerance": 0.01
+  },
+  "timing_semantics_version": 1,
+  "tool": "trace-x-load-stream",
+  "tool_version": "1.0.0",
+  "toolchain": {
+    "enforced_on_running_jvm": "build_session refuses a JVM whose Spark, Java, Scala or Hadoop contradict the pins (ADR-0045), so the consumer and every Gold build ran on exactly these",
+    "findings": [
+      {
+        "component": "java",
+        "detail": "Java 17 at /Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home/bin/java",
+        "ok": true,
+        "remedy": ""
+      },
+      {
+        "component": "pyspark",
+        "detail": "pyspark 4.0.1",
+        "ok": true,
+        "remedy": ""
+      },
+      {
+        "component": "delta-spark",
+        "detail": "delta-spark 4.0.1",
+        "ok": true,
+        "remedy": ""
+      },
+      {
+        "component": "hadoop",
+        "detail": "hadoop-client-api 3.4.1",
+        "ok": true,
+        "remedy": ""
+      },
+      {
+        "component": "scala",
+        "detail": "scala-library 2.13.16",
+        "ok": true,
+        "remedy": ""
+      },
+      {
+        "component": "jar:delta-spark_2.13",
+        "detail": "io.delta:delta-spark_2.13:4.0.1 verified",
+        "ok": true,
+        "remedy": ""
+      },
+      {
+        "component": "jar:delta-storage",
+        "detail": "io.delta:delta-storage:4.0.1 verified",
+        "ok": true,
+        "remedy": ""
+      },
+      {
+        "component": "jar:spark-sql-kafka-0-10_2.13",
+        "detail": "org.apache.spark:spark-sql-kafka-0-10_2.13:4.0.1 verified",
+        "ok": true,
+        "remedy": ""
+      },
+      {
+        "component": "jar:spark-token-provider-kafka-0-10_2.13",
+        "detail": "org.apache.spark:spark-token-provider-kafka-0-10_2.13:4.0.1 verified",
+        "ok": true,
+        "remedy": ""
+      },
+      {
+        "component": "jar:kafka-clients",
+        "detail": "org.apache.kafka:kafka-clients:3.9.1 verified",
+        "ok": true,
+        "remedy": ""
+      },
+      {
+        "component": "jar:commons-pool2",
+        "detail": "org.apache.commons:commons-pool2:2.12.0 verified",
+        "ok": true,
+        "remedy": ""
+      }
+    ],
+    "installed": {
+      "confluent-kafka": "2.15.1",
+      "delta-spark": "4.0.1",
+      "pyarrow": "25.0.1",
+      "pyspark": "4.0.1"
+    },
+    "jars_lock_digest": "sha256:f09a418fded21af76aba06835a0489e4f522a35fa46be545c83bf9ede5712fa6",
+    "java_home": "/Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home",
+    "kafka_image": "apache/kafka:3.9.1@sha256:4ceccc577f03f51f6af8dbfda55194d0d892f4fa7913ffbded567ce3895622ed",
+    "pins": {
+      "delta": "4.0.1",
+      "hadoop_line": "3.4",
+      "java_major": "17",
+      "scala_line": "2.13",
+      "spark": "4.0.1"
+    }
+  },
+  "track": "SYNTHETIC",
+  "verdicts": [
+    {
+      "detail": "the consumer (generation 1) exited with code 1 while it should have been running, so it did not sustain the offered rate; first error in its log: Caused by: java.lang.OutOfMemoryError: Java heap space; log: /private/var/folders/j9/wgfy5qqj1sd6b6xwy6brqdkc0000gn/T/trace-x-load-stream/bench-20260918-140736-stream-throughput-da66bdb9-logs/consumer-1.log",
+      "kind": "target",
+      "name": "consumer_survived",
+      "passed": false
+    },
+    {
+      "detail": "broker-to-host clock offset in [-0.509033203125, -1.950927734375] ms from 720784 delivery reports (consistent: False); must lie within +-500.0 ms",
+      "kind": "integrity",
+      "name": "clock_offset_bounded",
+      "passed": false
+    },
+    {
+      "detail": "0 producer worker error(s): []",
+      "kind": "integrity",
+      "name": "producers_healthy",
+      "passed": true
+    },
+    {
+      "detail": "every record delivered",
+      "kind": "integrity",
+      "name": "deliveries_confirmed",
+      "passed": true
+    },
+    {
+      "detail": "0 record(s) stamped with something other than LogAppendTime",
+      "kind": "integrity",
+      "name": "log_append_time",
+      "passed": true
+    },
+    {
+      "detail": "partitions that received no benchmark record: []",
+      "kind": "integrity",
+      "name": "partitions_offered",
+      "passed": true
+    },
+    {
+      "detail": "the measured window never completed: the consumer (generation 1) exited with code 1 while it should have been running, so it did not sustain the offered rate; first error in its log: Caused by: java.lang.OutOfMemoryError: Java heap space; log: /private/var/folders/j9/wgfy5qqj1sd6b6xwy6brqdkc0000gn/T/trace-x-load-stream/bench-20260918-140736-stream-throughput-da66bdb9-logs/consumer-1.log",
+      "kind": "target",
+      "name": "throughput_sustained",
+      "passed": false
+    },
+    {
+      "detail": "the consumer (generation 1) exited with code 1 while it should have been running, so it did not sustain the offered rate; first error in its log: Caused by: java.lang.OutOfMemoryError: Java heap space; log: /private/var/folders/j9/wgfy5qqj1sd6b6xwy6brqdkc0000gn/T/trace-x-load-stream/bench-20260918-140736-stream-throughput-da66bdb9-logs/consumer-1.log",
+      "kind": "target",
+      "name": "lag_recovers_after_outage",
+      "passed": false
+    },
+    {
+      "detail": "every sample is anchored to broker records",
+      "kind": "integrity",
+      "name": "samples_authentic",
+      "passed": true
+    }
+  ]
+}

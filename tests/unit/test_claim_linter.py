@@ -471,3 +471,93 @@ def test_a_comparator_only_exempts_prose_when_a_quantity_follows(linter) -> None
     """
     assert linter("Scoring stays under 100 ms at the chosen operating point.") == []
     assert linter("The gateway p99 was 42 ms under load.")
+
+
+# --- rule 6: a run its own record marks invalid/unpublishable is not citable --
+
+
+def _benchmark_record(**over: object) -> dict:
+    base = {
+        "run_id": "bench-20260917-stream-abcd1234",
+        "record_type": "BENCHMARK",
+        "track": "SYNTHETIC",
+        "git_commit_sha": "0" * 40,
+        "dirty_worktree": False,
+        "env_lock_digest": "sha256:" + "c" * 64,
+        "python_version": "3.12.0",
+        "started_at": "2026-09-17T10:00:00Z",
+        "finished_at": "2026-09-17T10:05:00Z",
+        "subject": "stream-throughput",
+        "tool": "harness",
+        "tool_version": "1",
+        "measured": {"p99_ms": 42},
+    }
+    base.update(over)
+    return base
+
+
+_CITED = "Stage p99 was 42 ms (run_id: bench-20260917-stream-abcd1234)."
+
+
+@pytest.mark.parametrize(
+    ("over", "field"),
+    [
+        ({"publishable": False}, "publishable=false"),
+        ({"publishable": None}, "publishable=null"),
+        ({"publishable": "true"}, 'publishable="true"'),
+        ({"status": "INVALID"}, 'status="INVALID"'),
+        ({"status": "invalid"}, 'status="invalid"'),
+        ({"verdict": "Invalid"}, 'verdict="Invalid"'),
+        ({"measured": False}, "measured=false"),
+    ],
+)
+def test_a_run_its_record_marks_unpublishable_cannot_be_cited(linter, over, field) -> None:
+    violations = linter(_CITED, _benchmark_record(**over))
+    hits = [v for v in violations if "not publishable by its own record" in v]
+    assert hits, f"{over} must make the run uncitable, got {violations}"
+    assert "bench-20260917-stream-abcd1234" in hits[0]
+    assert field in hits[0], f"the message must name the field: {hits[0]}"
+
+
+def test_an_invalid_run_cannot_be_cited_through_a_section_run_id(linter) -> None:
+    text = (
+        "## Results\n\nrun_id: `bench-20260917-stream-abcd1234`\n\n"
+        "Stage p99 was 42 ms at steady state.\n"
+    )
+    violations = linter(text, _benchmark_record(status="INVALID"))
+    assert any('status="INVALID"' in v for v in violations)
+
+
+def test_an_unpublishable_eval_record_cannot_back_a_quality_claim(linter) -> None:
+    violations = linter(
+        "PR-AUC 0.94 (run_id: run-abc123)", _manifest(publishable=False, verdict="PASS")
+    )
+    assert any("publishable=false" in v for v in violations)
+
+
+@pytest.mark.parametrize(
+    "over",
+    [
+        {"status": "FAIL"},
+        {"verdict": "FAIL"},
+        {"status": "fail", "publishable": True},
+        {"verdict": "FAIL", "publishable": True, "targets_met": False},
+        {"status": "PASS", "publishable": True},
+    ],
+)
+def test_an_unfavourable_but_valid_result_stays_citable(linter, over) -> None:
+    """A FAIL verdict or a missed target is evidence. Making it uncitable would
+    turn the integrity gate into an instrument of concealment (CLAUDE.md §17)."""
+    assert linter(_CITED, _benchmark_record(**over)) == []
+
+
+def test_a_record_that_predates_the_fields_keeps_the_earlier_rules(linter) -> None:
+    """No `publishable`/`status`/`verdict` key, and `measured` is the dict of
+    measurements (as every committed manifest has it): still citable."""
+    record = _benchmark_record()
+    assert "publishable" not in record
+    assert linter(_CITED, record) == []
+
+
+def test_a_non_string_verdict_is_not_mistaken_for_invalid(linter) -> None:
+    assert linter(_CITED, _benchmark_record(verdict={"status": "PASS"})) == []

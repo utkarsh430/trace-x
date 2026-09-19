@@ -29,6 +29,228 @@ rather than alarming.
 
 PRODUCER: Final = f"trace-generator@{GENERATOR_VERSION}"
 
+CORRECTIONS: Final[tuple[str, ...]] = (
+    "T1",
+    "T2",
+    "T3",
+    "M1",
+    "M2",
+    "M3",
+    "M4",
+    "M5",
+    "M6",
+    "N1",
+    "N2",
+    "N3",
+    "N4",
+    "N5",
+    "N6",
+    "N7",
+    "N8",
+    "N9",
+    "N10",
+    "N11",
+    "N12",
+)
+"""Every eval-v2 correction a `LPC-5` §14.3 ablation can switch off, in declaration order."""
+
+_Share = Annotated[float, Field(ge=0.0, le=1.0)]
+_DailyRate = Annotated[float, Field(ge=0.0, le=50.0)]
+_YearlyRate = Annotated[float, Field(ge=0.0, le=1000.0)]
+_Weight = Annotated[float, Field(ge=0.0)]
+
+
+class BaselineIdentityConfig(StrictModel):
+    """The legitimate baseline eval-v1 lacks: the eval-v2 gate block.
+
+    It covers legitimate identity and device activity and, from stage 1b, the
+    legitimate transaction behaviour whose absence made transaction fields label
+    proxies: payments from non-home devices (T1) and legitimate declines (T3).
+    Scenario sub-second timing (T2) has no rate; it applies whenever the block is
+    present.
+
+    **Absent in eval-v1.** `GeneratorConfig.baseline_identity` defaults to None,
+    which reproduces eval-v1 exactly and is omitted from the canonical config
+    JSON, so eval-v1's config digest does not move.
+
+    **Every value is chosen, not measured.** No field is a statistic about real
+    customers, and none may be quoted as one. Each field's rationale is below and
+    in the eval-v2 ADR (draft: eval/track_a/drafts/eval-v2-adr-draft.md §4, §4b). Where a value was
+    chosen knowing how it interacts with a label-proxy criterion, the ADR says so.
+    """
+
+    login_rate_per_account_day: _DailyRate = 0.4
+    """Mean successful logins per account per day: of the order of a few
+    digital-banking sessions a week."""
+
+    login_rate_dispersion_sigma: Annotated[float, Field(ge=0.0, le=3.0)] = 0.8
+    """Lognormal sigma of a mean-one per-account multiplier on the login and
+    abandoned-burst rates. Some accounts rarely log in and some do daily; the
+    multiplier is mean-preserving, so the rate above stays the population mean."""
+
+    login_away_ip_share: _Share = 0.05
+    """Share of logins from outside the account's home IPs (mobile networks,
+    travel, work, VPNs), drawn from the whole universe, datacenter ranges included."""
+
+    typo_burst_share_per_login: _Share = 0.06
+    """Share of successful logins preceded by a burst of mistyped attempts."""
+
+    typo_burst_size_weights: tuple[_Weight, _Weight, _Weight, _Weight, _Weight] = (
+        0.70,
+        0.20,
+        0.07,
+        0.02,
+        0.01,
+    )
+    """Relative weights of burst sizes 1 to 5: mostly one typo, long bursts rare."""
+
+    reset_after_burst_share: _Share = 0.5
+    """Share of bursts of three or more that end in a forgotten-password reset
+    before the successful login."""
+
+    abandoned_burst_rate_per_account_day: _DailyRate = 0.004
+    """Bursts of failures with no success -- the user gives up or is locked out."""
+
+    password_change_rate_per_account_year: _YearlyRate = 0.8
+    """Voluntary and forced password changes, roughly one a year."""
+
+    email_change_rate_per_account_year: _YearlyRate = 0.1
+    """Contact details change rarely."""
+
+    phone_change_rate_per_account_year: _YearlyRate = 0.1
+    """Contact details change rarely."""
+
+    address_change_rate_per_account_year: _YearlyRate = 0.12
+    """Moving home, roughly once a decade."""
+
+    mfa_reset_rate_per_account_year: _YearlyRate = 0.1
+    """Second-factor loss outside a device replacement."""
+
+    mfa_enrolled_rate_per_account_year: _YearlyRate = 0.1
+    """Second-factor enrolment outside a device replacement."""
+
+    new_device_rate_per_account_year: _YearlyRate = 1.0
+    """New devices: phone replacement, additional devices, and app reinstalls or
+    browser resets that surface as a new device id. The ADR discloses that
+    `DEVICE_FIRST_SEEN_24H` precision falls as this rises."""
+
+    mfa_reset_on_new_device_share: _Share = 0.25
+    """Share of new devices accompanied by an MFA reset."""
+
+    mfa_enrolled_on_new_device_share: _Share = 0.3
+    """Share of new devices accompanied by an MFA enrolment instead."""
+
+    change_before_first_seen_share: _Share = 0.5
+    """Share of those MFA changes recorded before the device's FIRST_SEEN, from a
+    device already known (the reset went through another channel first)."""
+
+    attribute_change_rate_per_device_year: _YearlyRate = 2.0
+    """OS and app updates change a device's reported attributes a few times a year."""
+
+    fingerprint_change_rate_per_device_year: _YearlyRate = 0.3
+    """Occasional fingerprint resets on a known device."""
+
+    # ---- T1: legitimate payments from non-home devices (stage 1b) ----------
+    new_device_payment_share: _Share = 0.5
+    """After a legitimate FIRST_SEEN, the share of the account's later legitimate
+    transactions paid on its most recently enrolled device: a replacement phone
+    takes over, an extra device takes a share."""
+
+    secondary_device_account_share: _Share = 0.3
+    """Share of accounts that also pay from a secondary device -- a household or
+    work device known from before the window, outside the account's home devices."""
+
+    secondary_device_transaction_share: _Share = 0.1
+    """For such an account, the share of its legitimate transactions (those not
+    already moved to a newly enrolled device) paid from the secondary device."""
+
+    # ---- T3: legitimate declines (stage 1b) --------------------------------
+    decline_share_per_transaction: _Share = 0.02
+    """Standalone legitimate declines -- insufficient funds, an expired card,
+    issuer risk rules -- before the account's multiplier and a cap."""
+
+    decline_retry_share_per_transaction: _Share = 0.01
+    """Legitimate purchases preceded by a declined attempt the customer retries
+    within minutes, before the account's multiplier and a cap."""
+
+    decline_propensity_sigma: Annotated[float, Field(ge=0.0, le=3.0)] = 1.0
+    """Lognormal sigma of a mean-one per-account multiplier on both decline
+    shares: declines concentrate on a minority of accounts."""
+
+    # ---- N1 and N3: legitimate look-alikes (Stage 2) ------------------------
+    transaction_away_ip_share: _Share = 0.05
+    """N1: share of transactions paid from outside the account's home IPs -- mobile data, work,
+    public Wi-Fi, travel -- drawn from the whole universe, datacenter ranges at their population
+    rate, so unrelated accounts briefly share an IP. Applies to every transaction whose IP is not
+    planted, since an unplanted IP is drawn the legitimate way."""
+
+    travel_trips_per_account_year: _YearlyRate = 1.0
+    """N2: trips away from home per account-year -- holidays, work, family. Each lasts U(2, 7) days
+    in another population centre, chosen as a takeover's destination is, and the account pays there
+    as it would at home. Without trips, distance from home marks fraud."""
+
+    fixed_price_merchant_share: _Share = 0.3
+    """N4: share of moderately busy merchants -- ten to forty expected payments a day -- that sell
+    at one price: transit, parking, subscriptions, a set menu. Quieter merchants never gather five
+    payers a day at one price; busier ones rarely have one. Without them, one price paid by many
+    accounts marks merchant collusion."""
+
+    fixed_price_purchase_share: _Share = 0.8
+    """N4: at such a merchant, the share of purchases made at its price, by customers for whom
+    the price is ordinary -- as a colluding merchant's payers are (G6). The rest is ordinary
+    spending."""
+
+    household_account_share: _Share = 0.1
+    """N5: share of accounts in a household or small workplace of two or three that shares a
+    device and a network. A member pays from the shared device at
+    `secondary_device_transaction_share`, over the shared network. Without households, accounts
+    sharing a device and an IP mark a fraud ring."""
+
+    micro_session_share_per_transaction: _Share = 0.03
+    """N3: share of legitimate purchases followed within a minute by another from the same account
+    -- split tender, a transit tap, a basket then a tip. One extra transaction, never a burst, so
+    it stays well below planted burst intensity."""
+
+    # ---- G2 and the ablation controls (Stage 2) -----------------------------
+    coverage_floor_instances: Annotated[int, Field(ge=1, le=1000)] = 20
+    """G2 (`LPC-5` §14.4): after the weighted mix, a pattern with fewer instances is topped up to
+    this many. A topped-up mix is a coverage floor, not natural prevalence, and every report on the
+    dataset says so. Acceptance needs 20; smaller values exist for small in-memory tests, and
+    `LPC-5` S8 fails them."""
+
+    disabled_corrections: tuple[str, ...] = ()
+    """`LPC-5` §14.3 ablations: corrections switched off, each falling back to eval-v1's behaviour
+    for its own aspect only. Sorted and unique, so one ablation has one digest. Empty for a
+    candidate."""
+
+    def applies(self, correction: str) -> bool:
+        """Whether a correction is on. Refuses names outside `CORRECTIONS`."""
+        if correction not in CORRECTIONS:
+            raise ValueError(f"unknown correction {correction!r}")
+        return correction not in self.disabled_corrections
+
+    @model_validator(mode="after")
+    def _check_shares(self) -> Self:
+        if sum(self.typo_burst_size_weights) <= 0.0:
+            raise ValueError("typo_burst_size_weights must have a positive total")
+        unknown = sorted(set(self.disabled_corrections) - set(CORRECTIONS))
+        if unknown:
+            raise ValueError(f"disabled_corrections names unknown corrections {unknown}")
+        if list(self.disabled_corrections) != sorted(
+            set(self.disabled_corrections), key=CORRECTIONS.index
+        ):
+            raise ValueError(
+                "disabled_corrections must be unique and in CORRECTIONS order, so that one "
+                "ablation has exactly one config digest"
+            )
+        coupled = self.mfa_reset_on_new_device_share + self.mfa_enrolled_on_new_device_share
+        if coupled > 1.0:
+            raise ValueError(
+                "mfa_reset_on_new_device_share + mfa_enrolled_on_new_device_share must not "
+                f"exceed 1, got {coupled}: they are exclusive outcomes of one draw"
+            )
+        return self
+
 
 class GeneratorConfig(StrictModel):
     """Everything that determines a dataset."""
@@ -75,6 +297,17 @@ class GeneratorConfig(StrictModel):
     geo_jitter_km: Annotated[float, Field(ge=0.0, le=500.0)] = 12.0
     """Spread of legitimate transactions around an account's home location."""
 
+    baseline_identity: BaselineIdentityConfig | None = None
+    """The legitimate baseline (eval-v2 gate).
+
+    None -- the default, and eval-v1's value -- reproduces eval-v1 exactly, and
+    `canonical_json` omits the key so eval-v1's config digest is unchanged. When
+    set, legitimate identity and device activity, non-home payment devices and
+    legitimate declines are woven in, and planted events get sub-second timing:
+    transaction rows change, while the transaction count, every label and every
+    planted override do not.
+    """
+
     @model_validator(mode="after")
     def _check_window(self) -> Self:
         if self.start_at.tzinfo is None or self.end_at.tzinfo is None:
@@ -101,8 +334,16 @@ class GeneratorConfig(StrictModel):
         return cls.model_validate_json(json.dumps(dict(data), default=str))
 
     def canonical_json(self) -> str:
-        """Stable serialisation: sorted keys, no incidental whitespace."""
+        """Stable serialisation: sorted keys, no incidental whitespace.
+
+        An absent `baseline_identity` is omitted rather than written as null.
+        eval-v1's recorded config has no such key, and its recorded
+        `fraud_scenario_config_digest` must keep resolving; an additive field
+        whose absence means "off" is the only encoding that allows both.
+        """
         payload = json.loads(self.model_dump_json())
+        if payload.get("baseline_identity") is None:
+            payload.pop("baseline_identity", None)
         return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
     def digest(self) -> str:

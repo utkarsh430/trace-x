@@ -79,6 +79,28 @@ schema, roles and grants are created there and nowhere else (ADR-0004). Do not g
 broader role to clear the error: `trace_app` has no access to `groundtruth` and that is the isolation
 control (CLAUDE.md §11).
 
+### Gateway not the online store's writer
+**Detect:** `/readyz` 503 with `checks.writer_session` other than `active <session>`;
+`writer_refused_total{surface}` rising; log events `writer_supervisor_session_lost` or
+`writer_session_lock_held_elsewhere`.
+**Behaviour:** one process writes online state at a time (ADR-0051 §2). This instance refuses scoring,
+identity events a feature reads and authorization outcomes with 503 and `Retry-After`. It retries the
+fence every 2 s. The status names the cause:
+- `unreachable: …`: PostgreSQL is down or refusing `trace_app`. Follow the Postgres playbook.
+- `lock held elsewhere`: another gateway process is the writer. That is expected for a standby. If no
+  other gateway should exist, find the holder: `SELECT pid, application_name, client_addr FROM
+  pg_stat_activity WHERE pid IN (SELECT pid FROM pg_locks WHERE locktype = 'advisory')`.
+- `taking over: waiting N s …`: a predecessor's session is unclosed and was recently live. Nothing is
+  written until its lease has expired, and this clears by itself within 8 s.
+- `lease expired: …`: no heartbeat has confirmed the fence for 6 s, from a stalled connection or a
+  starved process. Check the host and the connection first.
+- `preparing failed: …`: the fence is held, but the start-up writes (holes, epoch) failed. They are
+  retried every 2 s; read `writer_supervisor_prepare_failed` in the log.
+
+**Action:** stop an unwanted gateway cleanly. Its session closes, and a successor takes over at once.
+Do not terminate a serving writer's backend to promote a standby: the writer loses its session, and
+the standby still waits out the lease.
+
 ### Gateway killed on its memory limit
 **Detect:** exit code 137, no stack trace, restart loop under `restart: unless-stopped`.
 **Behaviour:** the container is bounded so it dies alone rather than starving Postgres and Redis
@@ -103,9 +125,10 @@ hand — let the Spark reconciliation job rebuild them, then confirm `feature_pa
 **This is a capacity condition, not an outage, and the gateway treats it that way.** The feature
 store runs `noeviction` (ADR-0044): when it is full it REFUSES the write instead of discarding
 someone else's history. The decision is still made, it is marked degraded with reason
-`feature_write_failed`, and the store's completeness epoch is withdrawn — so every decision after it
-also says `history_incomplete`, because an observation that was not recorded is a hole in the
-history and no window spanning the hole is complete.
+`feature_write_failed`, and a hole is recorded once in `app.feature_store_holes` — so every decision
+after it also says `history_incomplete`, because an observation that was not recorded is a hole in the
+history and no window spanning the hole is complete. A refused write is all or nothing: nothing of
+the refused transaction is left in the store. A gateway that restarts inherits the open hole.
 
 **Detect:** `degraded_mode_total{reason="feature_write_failed"}` rising;
 `online_store_memory_bytes{store="features"}` at `maxmemory`; `/readyz` still ready.
@@ -122,8 +145,10 @@ failure for state that decides fraud.
 offered rate if it is a spike; provision memory if it is not. The memory model
 (`benchmarks/features/memory_model.py`, `benchmarks/features/MEMORY.md`) says what the store needs for
 a given rate and retention. Keys expire on their declared retention, so a full store recovers on its
-own once the rate drops; the epoch is re-established by the first successful write and warm-up begins
-from there.
+own once the rate drops. When a write next succeeds, the gateway clears the hole and moves the epoch
+to that moment plus 24 hours (a lost observation may be dated up to 24 h ahead), and warm-up runs from
+there; the ledger keeps the record. The memory model measures the Step 1b layout through the store itself
+(`run_id: bench-20260915-054159-memory-model-5ee55136`, ADR-0054).
 
 ### Feature store empty or warming — after a restart or `FLUSHALL`
 
@@ -152,6 +177,12 @@ skipped and a retry is re-scored, returning the existing `case_id` from Postgres
 case (ADR-0007). The feature store is not blamed: `redis` stays `ok` and `redis_unavailable` does not
 appear.
 
+A retry that reuses its transaction id for a different payload -- another account or amount, which
+the cache would have refused with 409 -- is decided rules-only and says `observation_conflict`: the
+store serves the first delivery's context, which must not be read as the retry's (ADR-0046 §1). A
+rising `degraded_mode_total{reason="observation_conflict"}` means a client reusing transaction ids,
+not a store fault.
+
 **Action:** restore it at leisure. Nothing in it is authoritative and nothing in it is missed.
 
 ### Postgres unavailable
@@ -161,16 +192,108 @@ appear.
 their LangGraph checkpoints. Verify no duplicate action execution via idempotency keys.
 
 ### Kafka unavailable
-**Detect:** producer timeouts.
-**Behaviour:** gateway buffers to a bounded local WAL, then sheds. **Scoring continues.**
-**Action:** restore Kafka; drain the WAL. Confirm dedup absorbed replays. Check `late_events` growth —
-buffered events may now be late and must land there, not vanish.
+**Detect:** `/readyz` `checks.observation_log` is `unavailable: …`; `observation_log_total` outcomes
+other than `handed_over` rising; `event_publish_outcomes_total{outcome="failed"}`.
+**Behaviour:** **Scoring continues.** The gateway producer buffers in memory, bounded, and sheds when
+full; there is no local WAL. Every observation shed, refused or undelivered leaves its writer session
+unclosed, so history claims no completeness across the outage (ADR-0051 §4-5).
+**Action:** restore Kafka. The gateway verifies its topics again by itself every 5 s. Nothing is
+replayed: the gap is recorded, not repaired, and a store rebuilt from history must refuse completeness
+across it. Check `late_events` growth for records delivered after the outage.
+
+### Observation log not configured
+**Detect:** `/readyz` `checks.observation_log` is `not configured: …`; log event
+`observation_log_not_configured` at start.
+**Behaviour:** the gateway scores normally and publishes nothing. No writer session ever closes, so
+history coverage claims nothing for the time it runs. This is the default for a `core`-only stack.
+**Action:** start the `streaming` profile, apply the topics (`scripts/kafka_topics.py apply
+--environment local`), and set `TRACE_GATEWAY_KAFKA_BOOTSTRAP=kafka:19092` for the gateway.
+
+### Outbox not draining
+**Detect:** `SELECT count(*), min(created_at) FROM app.outbox WHERE published_at IS NULL` growing;
+the `worker` container is not running, or logs `worker_refused_to_start` or
+`worker_outbox_relay_thread_died`. The worker has no `/metrics` endpoint yet: its row counts are logged
+as `worker_outbox_relay_rows`. A pass that could not publish everything it claimed logs
+`outbox_relay_rows_not_published` with the claimed, published, failed, refused and deferred counts, the
+number of blocked lanes, and the first error -- so a queue that stops draining is never silent.
+**Behaviour:** cases and authorization outcomes wait in PostgreSQL, and nothing is lost. A delivery
+failure is retried on the next pass. A row refused for its own content (`last_error` starting
+`refused: `) is never retried, because its content is immutable (migration 0007).
+**Action:**
+- Worker not running: the relay runs in `trace-worker` (ADR-0051 §7). Start it with
+  `docker compose -f deploy/compose.yml --env-file .env --profile core --profile streaming up -d worker`.
+  It exits and restarts when its relay thread dies, and refuses to start without a broker.
+- `failed`: restore the broker; the rows drain by themselves. A row that keeps failing blocks only
+  its own topic and partition key (`deferred` counts the rows waiting behind it); every other lane
+  keeps draining. Read its `last_error` before assuming the broker is at fault.
+- `refused`: read `last_error`. A refused row is a defect in the writer that produced it, and it
+  stays in the table for that investigation. Never edit or delete it to clear the queue.
+
+### Kafka topic missing or drifted
+
+**Detect:** `make kafka-topics-verify` exits 1 and names each differing setting, undeclared setting or
+undeclared topic; a publisher fails at its first publish because a topic does not exist.
+**Behaviour:** nothing is created or altered automatically. The broker's automatic topic creation is
+off, and `apply` never changes an existing partition count or configuration (ADR-0047).
+**Action:** locally, `make kafka-topics` creates a missing topic. A different partition count or
+cleanup policy is refused by design: recreate or version the topic deliberately, never alter it in
+place, because changing a partition count reorders history.
+
+### Publishing unconfirmed
+
+**Detect:** `EventPublishError` at close; `event_publish_outcomes_total` with `outcome` `failed`, `shed`
+or `refused`; `event_publisher_errors_total{fatal="true"}`.
+**Behaviour:** the run is not recorded as complete. A seed run writes no run record claiming its
+dataset reached the topic.
+**Action:** read the error's per-topic accounting (accepted, delivered, failed, still queued), fix the
+cause -- broker down, topic missing, message timeout -- and publish again. Consumers deduplicate on
+each topic's declared identity, so publishing again is safe.
 
 ### Spark job crash
 **Detect:** supervisor restart, consumer lag.
 **Behaviour:** resumes from checkpoint; online store serves stale-but-flagged features.
 **Action:** never delete a checkpoint to "fix" a stuck job — that silently reprocesses or skips data.
 Diagnose first. If a checkpoint must be reset, record it as a data-lineage event.
+
+### Streaming query refused at start
+
+**Detect:** `CheckpointRefusedError`, `StreamingSourceRetentionError` or `TableDriftError` before a
+query runs; the message names every reason.
+**Behaviour:** the query does not start. Each refusal is a state in which starting would silently lose
+or duplicate rows (ADR-0048): a target that already holds this query's commits without a checkpoint, a
+target restored, recreated or ahead of its checkpoint, a changed source or target set, a Delta source
+that no longer retains the log a restart needs, or a table that differs from its declaration.
+**Action:** never delete the checkpoint or repair the table to make the refusal go away -- Delta's own
+advice to delete the checkpoint is what turns a loud failure into loss or duplication. If reprocessing
+is the right answer, `reset_checkpoint` publishes a new checkpoint version with a mandatory reason and
+deletes nothing; a Kafka source may never restart from `latest`. A drifted table is an operator's
+decision: rows written while it drifted may violate its declaration.
+
+### Silver stopped, or not conserved
+
+**Detect:** `python -m services.stream.silver run` exits 3 and logs `silver_query_failed` with the
+topic, or `python -m services.stream.silver conservation` exits 1. A rise in one quarantine reason
+shows up in `silver.quarantine`.
+
+**Behaviour:** Silver never admits a second row for an identity and never drops a record.
+- A uniqueness assertion that fails after a commit stops the job rather than let a reader see a
+  duplicate.
+- A record Silver cannot admit is quarantined with its raw bytes and a reason (ADR-0053 §2).
+
+**Action:**
+- **Uniqueness or conservation failure.** This is a defect, not an operating state. Keep the
+  checkpoint and the tables as they are; the conservation report names the Bronze coordinates that
+  are missing, double-counted or dangling.
+- **`identity_conflict`.** Two deliveries share an identity with different content; the detail carries
+  both digests. Fix the producer. Never delete the canonical row to admit the other.
+- **`invalid_event` after a producer release.** The producer emits what the released contract forbids,
+  such as a new enum value (a breaking change, `docs/EVENT_CONTRACTS.md` §4). Fix the producer, then
+  reprocess with `reset_checkpoint`.
+  - The new checkpoint version re-reads Bronze from version 0, and records duplicates and quarantine
+    rows again under that version; filter by it.
+  - It fails loudly if Bronze no longer retains that log.
+- **`future_skew`.** A producer's clock or its `occurred_at` is wrong.
+- **`not_log_append_time`.** The topic's timestamp type drifted from `deploy/kafka/topics.yaml`.
 
 ### Neo4j unavailable
 **Detect:** health probe.

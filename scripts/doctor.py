@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import json
 import os
-import platform
 import re
 import shutil
 import socket
@@ -23,6 +22,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+# trace_core.stream.toolchain is stdlib-only by design, so it is importable here
+# before `make setup` has installed anything -- one implementation of each check,
+# shared with the Spark session factory, instead of a second copy that could drift.
+sys.path.insert(0, str(ROOT / "packages"))
+from trace_core.stream import toolchain  # noqa: E402
+
 OK, WARN, FAIL = "PASS", "WARN", "FAIL"
 
 # Resource floors. Disk is the binding constraint on the reference machine.
@@ -102,62 +107,103 @@ def check_python(rep: Report, want: str) -> None:
     )
 
 
-def check_java(rep: Report, want: str) -> None:
-    """Spark 4.0 supports Java 17/21 ONLY. Java 25 is the system default here."""
-    java_home = os.environ.get("JAVA_HOME", "")
-    exe = str(Path(java_home) / "bin" / "java") if java_home else (shutil.which("java") or "")
-    if not exe:
+STREAM_PHASE = 3
+"""From this phase on, the JVM toolchain is required rather than advisory.
+
+Before Phase 3 a wrong Java was a warning, deliberately: nothing ran Spark, and
+blocking `make verify` on a JDK the phase did not use would have been noise. From
+Phase 3 a warning is the wrong answer -- the ROADMAP entry condition is "make
+doctor green on the full pin matrix", and a check that cannot fail cannot be
+green in any meaningful sense. Phase 3 planning found exactly that: the Java
+check warned, Hadoop and Scala were "declared" without being asserted, and a
+non-interactive shell ran Java 25 while doctor reported success."""
+
+
+def current_phase() -> int:
+    """The phase number `tests/acceptance/status.json` records (4B counts as 4).
+
+    Refuses to guess. A value it cannot read -- "Phase 3", an empty string -- would
+    otherwise parse as phase 0 and silently turn every required toolchain check back
+    into a warning, which is the failure this check exists to prevent.
+    """
+    data = json.loads((ROOT / "tests" / "acceptance" / "status.json").read_text())
+    raw = str(data.get("current_phase", ""))
+    match = re.fullmatch(r"(\d+)[A-Z]?", raw)
+    if match is None:
+        raise SystemExit(
+            f"doctor: tests/acceptance/status.json current_phase {raw!r} is not a phase "
+            f"number such as '3' or '4B'; refusing to guess which checks are required"
+        )
+    return int(match.group(1))
+
+
+def _add_toolchain(rep: Report, name: str, finding: toolchain.Finding, phase: int) -> None:
+    if finding.ok:
+        rep.add(name, OK, finding.detail)
+        return
+    required = phase >= STREAM_PHASE
+    rep.add(name, FAIL if required else WARN, finding.detail, finding.remedy, required=required)
+
+
+def check_java(rep: Report, want: str, phase: int) -> None:
+    """Spark 4.0 supports Java 17/21 ONLY. Java 25 is the system default here.
+
+    Resolved exactly as Spark's launcher resolves it (`JAVA_HOME`, else `PATH`) and
+    confirmed by running it. Under `make`, `JAVA_HOME` has already been pointed at
+    the pinned JDK when one is installed (scripts/java_home.py); run directly from
+    a shell that selects another Java, this check fails -- which is the point.
+    """
+    if want != toolchain.JAVA_MAJOR:
         rep.add(
             "java",
-            WARN,
-            "java not found",
-            f"Only needed from Phase 3. Install Temurin {want}.",
-            required=False,
+            FAIL,
+            f"pyproject pins Java {want} but trace_core.stream.toolchain mirrors "
+            f"{toolchain.JAVA_MAJOR}",
+            "Change both together; tests/unit/test_stream_toolchain.py diffs them.",
         )
         return
-    out = _run_out([exe, "-version"])
-    m = re.search(r'version "?(\d+)', out)
-    major = m.group(1) if m else "?"
-    if major == want:
-        rep.add("java", OK, f"Java {major} via {'JAVA_HOME' if java_home else 'PATH'}")
-        return
-    hint = _run_out(["/usr/libexec/java_home", "-v", want]) if platform.system() == "Darwin" else ""
-    remedy = (
-        f"Spark {pins()['spark']} supports Java 17/21 only — Java {major} WILL FAIL.\n"
-        f"      Fix: export JAVA_HOME={hint or f'<path to Temurin {want}>'}"
-    )
-    # Not required until Phase 3, but must be impossible to miss.
-    rep.add(
-        "java", WARN if major != want else OK, f"Java {major} (want {want})", remedy, required=False
-    )
+    _add_toolchain(rep, "java", toolchain.check_java(), phase)
 
 
-def check_pin(rep: Report, name: str, want: str, module: str | None = None) -> None:
-    """Assert a declared pin matches what is installed, when it is installed."""
-    if module is None:
-        rep.add(f"pin:{name}", OK, f"declared {want}", required=False)
-        return
-    try:
-        mod = __import__(module)
-        got = getattr(mod, "__version__", "?")
-    except ImportError:
-        rep.add(
-            f"pin:{name}",
-            WARN,
-            f"{module} not installed (declared {want})",
-            f"Installed with its phase extra; pin is {want}.",
-            required=False,
-        )
-        return
-    ok = str(got).startswith(want)
-    rep.add(
-        f"pin:{name}",
-        OK if ok else FAIL,
-        f"{got} (want {want})",
-        f"Version drift invalidates benchmark comparability (ADR-0017/0018). "
-        f"Reinstall {module}=={want}.",
-        required=ok is False,
+def check_stream_toolchain(rep: Report, pins: dict[str, str], phase: int) -> None:
+    """pyspark, Delta, the Hadoop and Scala pyspark actually bundles, and the jars.
+
+    Hadoop and Scala are read from the jar file names inside pyspark's own `jars/`
+    directory -- a declared pin nobody compares against the installed artefact is
+    a comment, not a check.
+    """
+    mirrored = {
+        "spark": toolchain.SPARK_VERSION,
+        "delta": toolchain.DELTA_VERSION,
+        "hadoop": toolchain.HADOOP_LINE,
+        "scala": toolchain.SCALA_LINE,
+    }
+    for name, value in mirrored.items():
+        if pins[name] != value:
+            rep.add(
+                f"pin:{name}",
+                FAIL,
+                f"pyproject pins {pins[name]} but trace_core.stream.toolchain mirrors {value}",
+                "Change both together; tests/unit/test_stream_toolchain.py diffs them.",
+            )
+            return
+    jars = toolchain.pyspark_jars_dir()
+    _add_toolchain(rep, "pin:spark", toolchain.check_distribution("pyspark", pins["spark"]), phase)
+    _add_toolchain(
+        rep, "pin:delta", toolchain.check_distribution("delta-spark", pins["delta"]), phase
     )
+    _add_toolchain(rep, "pin:hadoop", toolchain.check_bundled("hadoop", jars), phase)
+    _add_toolchain(rep, "pin:scala", toolchain.check_bundled("scala", jars), phase)
+    findings = toolchain.check_locked_jars()
+    bad = [f for f in findings if not f.ok]
+    summary = toolchain.Finding(
+        "spark_jars",
+        not bad,
+        f"{len(findings) - len(bad)}/{len(findings)} locked jars verified"
+        + (f"; first problem: {bad[0].detail}" if bad else ""),
+        bad[0].remedy if bad else "",
+    )
+    _add_toolchain(rep, "spark_jars", summary, phase)
 
 
 def check_disk(rep: Report) -> None:
@@ -346,11 +392,9 @@ def main() -> int:
     p = pins()
     rep = Report()
     check_python(rep, p["python"])
-    check_java(rep, p["java"])
-    check_pin(rep, "spark", p["spark"], "pyspark")
-    check_pin(rep, "delta", p["delta"], "delta")
-    check_pin(rep, "hadoop", p["hadoop"])
-    check_pin(rep, "scala", p["scala"])
+    phase = current_phase()
+    check_java(rep, p["java"], phase)
+    check_stream_toolchain(rep, p, phase)
     check_disk(rep)
     check_docker(rep)
     check_ports(rep)

@@ -93,18 +93,18 @@ def test_every_feature_has_a_known_offline_translation() -> None:
 def test_exactly_the_declared_features_are_approximate() -> None:
     """Approximation is a property to be declared, not discovered later.
 
-    Only three features are estimates, and each for a stated reason (ADR-0034):
-    two distinct counts whose cardinality is bounded by the population sharing an
-    entity rather than by one entity's own behaviour, and a robust z-score whose
-    online median is computed over a bounded recent sample. Everything else must
-    agree EXACTLY with the offline computation, and a parity tolerance above zero
-    anywhere else would be hiding a bug (docs/DATA_ENGINEERING.md §4).
+    Only two features are estimates, for a stated reason (ADR-0034): distinct counts
+    whose cardinality is bounded by the population sharing an entity rather than by one
+    entity's own behaviour. The robust z-score was a third until ADR-0046 declared its
+    bounded sample -- the last 128 same-currency amounts -- to be the definition, so
+    every implementation now computes it exactly. Everything else must agree EXACTLY
+    with the offline computation, and a parity tolerance above zero anywhere else would
+    be hiding a bug (docs/DATA_ENGINEERING.md §4).
     """
     approximate = {s.feature_id for s in ONLINE_FEATURES if s.approximate}
     expected = {
         "ip_distinct_accounts_1h",
         "merchant_distinct_accounts_1h",
-        "amount_zscore_vs_account",
     }
     assert approximate == expected
 

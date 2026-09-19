@@ -39,21 +39,60 @@ from typing import Final
 
 from trace_core.contracts.canonical import CanonicalField, CanonicalTransaction
 from trace_core.domain.enums import FeatureSource
-from trace_core.domain.errors import FeatureUnavailableError
+from trace_core.domain.errors import FeatureUnavailableError, NonConformantFeatureSetError
 from trace_core.features.context import (
     INSUFFICIENT_HISTORY,
+    DepthCapped,
     FeatureContext,
     InsufficientHistory,
+    LifetimeUnobserved,
 )
-from trace_core.features.semantics import Semantics
+from trace_core.features.semantics import (
+    CurrentObservation,
+    ParityComparison,
+    Semantics,
+    WindowedAggregate,
+)
 
-FEATURE_SET_VERSION: Final = "1.0.0"
+FEATURE_SET_VERSION: Final = "6.0.0"
 """Bumped whenever a feature's MEANING changes.
 
 Recorded on every `RiskDecision` and in every run manifest: a latency or quality
 number produced by a different feature set is not comparable to one produced by
 this one, and a version is how a reader can tell.
 """
+
+SERVED_FEATURES_CONFORM: Final = True
+"""Whether the online path the gateway runs actually serves `FEATURE_SET_VERSION`.
+
+Feature set 4.0.0 bounds the score-time read (ADR-0046 §8): past `SCORE_READ_CAP`, content features
+and the negative and sample-based profile features are served absent rather than computed. The Redis
+store and the reference's as-served mode implement it against the same literal fixtures.
+
+True again from Stage 2 step 7 unit 2b (ADR-0049 §5, §6): the Redis store serves `declined_ratio_1h`
+from verified authorization outcomes and passes every literal fixture as served, and the gateway
+applies each durably recorded outcome online. It was False from feature set 3.0.0's declaration
+until then. A change that breaks either must set it back.
+
+False from ADR-0046's declaration until Phase 3 Step 1b made the Redis store and the gateway's
+score-time read conform to it: the store passes every literal fixture as served, recording and
+reading are one atomic operation, the completeness guard is wired, and identity events carry
+`X-Idempotency-Key` identities. While it was false, the version named the declared meaning rather
+than the values being served, so `require_served_conformance` refused and the load harness and the
+gateway replay called it before doing anything else. A change that breaks any of the four must set
+it back. A sentence in PROGRESS is not a control.
+"""
+
+
+def require_served_conformance(purpose: str) -> None:
+    """Refuse `purpose` while the served values do not implement `FEATURE_SET_VERSION`."""
+    if not SERVED_FEATURES_CONFORM:
+        raise NonConformantFeatureSetError(
+            f"{purpose} refused: feature set {FEATURE_SET_VERSION} is declared (ADR-0046) but "
+            f"the online store and the gateway's score-time read do not serve it yet, so any "
+            f"record would carry a version its values were not computed with. This lifts when "
+            f"they serve it and SERVED_FEATURES_CONFORM is set."
+        )
 
 
 class FeatureState(StrEnum):
@@ -91,10 +130,16 @@ class FeatureValue:
     reconciliation job is what makes `RECONCILED` reachable.
     """
     approximate: bool = False
-    """True when the online estimator is inexact by construction -- HyperLogLog
-    distinct counts (~0.81%, ADR-0003) and running robust-z estimates. The
-    parity tolerance for this feature must account for it, and widening a
-    tolerance to make a test pass is prohibited (docs/DATA_ENGINEERING.md §4)."""
+    """True when the online estimator is inexact by construction -- the HyperLogLog
+    distinct counts (ADR-0003, ADR-0034). The robust z-score is exact by declaration since
+    ADR-0046. The parity bound for an approximate feature is frozen in plan §4.3, and
+    widening it to make a test pass is prohibited (docs/DATA_ENGINEERING.md §4)."""
+    depth_capped: bool = False
+    """Absent because the bounded score-time read did not reach it (ADR-0046 §8): its lookback was
+    not vouched for, and the decision carries `history_depth_capped`. Never set on a value."""
+    lifetime_unobserved: bool = False
+    """Absent because the store's completeness began inside the account's lifetime (ADR-0046 §3), so
+    its start is unprovable: the lookback was not vouched for. Never set on a value."""
 
     @classmethod
     def of(
@@ -128,12 +173,23 @@ class FeatureValue:
         )
 
     @classmethod
-    def insufficient_history(cls, feature_id: str) -> FeatureValue:
-        """The source supplies the inputs; this entity has too little history."""
+    def insufficient_history(
+        cls,
+        feature_id: str,
+        *,
+        depth_capped: bool = False,
+        lifetime_unobserved: bool = False,
+    ) -> FeatureValue:
+        """The source supplies the inputs; this entity has too little history, the bounded
+        score-time read did not reach it (`depth_capped`, ADR-0046 §8), or the store cannot vouch
+        for
+        the lifetime's start (`lifetime_unobserved`, ADR-0046 §3)."""
         return cls(
             feature_id=feature_id,
             _value=None,
             state=FeatureState.INSUFFICIENT_HISTORY,
+            depth_capped=depth_capped,
+            lifetime_unobserved=lifetime_unobserved,
         )
 
     @property
@@ -238,13 +294,40 @@ class FeatureSpec:
             return FeatureValue.unavailable(self.feature_id, missing)
         result = self.compute(transaction, context)
         if isinstance(result, InsufficientHistory):
-            return FeatureValue.insufficient_history(self.feature_id)
+            return FeatureValue.insufficient_history(
+                self.feature_id,
+                depth_capped=isinstance(result, DepthCapped),
+                lifetime_unobserved=isinstance(result, LifetimeUnobserved),
+            )
         return FeatureValue.of(
             self.feature_id,
             float(result),
             source=context.source,
             approximate=self.approximate,
         )
+
+    @property
+    def current_observation(self) -> CurrentObservation:
+        """Whether the scored transaction is part of what this feature reads (ADR-0046 §2)."""
+        return self.semantics.current_observation
+
+    @property
+    def parity(self) -> ParityComparison:
+        """How implementations' values for this feature are compared (ADR-0046 §5)."""
+        return self.semantics.parity
+
+    @property
+    def currency_scoped(self) -> bool:
+        """Whether this feature's figures are confined to the scored transaction's currency.
+
+        Derived from the declaration rather than chosen per implementation (ADR-0046): a
+        feature that needs `currency` among its required fields sums or compares amounts,
+        which only exist within one currency; every other feature counts observations,
+        and an observation in another currency still happened. Phase 3 planning found the
+        online store keying whole profiles by currency, so a purchase in euros at a
+        merchant the account used weekly in pounds read as a novel merchant.
+        """
+        return CanonicalField.CURRENCY in self.required_fields
 
     def is_computable_on(self, coverage: frozenset[CanonicalField]) -> bool:
         """Whether this feature can run against a source with `coverage`.
@@ -269,6 +352,22 @@ class FeatureRegistry:
     def register(self, spec: FeatureSpec) -> FeatureSpec:
         if spec.feature_id in self._specs:
             raise ValueError(f"feature {spec.feature_id!r} is already registered")
+        if isinstance(spec.semantics, WindowedAggregate):
+            shape = spec.semantics
+            for other in self._specs.values():
+                theirs = other.semantics
+                if (
+                    isinstance(theirs, WindowedAggregate)
+                    and (theirs.entity, theirs.stream, theirs.window)
+                    == (shape.entity, shape.stream, shape.window)
+                    and theirs.current_observation is not shape.current_observation
+                ):
+                    raise ValueError(
+                        f"{spec.feature_id!r} and {other.feature_id!r} read the same window "
+                        f"({shape.entity}, {shape.stream}, {shape.window.label}) but disagree "
+                        f"about whether the scored transaction is inside it. One window state "
+                        f"cannot mean both (ADR-0046 §2)."
+                    )
         self._specs[spec.feature_id] = spec
         return spec
 
@@ -311,9 +410,11 @@ class FeatureRegistry:
 __all__ = [
     "FEATURE_SET_VERSION",
     "INSUFFICIENT_HISTORY",
+    "SERVED_FEATURES_CONFORM",
     "Compute",
     "FeatureRegistry",
     "FeatureSpec",
     "FeatureState",
     "FeatureValue",
+    "require_served_conformance",
 ]

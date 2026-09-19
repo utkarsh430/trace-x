@@ -1,265 +1,570 @@
-"""A naive, obviously-correct `FeatureContext` builder.
+"""A naive, obviously-correct implementation of the declared feature semantics.
 
-ROADMAP Phase 2 requires "feature correctness against a naive reference
-implementation". This is it: it holds every observation in a list and answers
-each question by scanning, with no windows to trim, no HyperLogLog, no running
-estimators, and no Redis.
+ROADMAP Phase 2 requires "feature correctness against a naive reference implementation". This
+is it: it holds every recorded observation in a list, in the order it recorded them, and answers
+each question by scanning, with no windows to trim, no HyperLogLog, no running estimators and no
+Redis.
 
-**It is not a test double.** It is a genuine second implementation of the same
-declared semantics, and it is the reason the Redis store has something to be
-wrong *against*. A conformance suite (`tests/conformance/feature_semantics_suite.py`)
-runs both and requires them to agree; Phase 3 adds Spark as a third
-implementation of the same suite, which is how feature parity gets verified
-without anyone redefining what a feature means.
+**It is not a test double.** It is a genuine second implementation of the declarations in
+`trace_core.features` (ADR-0032, ADR-0046), and it is the reason the Redis store has something to
+be wrong *against*. It is not the oracle either: the literal fixtures in
+`tests/conformance/feature_semantics_suite.py` are, and this implementation must agree with them
+like every other.
 
-It is deliberately O(n) per query and unsuitable for production. Reading it
-should make the window boundary, the currency partition and the dedup rule
-obvious by inspection, because that is what "reference" has to mean for a
-disagreement to be attributable.
+**Two evaluation modes, one scan** (`EvaluationMode`, ADR-0046 §1):
+
+* `ReferenceFeatureStore.score` is AS_SERVED: the scored transaction is recorded, then the read
+  sees exactly the observations recorded up to and including it.
+* `event_time_complete_context` is EVENT_TIME_COMPLETE: every observation, whatever order it
+  arrived in, with ties at the scored transaction's millisecond broken by identity.
+
+Both reduce to `build_context`, so the modes differ in exactly two places -- which observations
+are visible, and where an INCLUDED window's upper edge falls -- and nowhere else.
+
+It is deliberately O(n) per query and unsuitable for production. Reading it should make the
+window boundary, the currency scope, the dedup rule and the tie-break obvious by inspection,
+because that is what "reference" has to mean for a disagreement to be attributable.
 """
 
 from __future__ import annotations
 
-import statistics
-from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, field
+import datetime as dt
+import functools
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from typing import Final
 
-from trace_core.domain.enums import AuthorizationOutcome, FeatureSource, TransactionChannel
-from trace_core.domain.time import EventTime
-from trace_core.features.context import (
-    MIN_OBSERVATIONS_FOR_ROBUST_Z,
-    FeatureContext,
-    Observation,
-    Profile,
-    WindowState,
+from trace_core.domain.enums import AuthorizationOutcome, FeatureSource
+from trace_core.domain.time import EventTime, from_millis, to_millis
+from trace_core.features.context import FeatureContext, Observation, Profile, WindowState
+from trace_core.features.observation import (
+    Event,
+    IdentityNamespace,
+    ObserveReceipt,
+    ServedRead,
+    Verification,
 )
-from trace_core.features.semantics import WINDOWS, Dimension, Entity, Stream
+from trace_core.features.profile_math import geodesic_medoid, robust_centre
+from trace_core.features.semantics import (
+    ALIGNED_MINUTE_MS,
+    AMOUNT_SAMPLE_SIZE,
+    APPROXIMATE_BUCKET_MS,
+    HABITUAL_MIN_VISITS,
+    HOME_SAMPLE_SIZE,
+    PROFILE_LIFETIME_GAP_S,
+    SCORE_READ_CAP,
+    WINDOWS,
+    CardinalityStorage,
+    CurrentObservation,
+    Dimension,
+    Entity,
+    EvaluationMode,
+    Stream,
+    Window,
+    WindowedAggregate,
+)
 
-HABITUAL_MIN_VISITS: Final = 3
-"""Visits before a merchant or category counts as habitual for an account.
-
-A single visit is not a habit, and treating it as one would make
-`merchant_is_habitual` true for exactly the merchants a takeover just used.
-"""
+_LIFETIME_GAP_MS: Final = PROFILE_LIFETIME_GAP_S * 1000
 
 
 @dataclass(frozen=True, slots=True)
-class Event:
-    """One observation, flat, with everything any feature might read.
+class ReadScope:
+    """What one read is about: the instant, the scope, and the current observation."""
 
-    Deliberately not `CanonicalTransaction`: identity events are observations
-    too, and forcing them into a transaction shape would misrepresent them --
-    the same reason the generator emits `identity.events.v1` rather than
-    encoding a login as a payment (docs/FRAUD_SCENARIOS.md §2).
-    """
-
-    stream: Stream
-    occurred_at: EventTime
-    account_id: str
-    currency: str = ""
-    amount_minor: int = 0
-    card_id: str | None = None
-    device_id: str | None = None
-    merchant_id: str | None = None
-    ip_id: str | None = None
-    merchant_mcc: str | None = None
-    merchant_country: str | None = None
-    latitude: float | None = None
-    longitude: float | None = None
-    channel: TransactionChannel | None = None
-    authorization_outcome: AuthorizationOutcome | None = None
-    event_id: str = ""
-    """Stable identity for this observation.
-
-    The online store uses it as the sorted-set member, so replaying the same
-    event updates in place instead of double-counting -- delivery is at-least-once
-    by design (docs/EVENT_CONTRACTS.md §5) and every consumer must be idempotent.
-    Defaults to empty for the reference implementation, which holds observations
-    in a list and never deduplicates: the two agree because tests supply distinct
-    events, and a test that replays one asserts the difference deliberately.
-    """
+    as_of_ms: int
+    currency: str
+    current: Event | None
+    """The scored transaction's recorded observation -- its first delivery -- or None for a
+    read-only snapshot, which scores nothing."""
+    mode: EvaluationMode
 
     @property
-    def dedup_key(self) -> str:
-        """What identifies this observation inside a sorted set.
+    def identity(self) -> str | None:
+        return None if self.current is None else self.current.identity
 
-        Falls back to the full field tuple when no `event_id` is supplied, so two
-        genuinely different observations never collide -- a collision would
-        silently undercount velocity, which is the feature family hardest to
-        notice being wrong.
-        """
-        if self.event_id:
-            return self.event_id
-        return (
-            f"{self.stream.value}|{self.occurred_at.timestamp()}|{self.account_id}"
-            f"|{self.amount_minor}|{self.merchant_id}|{self.device_id}|{self.card_id}"
+    @property
+    def current_key(self) -> tuple[int, str, str] | None:
+        return None if self.current is None else self.current.order_key
+
+
+@functools.cache
+def _declared_current(entity: Entity, stream: Stream, window: Window) -> CurrentObservation:
+    """What the released features declare for this window. A window no feature reads is
+    computed as INCLUDED; nothing reads it, and the registry refuses a conflicting pair."""
+    from trace_core.features.definitions import ONLINE_FEATURES
+
+    for spec in ONLINE_FEATURES:
+        shape = spec.semantics
+        if isinstance(shape, WindowedAggregate) and (shape.entity, shape.stream, shape.window) == (
+            entity,
+            stream,
+            window,
+        ):
+            return shape.current_observation
+    return CurrentObservation.INCLUDED
+
+
+def _in_window(
+    event: Event, *, lower_ms: int, read: ReadScope, declared: CurrentObservation
+) -> bool:
+    """Half-open `(as_of - W, as_of]`, with the upper edge the declaration and the mode define."""
+    if event.occurred_ms <= lower_ms:
+        return False
+    if declared is CurrentObservation.EXCLUDED:
+        return event.occurred_ms < read.as_of_ms
+    key = read.current_key
+    if read.mode is EvaluationMode.AS_SERVED or key is None:
+        # Everything visible was recorded no later than the read, so any observation at the
+        # scored millisecond that the read can see arrived before it.
+        return event.occurred_ms <= read.as_of_ms
+    return event.order_key <= key
+
+
+def _aligned(observations: Sequence[Event], *, read: ReadScope, window: Window) -> list[Event]:
+    """The merchant CV's declared minute-aligned, same-currency window (ADR-0046 §2)."""
+    lower_minute = (read.as_of_ms - window.seconds * 1000) // ALIGNED_MINUTE_MS
+    upper_minute = read.as_of_ms // ALIGNED_MINUTE_MS
+    return [
+        e
+        for e in observations
+        if e.currency == read.currency
+        and e.identity != read.identity
+        and lower_minute < e.occurred_ms // ALIGNED_MINUTE_MS < upper_minute
+    ]
+
+
+def verification(outcome: Event, transactions: Mapping[str, str]) -> Verification:
+    """Whether an authorization outcome may reach a feature (ADR-0049 §2).
+
+    `transactions` maps every transaction id the read may see to its account."""
+    account = transactions.get(outcome.event_id)
+    if account is None:
+        return Verification.PENDING
+    if account != outcome.account_id:
+        return Verification.REJECTED
+    return Verification.VERIFIED
+
+
+_OBSERVED_OUTCOMES: Final = frozenset(
+    {AuthorizationOutcome.APPROVED, AuthorizationOutcome.DECLINED}
+)
+
+
+def _outcome_window(
+    observations: Sequence[Event],
+    *,
+    read: ReadScope,
+    window: Window,
+    transactions: Mapping[str, str],
+) -> WindowState | None:
+    """`PRIOR_KNOWN` over authorization outcomes (ADR-0049 §5).
+
+    An outcome counts when it is verified against a transaction the read may see, when it was
+    decided strictly inside `(as_of - W, as_of)`, and when it is not the scored transaction's own,
+    whatever its time. One decided at `as_of` is not yet known; one exactly a window old is outside,
+    as for every window. A value neither approved nor declined counts in neither."""
+    lower_ms = read.as_of_ms - window.seconds * 1000
+    own = None if read.current is None else read.current.event_id
+    members = [
+        e
+        for e in observations
+        if lower_ms < e.occurred_ms < read.as_of_ms
+        and e.event_id != own
+        and verification(e, transactions) is Verification.VERIFIED
+        and e.authorization_outcome in _OBSERVED_OUTCOMES
+    ]
+    if not members:
+        return None
+    return WindowState(
+        count=len(members),
+        declined_count=sum(
+            1 for e in members if e.authorization_outcome is AuthorizationOutcome.DECLINED
+        ),
+        outcome_known_count=len(members),
+    )
+
+
+def window_state(
+    observations: Sequence[Event],
+    *,
+    read: ReadScope,
+    entity: Entity,
+    stream: Stream,
+    window: Window,
+    transactions: Mapping[str, str] | None = None,
+) -> WindowState | None:
+    from trace_core.features.state_plan import PLAN
+
+    if stream is Stream.AUTHORIZATION_OUTCOME:
+        return _outcome_window(
+            observations, read=read, window=window, transactions=transactions or {}
         )
+    declared = _declared_current(entity, stream, window)
+    lower_ms = read.as_of_ms - window.seconds * 1000
+    members = [
+        e for e in observations if _in_window(e, lower_ms=lower_ms, read=read, declared=declared)
+    ]
+    same_currency = [e for e in members if e.currency == read.currency]
+    contributed = bool(members)
 
-    def entity_id(self, entity: Entity) -> str | None:
-        return {
-            Entity.ACCOUNT: self.account_id,
-            Entity.CARD: self.card_id,
-            Entity.DEVICE: self.device_id,
-            Entity.MERCHANT: self.merchant_id,
-            Entity.IP: self.ip_id,
-        }[entity]
+    distinct: dict[Dimension, int] = {}
+    for dimension in Dimension:
+        if PLAN.storage(entity, dimension) is CardinalityStorage.APPROXIMATE:
+            if declared is CurrentObservation.EXCLUDED:
+                raise NotImplementedError(
+                    "no estimand is declared for an approximate distinct count that excludes "
+                    "the scored transaction"
+                )
+            # The declared estimand: five-minute buckets inclusive at both edges, the one
+            # exception to strict event time (ADR-0046 §2).
+            first = lower_ms // APPROXIMATE_BUCKET_MS
+            last = read.as_of_ms // APPROXIMATE_BUCKET_MS
+            pool = [
+                e for e in observations if first <= e.occurred_ms // APPROXIMATE_BUCKET_MS <= last
+            ]
+        else:
+            pool = members
+        values = {v for e in pool if (v := e.dimension_value(dimension)) is not None}
+        if values:
+            distinct[dimension] = len(values)
+            contributed = True
 
-    def dimension_value(self, dimension: Dimension) -> str | None:
-        return {
-            Dimension.MERCHANT: self.merchant_id,
-            Dimension.MCC: self.merchant_mcc,
-            Dimension.DEVICE: self.device_id,
-            Dimension.COUNTRY: self.merchant_country,
-            Dimension.ACCOUNT: self.account_id,
-        }[dimension]
+    aligned = _aligned(observations, read=read, window=window)
+    current = read.current
+    if (
+        declared is CurrentObservation.INCLUDED
+        and current is not None
+        and current.currency == read.currency
+        and any(e.identity == current.identity for e in observations)
+    ):
+        aligned.append(current)
+    contributed = contributed or bool(aligned)
 
-    @property
-    def card_present(self) -> bool:
-        return self.channel is TransactionChannel.CARD_PRESENT
+    if not contributed:
+        return None
+    return WindowState(
+        count=len(members),
+        amount_sum_minor=sum(e.amount_minor for e in same_currency),
+        amount_sum_squares=sum(e.amount_minor * e.amount_minor for e in same_currency),
+        distinct=distinct,
+        aligned_count=len(aligned),
+        aligned_amount_sum_minor=sum(e.amount_minor for e in aligned),
+        aligned_amount_sum_squares=sum(e.amount_minor * e.amount_minor for e in aligned),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class DepthCap:
+    """What a capped as-served read sees of an account's transactions (ADR-0046 §8)."""
+
+    read: frozenset[str]
+    """The identities of the most recent `SCORE_READ_CAP` transactions at or before `as_of`."""
+    raw_from_ms: int
+    """Transactions dated before this are the folded prefix, which the read sees too."""
+
+    def sees(self, event: Event) -> bool:
+        return event.occurred_ms < self.raw_from_ms or event.identity in self.read
+
+
+def depth_cap(transactions: Sequence[Event], read: ReadScope) -> DepthCap | None:
+    """The cap on an as-served read of an account's transactions, or None when it reads them whole.
+
+    Capped when more than `SCORE_READ_CAP` of the transactions a store holds raw -- dated at or
+    before `as_of`, and no further behind it than the raw history -- are visible. The read then
+    holds the most recent `SCORE_READ_CAP` in the declared order, plus the folded prefix before the
+    raw history, and nothing between them."""
+    from trace_core.features.state_plan import PLAN
+
+    raw_from_ms = read.as_of_ms - PLAN.account_raw_ms((Stream.TRANSACTION,))
+    held = sorted(
+        (e for e in transactions if raw_from_ms <= e.occurred_ms <= read.as_of_ms),
+        key=lambda e: e.order_key,
+    )
+    if len(held) <= SCORE_READ_CAP:
+        return None
+    newest = held[-SCORE_READ_CAP:]
+    return DepthCap(read=frozenset(e.identity for e in newest), raw_from_ms=raw_from_ms)
+
+
+def depth_capped_profile(
+    profile: Profile, *, in_read: Sequence[Event], currency: str, start_in_prefix: bool
+) -> Profile:
+    """Keep what a capped read still answers exactly (ADR-0046 §8).
+
+    `profile` was reduced from what the read saw: the folded prefix and `in_read`, the lifetime's
+    transactions inside the capped read. Its sets hold only members that are certain. The amount
+    sample and the home sample are the declared ones only when the read holds each whole, and
+    first-seen is the lifetime's start only when the prefix holds it."""
+    sample_whole = sum(1 for e in in_read if e.currency == currency) >= AMOUNT_SAMPLE_SIZE
+    home_whole = sum(1 for e in in_read if e.located) >= HOME_SAMPLE_SIZE
+    return replace(
+        profile,
+        first_seen_at=profile.first_seen_at if start_in_prefix else None,
+        observation_count=profile.observation_count if sample_whole else 0,
+        amount_median_minor=profile.amount_median_minor if sample_whole else None,
+        amount_mad_minor=profile.amount_mad_minor if sample_whole else None,
+        home_latitude=profile.home_latitude if home_whole else None,
+        home_longitude=profile.home_longitude if home_whole else None,
+        depth_capped=True,
+    )
+
+
+def lifetime_profile(
+    transactions: Sequence[Event], read: ReadScope, cap: DepthCap | None = None
+) -> Profile | None:
+    """The account's lifetime strictly before `as_of`, reduced (ADR-0046 §3).
+
+    Strictly before, in both modes: a transaction entering its own baseline would make every
+    transaction look normal relative to itself, and excluding the whole millisecond keeps the
+    baseline independent of arrival order at a tie.
+
+    With a `cap`, only what a capped as-served read sees is reduced, and only what that still
+    answers exactly is kept (ADR-0046 §8).
+    """
+    history = sorted(
+        (e for e in transactions if e.occurred_ms < read.as_of_ms and e.identity != read.identity),
+        key=lambda e: e.order_key,
+    )
+    if not history or read.as_of_ms - history[-1].occurred_ms >= _LIFETIME_GAP_MS:
+        return None
+    start = 0
+    for index in range(len(history) - 1, 0, -1):
+        if history[index].occurred_ms - history[index - 1].occurred_ms >= _LIFETIME_GAP_MS:
+            start = index
+            break
+    lifetime = history[start:]
+    in_read: list[Event] = []
+    start_in_prefix = False
+    if cap is not None:
+        in_read = [e for e in lifetime if e.identity in cap.read]
+        if not in_read:
+            return Profile(depth_capped=True)
+        start_in_prefix = lifetime[0].occurred_ms < cap.raw_from_ms
+        lifetime = [e for e in lifetime if cap.sees(e)]
+
+    amounts = [abs(e.amount_minor) for e in lifetime if e.currency == read.currency]
+    sample = amounts[-AMOUNT_SAMPLE_SIZE:]
+    centre = robust_centre(sample)
+
+    located = [
+        (e.occurred_ms, e.identity, e.latitude, e.longitude)
+        for e in lifetime
+        if e.latitude is not None and e.longitude is not None
+    ][-HOME_SAMPLE_SIZE:]
+    home = geodesic_medoid(located)
+
+    def _habitual(values: Iterable[str | None]) -> frozenset[str]:
+        visits: dict[str, int] = {}
+        for value in values:
+            if value is not None:
+                visits[value] = visits.get(value, 0) + 1
+        return frozenset(k for k, n in visits.items() if n >= HABITUAL_MIN_VISITS)
+
+    profile = Profile(
+        first_seen_at=EventTime(from_millis(lifetime[0].occurred_ms)),
+        observation_count=len(sample),
+        amount_median_minor=None if centre is None else centre[0],
+        amount_mad_minor=None if centre is None else centre[1],
+        habitual_merchants=_habitual(e.merchant_id for e in lifetime),
+        habitual_mccs=_habitual(e.merchant_mcc for e in lifetime),
+        known_devices=frozenset(e.device_id for e in lifetime if e.device_id is not None),
+        home_latitude=None if home is None else home[0],
+        home_longitude=None if home is None else home[1],
+    )
+    if cap is None:
+        return profile
+    return depth_capped_profile(
+        profile, in_read=in_read, currency=read.currency, start_in_prefix=start_in_prefix
+    )
+
+
+def previous_observation(
+    observations: Sequence[Event], read: ReadScope, lookback: Window
+) -> Observation | None:
+    """The latest `(occurred_ms, identity)` strictly before `as_of`, inside the lookback."""
+    lower_ms = read.as_of_ms - lookback.seconds * 1000
+    earlier = [
+        e
+        for e in observations
+        if lower_ms < e.occurred_ms < read.as_of_ms and e.identity != read.identity
+    ]
+    if not earlier:
+        return None
+    latest = max(earlier, key=lambda e: e.order_key)
+    return Observation(
+        occurred_at=EventTime(from_millis(latest.occurred_ms)),
+        latitude=latest.latitude,
+        longitude=latest.longitude,
+        card_present=latest.card_present,
+    )
+
+
+def build_context(
+    visible: Sequence[Event],
+    *,
+    as_of_ms: int,
+    currency: str,
+    ids: dict[Entity, str | None],
+    current: Event | None,
+    mode: EvaluationMode,
+    complete_since: EventTime | None,
+) -> FeatureContext:
+    """Every value the feature set reads, from the observations this read may see.
+
+    `visible` holds each identity at most once (its first delivery). For AS_SERVED it is the
+    store's log up to the read's position; for EVENT_TIME_COMPLETE it is everything.
+    """
+    from trace_core.features.state_plan import PLAN
+
+    read = ReadScope(as_of_ms=as_of_ms, currency=currency, current=current, mode=mode)
+    # Every transaction this read may see, for verifying authorization outcomes (ADR-0049 §5).
+    known_transactions = {
+        e.event_id: e.account_id for e in visible if e.stream is Stream.TRANSACTION
+    }
+    windows: dict[tuple[Entity, str, Stream, str], WindowState] = {}
+    for entity, entity_id in ids.items():
+        if entity_id is None:
+            continue
+        mine = [e for e in visible if e.entity_id(entity) == entity_id]
+        for stream in Stream:
+            on_stream = [e for e in mine if e.stream is stream]
+            for window in WINDOWS:
+                state = window_state(
+                    on_stream,
+                    read=read,
+                    entity=entity,
+                    stream=stream,
+                    window=window,
+                    transactions=known_transactions,
+                )
+                if (
+                    state is not None
+                    and mode is EvaluationMode.AS_SERVED
+                    and (entity, stream) in PLAN.content_reads
+                    and state.count > SCORE_READ_CAP
+                ):
+                    # ADR-0046 §8: the count stays exact; the content past the cap is not read.
+                    state = WindowState(count=state.count, content_capped=True)
+                if state is not None:
+                    windows[(entity, entity_id, stream, window.label)] = state
+
+    profiles: dict[tuple[Entity, str], Profile] = {}
+    account_id = ids.get(Entity.ACCOUNT)
+    if account_id is not None:
+        transactions = [
+            e for e in visible if e.stream is Stream.TRANSACTION and e.account_id == account_id
+        ]
+        cap = depth_cap(transactions, read) if mode is EvaluationMode.AS_SERVED else None
+        if (profile := lifetime_profile(transactions, read, cap)) is not None:
+            profiles[(Entity.ACCOUNT, account_id)] = profile
+
+    previous: dict[tuple[Entity, str, Stream], Observation] = {}
+    for (entity, stream), lookback in PLAN.previous.items():
+        entity_id = ids.get(entity)
+        if entity_id is None:
+            continue
+        on_stream = [e for e in visible if e.stream is stream and e.entity_id(entity) == entity_id]
+        if (observation := previous_observation(on_stream, read, lookback)) is not None:
+            previous[(entity, entity_id, stream)] = observation
+
+    return FeatureContext(
+        as_of=EventTime(from_millis(as_of_ms)),
+        source=FeatureSource.ONLINE_ONLY,
+        windows=windows,
+        profiles=profiles,
+        previous=previous,
+        complete_since=complete_since,
+        distinct_dimensions={e: PLAN.distinct_dimensions(e) for e in Entity},
+    )
+
+
+def _ids(event: Event) -> dict[Entity, str | None]:
+    return {entity: event.entity_id(entity) for entity in Entity}
 
 
 @dataclass
 class ReferenceFeatureStore:
-    """Accumulates events and answers feature questions by scanning them."""
+    """Records observations in order and answers feature questions by scanning them."""
 
-    events: list[Event] = field(default_factory=list)
     complete_since: EventTime | None = None
     """When this store began recording, on the event-time axis.
 
-    None -- the default -- means the store does not claim completeness for any
-    period, and every absent window reads as `INSUFFICIENT_HISTORY`, which is
-    the pre-ADR-0044 behaviour and what the existing conformance suite pins.
-    Set it, and the store vouches for every window that began after it: an
-    absent window is then a measured zero. The Redis store reads the same value
-    from its epoch key, so the two can be handed identical histories and
-    identical epochs and asked to agree."""
+    None -- the default -- means the store does not claim completeness for any period, and
+    every absent window reads as `INSUFFICIENT_HISTORY`. Set it, and the store vouches for every
+    window that began after it: an absent window is then a measured zero (ADR-0044)."""
+    _log: list[Event] = field(default_factory=list, init=False)
+    _recorded: dict[str, Event] = field(default_factory=dict, init=False)
 
-    def observe(self, event: Event) -> None:
-        self.events.append(event)
+    @property
+    def events(self) -> tuple[Event, ...]:
+        """Recorded observations in recording order, one per identity."""
+        return tuple(self._log)
+
+    def establish_epoch(self, *, at: EventTime | None = None) -> EventTime:
+        """When recording began, if not already said: an existing claim is never moved earlier."""
+        if self.complete_since is None:
+            self.complete_since = (
+                at if at is not None else EventTime(from_millis(to_millis(dt.datetime.now(dt.UTC))))
+            )
+        return self.complete_since
+
+    def withdraw_completeness(self, *, resume_at: EventTime) -> None:
+        """Vouch for no window that began before `resume_at`, keeping any later claim
+        (ADR-0046 §5): a withdrawal never moves completeness backwards."""
+        if self.complete_since is None or self.complete_since < resume_at:
+            self.complete_since = resume_at
+
+    def observe(self, event: Event) -> ObserveReceipt:
+        """Record an observation unless its identity already was (ADR-0046 §1).
+
+        An authorization outcome's receipt says whether it is verified yet (ADR-0049 §6)."""
+        if (first := self._recorded.get(event.identity)) is not None:
+            return ObserveReceipt(
+                position=len(self._log),
+                recorded=False,
+                conflicting=first.recorded_form() != event.recorded_form(),
+                verification=self._verification(first),
+            )
+        self._log.append(event)
+        self._recorded[event.identity] = event
+        return ObserveReceipt(
+            position=len(self._log), recorded=True, verification=self._verification(event)
+        )
+
+    def _verification(self, event: Event) -> Verification | None:
+        if event.stream is not Stream.AUTHORIZATION_OUTCOME:
+            return None
+        transaction = self._recorded.get(f"{IdentityNamespace.TRANSACTION.value}:{event.event_id}")
+        known = {} if transaction is None else {transaction.event_id: transaction.account_id}
+        return verification(event, known)
 
     def observe_all(self, events: Iterable[Event]) -> None:
         for event in events:
             self.observe(event)
 
-    # -- windows ------------------------------------------------------------
+    def score(self, event: Event) -> ServedRead:
+        """Record the scored transaction, then read with it as the current observation.
 
-    def _in_window(
-        self, entity: Entity, entity_id: str, stream: Stream, as_of: EventTime, seconds: int
-    ) -> list[Event]:
-        """Half-open `(as_of - seconds, as_of]`, matching `Window`'s contract.
-
-        Written as an explicit scan so the boundary is readable: an observation
-        exactly `seconds` old is OUTSIDE, and one at `as_of` is inside. Both
-        implementations must agree here, and a one-observation disagreement at
-        the edge is exactly the kind of drift nobody manages to attribute.
+        A redelivery is read at its FIRST delivery -- that is the observation (ADR-0046 §1) --
+        against the store as it is now.
         """
-        lower = as_of.timestamp() - seconds
-        return [
-            e
-            for e in self.events
-            if e.stream is stream
-            and e.entity_id(entity) == entity_id
-            and lower < e.occurred_at.timestamp() <= as_of.timestamp()
-        ]
-
-    def _window_state(self, events: Sequence[Event], currency: str) -> WindowState:
-        # Amount aggregates are partitioned by currency; counts are not. A
-        # transaction in another currency still happened, and hiding it from the
-        # velocity count would understate exactly the burst we are looking for.
-        same_currency = [e for e in events if e.currency == currency]
-        outcomes = [e for e in events if e.authorization_outcome is not None]
-        distinct: dict[Dimension, int] = {}
-        for dimension in Dimension:
-            values = {v for e in events if (v := e.dimension_value(dimension)) is not None}
-            if values:
-                distinct[dimension] = len(values)
-        return WindowState(
-            count=len(events),
-            amount_sum_minor=sum(e.amount_minor for e in same_currency),
-            amount_sum_squares=sum(e.amount_minor * e.amount_minor for e in same_currency),
-            declined_count=sum(
-                1 for e in outcomes if e.authorization_outcome is AuthorizationOutcome.DECLINED
-            ),
-            outcome_known_count=len(outcomes),
-            distinct=distinct,
+        receipt = self.observe(event)
+        current = self._recorded[event.identity]
+        context = build_context(
+            self._log[: receipt.position],
+            as_of_ms=current.occurred_ms,
+            currency=current.currency,
+            ids=_ids(current),
+            current=current,
+            mode=EvaluationMode.AS_SERVED,
+            complete_since=self.complete_since,
         )
-
-    # -- profiles -----------------------------------------------------------
-
-    def _profile(self, account_id: str, as_of: EventTime, currency: str) -> Profile | None:
-        """Everything known about an account STRICTLY BEFORE `as_of`.
-
-        Strictly before, because a transaction may not contribute to the profile
-        it is scored against -- that is leakage, and it would make every
-        transaction look normal relative to itself.
-        """
-        history = [
-            e
-            for e in self.events
-            if e.stream is Stream.TRANSACTION
-            and e.account_id == account_id
-            and e.occurred_at.timestamp() < as_of.timestamp()
-        ]
-        if not history:
-            return None
-        amounts = [abs(e.amount_minor) for e in history if e.currency == currency]
-        median = mad = None
-        if len(amounts) >= MIN_OBSERVATIONS_FOR_ROBUST_Z:
-            median = float(statistics.median(amounts))
-            mad = float(statistics.median([abs(a - median) for a in amounts]))
-
-        def _habitual(values: list[str | None]) -> frozenset[str]:
-            counts: dict[str, int] = {}
-            for value in values:
-                if value is not None:
-                    counts[value] = counts.get(value, 0) + 1
-            return frozenset(k for k, n in counts.items() if n >= HABITUAL_MIN_VISITS)
-
-        located = [e for e in history if e.latitude is not None and e.longitude is not None]
-        return Profile(
-            first_seen_at=min(e.occurred_at for e in history),
-            observation_count=len(amounts),
-            amount_median_minor=median,
-            amount_mad_minor=mad,
-            habitual_merchants=_habitual([e.merchant_id for e in history]),
-            habitual_mccs=_habitual([e.merchant_mcc for e in history]),
-            known_devices=frozenset(e.device_id for e in history if e.device_id is not None),
-            home_latitude=(
-                statistics.median([e.latitude for e in located if e.latitude is not None])
-                if located
-                else None
-            ),
-            home_longitude=(
-                statistics.median([e.longitude for e in located if e.longitude is not None])
-                if located
-                else None
-            ),
+        epoch = self.complete_since
+        return ServedRead(
+            receipt=receipt,
+            context=context,
+            store_epoch_ms=None if epoch is None else to_millis(epoch),
         )
-
-    # -- previous observation ----------------------------------------------
-
-    def _previous(
-        self, entity: Entity, entity_id: str, stream: Stream, as_of: EventTime
-    ) -> Observation | None:
-        earlier = [
-            e
-            for e in self.events
-            if e.stream is stream
-            and e.entity_id(entity) == entity_id
-            and e.occurred_at.timestamp() < as_of.timestamp()
-        ]
-        if not earlier:
-            return None
-        latest = max(earlier, key=lambda e: e.occurred_at.timestamp())
-        return Observation(
-            occurred_at=latest.occurred_at,
-            latitude=latest.latitude,
-            longitude=latest.longitude,
-            card_present=latest.card_present,
-        )
-
-    # -- the snapshot -------------------------------------------------------
 
     def snapshot(
         self,
@@ -272,49 +577,65 @@ class ReferenceFeatureStore:
         merchant_id: str | None = None,
         ip_id: str | None = None,
     ) -> FeatureContext:
-        """Read everything the feature set needs for one transaction.
+        """A read-only read with no current observation.
 
-        Mirrors what the Redis store reads in a single pipeline, so the two are
-        asked the same questions in the same order.
+        What a scoring read degrades to when the store refused to record the transaction: its
+        windows then describe the store as it is, without the transaction in them, and the
+        decision says so (ADR-0046 §5).
         """
-        ids: dict[Entity, str | None] = {
-            Entity.ACCOUNT: account_id,
-            Entity.CARD: card_id,
-            Entity.DEVICE: device_id,
-            Entity.MERCHANT: merchant_id,
-            Entity.IP: ip_id,
-        }
-        windows: dict[tuple[Entity, str, Stream, str], WindowState] = {}
-        for entity, entity_id in ids.items():
-            if entity_id is None:
-                continue
-            for stream in Stream:
-                for window in WINDOWS:
-                    events = self._in_window(entity, entity_id, stream, as_of, window.seconds)
-                    if events:
-                        windows[(entity, entity_id, stream, window.label)] = self._window_state(
-                            events, currency
-                        )
-
-        profiles: dict[tuple[Entity, str], Profile] = {}
-        if (profile := self._profile(account_id, as_of, currency)) is not None:
-            profiles[(Entity.ACCOUNT, account_id)] = profile
-
-        previous: dict[tuple[Entity, str, Stream], Observation] = {}
-        for stream in Stream:
-            if (
-                observation := self._previous(Entity.ACCOUNT, account_id, stream, as_of)
-            ) is not None:
-                previous[(Entity.ACCOUNT, account_id, stream)] = observation
-
-        from trace_core.features.state_plan import PLAN
-
-        return FeatureContext(
-            as_of=as_of,
-            source=FeatureSource.ONLINE_ONLY,
-            windows=windows,
-            profiles=profiles,
-            previous=previous,
+        return build_context(
+            self._log,
+            as_of_ms=to_millis(as_of),
+            currency=currency,
+            ids={
+                Entity.ACCOUNT: account_id,
+                Entity.CARD: card_id,
+                Entity.DEVICE: device_id,
+                Entity.MERCHANT: merchant_id,
+                Entity.IP: ip_id,
+            },
+            current=None,
+            mode=EvaluationMode.AS_SERVED,
             complete_since=self.complete_since,
-            distinct_dimensions={e: PLAN.distinct_dimensions(e) for e in Entity},
         )
+
+
+def event_time_complete_context(
+    events: Iterable[Event], subject: Event, *, complete_since: EventTime | None = None
+) -> FeatureContext:
+    """The EVENT_TIME_COMPLETE context for `subject`, from every observation in any order.
+
+    Deliveries are deduplicated to the first per identity, in the order given -- the order
+    they arrived in, which is what "first delivery" means offline as well.
+    """
+    first: dict[str, Event] = {}
+    for event in events:
+        first.setdefault(event.identity, event)
+    current = first.get(subject.identity)
+    anchor = subject if current is None else current
+    return build_context(
+        list(first.values()),
+        as_of_ms=anchor.occurred_ms,
+        currency=anchor.currency,
+        ids=_ids(anchor),
+        current=current,
+        mode=EvaluationMode.EVENT_TIME_COMPLETE,
+        complete_since=complete_since,
+    )
+
+
+__all__ = [
+    "HABITUAL_MIN_VISITS",
+    "DepthCap",
+    "Event",
+    "ReadScope",
+    "ReferenceFeatureStore",
+    "build_context",
+    "depth_cap",
+    "depth_capped_profile",
+    "event_time_complete_context",
+    "lifetime_profile",
+    "previous_observation",
+    "verification",
+    "window_state",
+]

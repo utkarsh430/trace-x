@@ -1,0 +1,1487 @@
+{
+  "counts": {
+    "gold_build": {
+      "build_id": 0,
+      "checkpoint_id": "trace-x:gold_build:v1:8a1f2bbda9ab4df38c98f575258cc73c",
+      "feature_set_version": "6.0.0",
+      "lag_ms": 26657,
+      "sources": {
+        "silver.identity_events_v1": 1,
+        "silver.tx_authorization_v1": 1,
+        "silver.tx_scored_v1": 1
+      },
+      "targets": {
+        "gold.distinct_buckets": {
+          "rows": 33713,
+          "version": 1
+        },
+        "gold.minute_buckets": {
+          "rows": 33593,
+          "version": 1
+        },
+        "gold.observations": {
+          "rows": 35985,
+          "version": 1
+        },
+        "gold.tx_previous": {
+          "rows": 3741,
+          "version": 1
+        },
+        "gold.tx_profiles": {
+          "rows": 3702,
+          "version": 1
+        },
+        "gold.tx_windows": {
+          "rows": 154733,
+          "version": 1
+        }
+      }
+    },
+    "history": {
+      "in_silver": 35985,
+      "in_silver_unrecorded_by_store": 0,
+      "recorded_by_store": 35985
+    },
+    "kafka_arrived": {
+      "identity.events.v1": 1865,
+      "tx.authorization.v1": 17043,
+      "tx.scored.v1": 17186
+    },
+    "kafka_expected": {
+      "identity.events.v1": 1865,
+      "tx.authorization.v1": 17043,
+      "tx.scored.v1": 17186
+    },
+    "posts": {
+      "slice:identity.events.v1:NO_STATE": 1166,
+      "slice:identity.events.v1:OBSERVED": 115,
+      "slice:identity.events.v1:REFUSED": 7,
+      "slice:tx.authorization.v1:OBSERVED": 1178,
+      "slice:tx.authorization.v1:REFUSED": 39,
+      "slice:tx.raw.v1:REFUSED": 5,
+      "slice:tx.raw.v1:REPLAYED": 40,
+      "slice:tx.raw.v1:SCORED": 1285,
+      "warmup:identity.events.v1:NO_STATE": 14851,
+      "warmup:identity.events.v1:OBSERVED": 1750,
+      "warmup:tx.authorization.v1:OBSERVED": 15901,
+      "warmup:tx.raw.v1:SCORED": 15901
+    },
+    "spark": {
+      "bronze_rows": {
+        "identity.events.v1": 1865,
+        "tx.authorization.v1": 17043,
+        "tx.scored.v1": 17186
+      },
+      "executed": true,
+      "gold_build_id": 0,
+      "gold_rows": {
+        "gold.distinct_buckets": 33713,
+        "gold.minute_buckets": 33593,
+        "gold.observations": 35985,
+        "gold.tx_previous": 3741,
+        "gold.tx_profiles": 3702,
+        "gold.tx_windows": 154733
+      },
+      "silver_rows": {
+        "identity.events.v1": 1865,
+        "tx.authorization.v1": 17043,
+        "tx.scored.v1": 17077
+      },
+      "spark_version": "4.0.1"
+    }
+  },
+  "dataset": {
+    "dataset_digest": "sha256:88f2142a266100a00ed2533086a0d65753cbfe8656cd2cb1dd54126fc0485185",
+    "dataset_version": "eval-v2",
+    "eval_v2_manifest": "eval/track_a/eval-v2.manifest.json",
+    "eval_v2_manifest_digest": "sha256:0cfcacacbb1c5a1501af02b5f2fdfcd46ea76d542af5f774f0133c59205317ca",
+    "files": {
+      "identity.events.v1.parquet": "sha256:45de36826ab5d32bbba2e5e7ca471176021c99955302358fda7f423ad77d5412",
+      "tx.authorization.v1.parquet": "sha256:ee6526af1bd98e7bf41b6ecf6991c03c9122f00d29f2d9d0d328a80a9657d029",
+      "tx.raw.v1.parquet": "sha256:54892436e612ff1470d285f428aa92868bf74efaf2eff2ee9d9c14bb90ca018d"
+    }
+  },
+  "dirty_worktree": false,
+  "env_lock_digest": "sha256:b8c74723800f0505649f050bba317fd575e6e5dfa295bb45ed073ba5cb650e6f",
+  "feature_set_version": "6.0.0",
+  "finished_at": "2026-09-18T19:32:15.329Z",
+  "gateway": {
+    "container": "tracex-gateway-1",
+    "image_digest": "sha256:e79dc23ef351da6d12866ba80d6143e627e7a21541c7b734a1c085fd715d4680",
+    "target": "http://localhost:8010"
+  },
+  "git_commit_sha": "a8198214d8cf23fd316a7cc8c4115d409aec3dcb",
+  "guard": {
+    "violations": []
+  },
+  "lateness_model": {
+    "basis_points": {
+      "exact_duplicate": 300,
+      "future_beyond_24h": 50,
+      "future_within_24h": 100,
+      "late": 300,
+      "reordered": 300,
+      "retry_new_event_id": 300
+    },
+    "duplicate_delay_s": [
+      1,
+      120
+    ],
+    "future_beyond_24h_lead_s": [
+      93600,
+      259200
+    ],
+    "future_within_24h_lead_s": [
+      3600,
+      43200
+    ],
+    "inherits": "the base dataset's recorded ingestion lag (envelope ingested_at)",
+    "late_arrival_delay_s": [
+      1800,
+      7200
+    ],
+    "name": "adversarial-ingress-v2",
+    "overlay_version": "fault-overlay-v2",
+    "reorder_max_gap_s": 120.0,
+    "seed": 20260916,
+    "timing": "paced"
+  },
+  "lateness_model_digest": "sha256:30b159ea35eb4d630abaf3c2a8337a82b03615b518c5b4350e84deb927c37e25",
+  "measured": {
+    "arrival_skew_fraction": 0.020717377860235003,
+    "as_served_divergent": 28,
+    "event_time_complete_divergent": 0
+  },
+  "mode": "measured",
+  "overlay": {
+    "anchor": "2026-09-18T18:29:16.040Z",
+    "max_schedule_slip_s": 0.028852,
+    "provenance": {
+      "bands": {
+        "duplicate_delay_s": [
+          1,
+          120
+        ],
+        "future_beyond_24h_lead_s": [
+          93600,
+          259200
+        ],
+        "future_within_24h_lead_s": [
+          3600,
+          43200
+        ],
+        "late_arrival_delay_s": [
+          1800,
+          7200
+        ],
+        "max_schedule_slip_s": 60,
+        "on_time_ceiling_s": 240,
+        "reorder_max_gap_s": 120.0
+      },
+      "base_dataset_ref": "eval-v2:2026-02-11T12:00:00.000Z/2026-02-11T13:00:00.000Z",
+      "base_digest": "sha256:8dfe0f037386304f26b4d4195dab22b4cd2082a4b5ea724b9ac9d5af005d7e1d",
+      "base_event_span_s": 3599.016,
+      "base_events_by_topic": {
+        "identity.events.v1": 1255,
+        "tx.authorization.v1": 1181,
+        "tx.raw.v1": 1181
+      },
+      "base_start": "2026-02-11T12:00:00.303000Z",
+      "injected": {
+        "conflicting_duplicate": 0,
+        "exact_duplicate": 109,
+        "future_beyond_24h": 18,
+        "future_within_24h": 36,
+        "late": 109,
+        "late_exact_duplicate": 0,
+        "late_retry_new_event_id": 0,
+        "malformed_json": 0,
+        "reordered": 109,
+        "retry_new_event_id": 109,
+        "unknown_enum": 0,
+        "wrong_schema_version": 0
+      },
+      "injected_by_topic": {
+        "exact_duplicate": {
+          "identity.events.v1": 33,
+          "tx.authorization.v1": 36,
+          "tx.raw.v1": 40
+        },
+        "future_beyond_24h": {
+          "identity.events.v1": 7,
+          "tx.authorization.v1": 6,
+          "tx.raw.v1": 5
+        },
+        "future_within_24h": {
+          "identity.events.v1": 15,
+          "tx.authorization.v1": 11,
+          "tx.raw.v1": 10
+        },
+        "late": {
+          "identity.events.v1": 37,
+          "tx.authorization.v1": 33,
+          "tx.raw.v1": 39
+        },
+        "reordered": {
+          "identity.events.v1": 55,
+          "tx.authorization.v1": 26,
+          "tx.raw.v1": 28
+        },
+        "retry_new_event_id": {
+          "tx.raw.v1": 109
+        }
+      },
+      "max_planned_on_time_delay_s": 120.01399999999967,
+      "output_records": 3835,
+      "overlay_version": "fault-overlay-v2",
+      "planned_fault_free_delay_s": {
+        "count": 3345.0,
+        "max": 0.23999999999978172,
+        "min": 0.004999999999654392,
+        "p50": 0.0729999999998654,
+        "p95": 0.1390000000001237
+      },
+      "requested": {
+        "conflicting_duplicate": 0,
+        "exact_duplicate": 109,
+        "future_beyond_24h": 18,
+        "future_within_24h": 36,
+        "late": 109,
+        "late_exact_duplicate": 0,
+        "late_retry_new_event_id": 0,
+        "malformed_json": 0,
+        "reordered": 109,
+        "retry_new_event_id": 109,
+        "unknown_enum": 0,
+        "wrong_schema_version": 0
+      },
+      "schedule_span_s": 3664.194,
+      "seed": 20260916,
+      "timing": "paced",
+      "timing_semantics_version": 1
+    },
+    "seed": 20260916,
+    "shift_s": 18944955.737786,
+    "version": "fault-overlay-v2"
+  },
+  "parity_semantics_version": 1,
+  "partition": {
+    "dataset_digest": "sha256:88f2142a266100a00ed2533086a0d65753cbfe8656cd2cb1dd54126fc0485185",
+    "dataset_manifest": "eval/track_a/eval-v2.manifest.json",
+    "dataset_version": "eval-v2",
+    "digest": "sha256:815e72584417f7159ed7885d42b2de45a7fc8c5419ebbb64b53fb84127350973",
+    "gated": false,
+    "lateness_model_digest": "sha256:30b159ea35eb4d630abaf3c2a8337a82b03615b518c5b4350e84deb927c37e25",
+    "name": "adversarial-ingress",
+    "slice_end": "2026-02-11T13:00:00.000Z",
+    "slice_start": "2026-02-11T12:00:00.000Z",
+    "streams": [
+      "tx.raw.v1",
+      "identity.events.v1",
+      "tx.authorization.v1"
+    ],
+    "warmup_s": 86400
+  },
+  "publishable": true,
+  "python_version": "3.12.14",
+  "record_type": "PARITY",
+  "results": {
+    "arrival_skew": {
+      "bound": 0.01,
+      "capped_excluded": 0,
+      "denominator": 12936,
+      "excluded": {
+        "warmup_transactions_compressed": 15901
+      },
+      "features": [
+        "account_distinct_countries_24h",
+        "account_distinct_devices_24h",
+        "account_distinct_mcc_5m",
+        "account_distinct_merchants_1h",
+        "account_tx_count_1h",
+        "account_tx_count_1m",
+        "account_tx_count_24h",
+        "account_tx_count_5m",
+        "card_tx_count_5m",
+        "device_distinct_accounts_24h",
+        "failed_logins_1h"
+      ],
+      "fraction": 0.020717377860235003,
+      "gated": false,
+      "neither_has_value": 0,
+      "numerator": 268,
+      "per_feature": {
+        "account_distinct_countries_24h": {
+          "DIFFERENT": 16,
+          "SAME": 1160
+        },
+        "account_distinct_devices_24h": {
+          "DIFFERENT": 7,
+          "SAME": 1169
+        },
+        "account_distinct_mcc_5m": {
+          "DIFFERENT": 24,
+          "SAME": 1152
+        },
+        "account_distinct_merchants_1h": {
+          "DIFFERENT": 25,
+          "SAME": 1151
+        },
+        "account_tx_count_1h": {
+          "DIFFERENT": 28,
+          "SAME": 1148
+        },
+        "account_tx_count_1m": {
+          "DIFFERENT": 26,
+          "SAME": 1150
+        },
+        "account_tx_count_24h": {
+          "DIFFERENT": 30,
+          "SAME": 1146
+        },
+        "account_tx_count_5m": {
+          "DIFFERENT": 28,
+          "SAME": 1148
+        },
+        "card_tx_count_5m": {
+          "DIFFERENT": 56,
+          "SAME": 1120
+        },
+        "device_distinct_accounts_24h": {
+          "DIFFERENT": 28,
+          "SAME": 1148
+        },
+        "failed_logins_1h": {
+          "SAME": 1176
+        }
+      },
+      "verdict": "RECORDED"
+    },
+    "as_served": {
+      "approximate": {
+        "ip_distinct_accounts_1h": {
+          "overall": 17158,
+          "strata": {
+            "1-9": {
+              "count": 17158,
+              "max_abs_relative_error": 0.0,
+              "rms_relative_error": 0.0,
+              "within_bound": true
+            },
+            "10-99": {
+              "count": 0
+            },
+            "100-999": {
+              "count": 0
+            },
+            "1000+": {
+              "count": 0
+            }
+          },
+          "unexercised": [
+            "10-99",
+            "100-999",
+            "1000+"
+          ]
+        },
+        "merchant_distinct_accounts_1h": {
+          "overall": 17158,
+          "strata": {
+            "1-9": {
+              "count": 15941,
+              "max_abs_relative_error": 0.5,
+              "rms_relative_error": 0.003960155355189656,
+              "within_bound": true
+            },
+            "10-99": {
+              "count": 1217,
+              "max_abs_relative_error": 0.1,
+              "rms_relative_error": 0.006026383515675869,
+              "within_bound": true
+            },
+            "100-999": {
+              "count": 0
+            },
+            "1000+": {
+              "count": 0
+            }
+          },
+          "unexercised": [
+            "100-999",
+            "1000+"
+          ]
+        }
+      },
+      "approximate_failures": [],
+      "compared": 446696,
+      "declared_exception_examples": [],
+      "declared_exceptions": 0,
+      "declared_exceptions_by_situation": {},
+      "divergences": [
+        {
+          "detail": {
+            "late_by_ms": 5699840,
+            "observe_outcome": "RECORDED"
+          },
+          "feature_id": "declined_ratio_1h",
+          "implementation": {
+            "lookback_completeness": "INCOMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "reason": "lookback_completeness",
+          "reference": {
+            "lookback_completeness": "COMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "transaction_id": "tx_000000696433"
+        },
+        {
+          "detail": {
+            "late_by_ms": 6967890,
+            "observe_outcome": "RECORDED"
+          },
+          "feature_id": "declined_ratio_1h",
+          "implementation": {
+            "lookback_completeness": "INCOMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "reason": "lookback_completeness",
+          "reference": {
+            "lookback_completeness": "COMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "transaction_id": "tx_000000696473"
+        },
+        {
+          "detail": {
+            "late_by_ms": 5271413,
+            "observe_outcome": "RECORDED"
+          },
+          "feature_id": "declined_ratio_1h",
+          "implementation": {
+            "lookback_completeness": "INCOMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "reason": "lookback_completeness",
+          "reference": {
+            "lookback_completeness": "COMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "transaction_id": "tx_000000696632"
+        },
+        {
+          "detail": {
+            "late_by_ms": 4172943,
+            "observe_outcome": "RECORDED"
+          },
+          "feature_id": "declined_ratio_1h",
+          "implementation": {
+            "lookback_completeness": "INCOMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "reason": "lookback_completeness",
+          "reference": {
+            "lookback_completeness": "COMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "transaction_id": "tx_000000696643"
+        },
+        {
+          "detail": {
+            "late_by_ms": 4958800,
+            "observe_outcome": "RECORDED"
+          },
+          "feature_id": "declined_ratio_1h",
+          "implementation": {
+            "lookback_completeness": "INCOMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "reason": "lookback_completeness",
+          "reference": {
+            "lookback_completeness": "COMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "transaction_id": "tx_000000696689"
+        },
+        {
+          "detail": {
+            "late_by_ms": 5855773,
+            "observe_outcome": "RECORDED"
+          },
+          "feature_id": "declined_ratio_1h",
+          "implementation": {
+            "lookback_completeness": "INCOMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "reason": "lookback_completeness",
+          "reference": {
+            "lookback_completeness": "COMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "transaction_id": "tx_000000696722"
+        },
+        {
+          "detail": {
+            "late_by_ms": 5566183,
+            "observe_outcome": "RECORDED"
+          },
+          "feature_id": "declined_ratio_1h",
+          "implementation": {
+            "lookback_completeness": "INCOMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "reason": "lookback_completeness",
+          "reference": {
+            "lookback_completeness": "COMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "transaction_id": "tx_000000696741"
+        },
+        {
+          "detail": {
+            "late_by_ms": 6034265,
+            "observe_outcome": "RECORDED"
+          },
+          "feature_id": "declined_ratio_1h",
+          "implementation": {
+            "lookback_completeness": "INCOMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "reason": "lookback_completeness",
+          "reference": {
+            "lookback_completeness": "COMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "transaction_id": "tx_000000696769"
+        },
+        {
+          "detail": {
+            "late_by_ms": 6675951,
+            "observe_outcome": "RECORDED"
+          },
+          "feature_id": "declined_ratio_1h",
+          "implementation": {
+            "lookback_completeness": "INCOMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "reason": "lookback_completeness",
+          "reference": {
+            "lookback_completeness": "COMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "transaction_id": "tx_000000696800"
+        },
+        {
+          "detail": {
+            "late_by_ms": 5916606,
+            "observe_outcome": "RECORDED"
+          },
+          "feature_id": "declined_ratio_1h",
+          "implementation": {
+            "lookback_completeness": "INCOMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "reason": "lookback_completeness",
+          "reference": {
+            "lookback_completeness": "COMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "transaction_id": "tx_000000696865"
+        },
+        {
+          "detail": {
+            "late_by_ms": 6131474,
+            "observe_outcome": "RECORDED"
+          },
+          "feature_id": "declined_ratio_1h",
+          "implementation": {
+            "lookback_completeness": "INCOMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "reason": "lookback_completeness",
+          "reference": {
+            "lookback_completeness": "COMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "transaction_id": "tx_000000696891"
+        },
+        {
+          "detail": {
+            "late_by_ms": 5758394,
+            "observe_outcome": "RECORDED"
+          },
+          "feature_id": "declined_ratio_1h",
+          "implementation": {
+            "lookback_completeness": "INCOMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "reason": "lookback_completeness",
+          "reference": {
+            "lookback_completeness": "COMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "transaction_id": "tx_000000696938"
+        },
+        {
+          "detail": {
+            "late_by_ms": 5383589,
+            "observe_outcome": "RECORDED"
+          },
+          "feature_id": "declined_ratio_1h",
+          "implementation": {
+            "lookback_completeness": "INCOMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "reason": "lookback_completeness",
+          "reference": {
+            "lookback_completeness": "COMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "transaction_id": "tx_000000696945"
+        },
+        {
+          "detail": {
+            "late_by_ms": 7157023,
+            "observe_outcome": "RECORDED"
+          },
+          "feature_id": "declined_ratio_1h",
+          "implementation": {
+            "lookback_completeness": "INCOMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "reason": "lookback_completeness",
+          "reference": {
+            "lookback_completeness": "COMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "transaction_id": "tx_000000696966"
+        },
+        {
+          "detail": {
+            "late_by_ms": 6918775,
+            "observe_outcome": "RECORDED"
+          },
+          "feature_id": "declined_ratio_1h",
+          "implementation": {
+            "lookback_completeness": "INCOMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "reason": "lookback_completeness",
+          "reference": {
+            "lookback_completeness": "COMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "transaction_id": "tx_000000697097"
+        },
+        {
+          "detail": {
+            "late_by_ms": 4158344,
+            "observe_outcome": "RECORDED"
+          },
+          "feature_id": "declined_ratio_1h",
+          "implementation": {
+            "lookback_completeness": "INCOMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "reason": "lookback_completeness",
+          "reference": {
+            "lookback_completeness": "COMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "transaction_id": "tx_000000697168"
+        },
+        {
+          "detail": {
+            "late_by_ms": 3911150,
+            "observe_outcome": "RECORDED"
+          },
+          "feature_id": "declined_ratio_1h",
+          "implementation": {
+            "lookback_completeness": "INCOMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "reason": "lookback_completeness",
+          "reference": {
+            "lookback_completeness": "COMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "transaction_id": "tx_000000697183"
+        },
+        {
+          "detail": {
+            "late_by_ms": 5298035,
+            "observe_outcome": "RECORDED"
+          },
+          "feature_id": "declined_ratio_1h",
+          "implementation": {
+            "lookback_completeness": "INCOMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "reason": "lookback_completeness",
+          "reference": {
+            "lookback_completeness": "COMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "transaction_id": "tx_000000697205"
+        },
+        {
+          "detail": {
+            "late_by_ms": 5365985,
+            "observe_outcome": "RECORDED"
+          },
+          "feature_id": "declined_ratio_1h",
+          "implementation": {
+            "lookback_completeness": "INCOMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "reason": "lookback_completeness",
+          "reference": {
+            "lookback_completeness": "COMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "transaction_id": "tx_000000697210"
+        },
+        {
+          "detail": {
+            "late_by_ms": 6209148,
+            "observe_outcome": "RECORDED"
+          },
+          "feature_id": "declined_ratio_1h",
+          "implementation": {
+            "lookback_completeness": "INCOMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "reason": "lookback_completeness",
+          "reference": {
+            "lookback_completeness": "COMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "transaction_id": "tx_000000697287"
+        },
+        {
+          "detail": {
+            "late_by_ms": 5972955,
+            "observe_outcome": "RECORDED"
+          },
+          "feature_id": "declined_ratio_1h",
+          "implementation": {
+            "lookback_completeness": "INCOMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "reason": "lookback_completeness",
+          "reference": {
+            "lookback_completeness": "COMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "transaction_id": "tx_000000697291"
+        },
+        {
+          "detail": {
+            "late_by_ms": 5916363,
+            "observe_outcome": "RECORDED"
+          },
+          "feature_id": "declined_ratio_1h",
+          "implementation": {
+            "lookback_completeness": "INCOMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "reason": "lookback_completeness",
+          "reference": {
+            "lookback_completeness": "COMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "transaction_id": "tx_000000697328"
+        },
+        {
+          "detail": {
+            "late_by_ms": 4384609,
+            "observe_outcome": "RECORDED"
+          },
+          "feature_id": "declined_ratio_1h",
+          "implementation": {
+            "lookback_completeness": "INCOMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "reason": "lookback_completeness",
+          "reference": {
+            "lookback_completeness": "COMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "transaction_id": "tx_000000697342"
+        },
+        {
+          "detail": {
+            "late_by_ms": 4010547,
+            "observe_outcome": "RECORDED"
+          },
+          "feature_id": "declined_ratio_1h",
+          "implementation": {
+            "lookback_completeness": "INCOMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "reason": "lookback_completeness",
+          "reference": {
+            "lookback_completeness": "COMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "transaction_id": "tx_000000697392"
+        },
+        {
+          "detail": {
+            "late_by_ms": 7183965,
+            "observe_outcome": "RECORDED"
+          },
+          "feature_id": "declined_ratio_1h",
+          "implementation": {
+            "lookback_completeness": "INCOMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "reason": "lookback_completeness",
+          "reference": {
+            "lookback_completeness": "COMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "transaction_id": "tx_000000697415"
+        },
+        {
+          "detail": {
+            "late_by_ms": 4638912,
+            "observe_outcome": "RECORDED"
+          },
+          "feature_id": "declined_ratio_1h",
+          "implementation": {
+            "lookback_completeness": "INCOMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "reason": "lookback_completeness",
+          "reference": {
+            "lookback_completeness": "COMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "transaction_id": "tx_000000697424"
+        },
+        {
+          "detail": {
+            "late_by_ms": 6559787,
+            "observe_outcome": "RECORDED"
+          },
+          "feature_id": "declined_ratio_1h",
+          "implementation": {
+            "lookback_completeness": "INCOMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "reason": "lookback_completeness",
+          "reference": {
+            "lookback_completeness": "COMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "transaction_id": "tx_000000697426"
+        },
+        {
+          "detail": {
+            "late_by_ms": 4306770,
+            "observe_outcome": "RECORDED"
+          },
+          "feature_id": "declined_ratio_1h",
+          "implementation": {
+            "lookback_completeness": "INCOMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "reason": "lookback_completeness",
+          "reference": {
+            "lookback_completeness": "COMPLETE",
+            "state": "UNAVAILABLE",
+            "value": null
+          },
+          "transaction_id": "tx_000000697444"
+        }
+      ],
+      "divergent": 28,
+      "features": {
+        "account_amount_sum_1h": {
+          "absent_equal": 0,
+          "compared": 17186,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17186,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "account_distinct_countries_24h": {
+          "absent_equal": 0,
+          "compared": 17186,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17186,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "account_distinct_devices_24h": {
+          "absent_equal": 0,
+          "compared": 17186,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17186,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "account_distinct_mcc_5m": {
+          "absent_equal": 0,
+          "compared": 17186,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17186,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "account_distinct_merchants_1h": {
+          "absent_equal": 0,
+          "compared": 17186,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17186,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "account_tenure_days": {
+          "absent_equal": 17186,
+          "compared": 17186,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17186,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "account_tx_count_1h": {
+          "absent_equal": 0,
+          "compared": 17186,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17186,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "account_tx_count_1m": {
+          "absent_equal": 0,
+          "compared": 17186,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17186,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "account_tx_count_24h": {
+          "absent_equal": 0,
+          "compared": 17186,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17186,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "account_tx_count_5m": {
+          "absent_equal": 0,
+          "compared": 17186,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17186,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "amount_zscore_vs_account": {
+          "absent_equal": 17162,
+          "compared": 17186,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17186,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "card_tx_count_5m": {
+          "absent_equal": 0,
+          "compared": 17158,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17158,
+          "estimated": 0,
+          "not_vouched": 28
+        },
+        "declined_ratio_1h": {
+          "absent_equal": 17158,
+          "compared": 17186,
+          "declared_exception": 0,
+          "divergent": 28,
+          "equal": 17158,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "device_distinct_accounts_24h": {
+          "absent_equal": 0,
+          "compared": 17158,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17158,
+          "estimated": 0,
+          "not_vouched": 28
+        },
+        "device_is_known_for_account": {
+          "absent_equal": 14638,
+          "compared": 17186,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17186,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "distance_from_account_home_km": {
+          "absent_equal": 17044,
+          "compared": 17186,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17186,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "failed_logins_1h": {
+          "absent_equal": 1155,
+          "compared": 17186,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17186,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "geo_distance_from_last_km": {
+          "absent_equal": 13483,
+          "compared": 17186,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17186,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "hours_since_identity_change": {
+          "absent_equal": 17133,
+          "compared": 17186,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17186,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "implied_speed_kmh_from_last": {
+          "absent_equal": 13483,
+          "compared": 17186,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17186,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "ip_distinct_accounts_1h": {
+          "absent_equal": 0,
+          "compared": 17158,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 0,
+          "estimated": 17158,
+          "not_vouched": 28
+        },
+        "mcc_is_habitual_for_account": {
+          "absent_equal": 17169,
+          "compared": 17186,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17186,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "merchant_amount_cv_24h": {
+          "absent_equal": 2986,
+          "compared": 17158,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17158,
+          "estimated": 0,
+          "not_vouched": 28
+        },
+        "merchant_distinct_accounts_1h": {
+          "absent_equal": 0,
+          "compared": 17158,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 0,
+          "estimated": 17158,
+          "not_vouched": 28
+        },
+        "merchant_is_habitual": {
+          "absent_equal": 17178,
+          "compared": 17186,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17186,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "seconds_since_last_transaction": {
+          "absent_equal": 13483,
+          "compared": 17186,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17186,
+          "estimated": 0,
+          "not_vouched": 0
+        }
+      },
+      "not_vouched_by_feature_window": {
+        "card_tx_count_5m 5m": 28,
+        "device_distinct_accounts_24h 24h": 28,
+        "ip_distinct_accounts_1h 1h": 28,
+        "merchant_amount_cv_24h 24h": 28,
+        "merchant_distinct_accounts_1h 1h": 28
+      },
+      "not_vouched_excluded": 140,
+      "not_vouched_fraction": 0.0003133140570589657,
+      "pairing": "AS_SERVED",
+      "skipped": {}
+    },
+    "deliveries": {
+      "slice:identity.events.v1:NO_STATE": 1166,
+      "slice:identity.events.v1:OBSERVED": 115,
+      "slice:identity.events.v1:REFUSED": 7,
+      "slice:tx.authorization.v1:OBSERVED": 1178,
+      "slice:tx.authorization.v1:REFUSED": 39,
+      "slice:tx.raw.v1:REFUSED": 5,
+      "slice:tx.raw.v1:REPLAYED": 40,
+      "slice:tx.raw.v1:SCORED": 1285,
+      "warmup:identity.events.v1:NO_STATE": 14851,
+      "warmup:identity.events.v1:OBSERVED": 1750,
+      "warmup:tx.authorization.v1:OBSERVED": 15901,
+      "warmup:tx.raw.v1:SCORED": 15901
+    },
+    "event_time_complete": {
+      "approximate": {},
+      "approximate_failures": [],
+      "compared": 444002,
+      "declared_exception_examples": [],
+      "declared_exceptions": 0,
+      "declared_exceptions_by_situation": {},
+      "divergences": [],
+      "divergent": 0,
+      "features": {
+        "account_amount_sum_1h": {
+          "absent_equal": 0,
+          "compared": 17077,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17077,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "account_distinct_countries_24h": {
+          "absent_equal": 0,
+          "compared": 17077,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17077,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "account_distinct_devices_24h": {
+          "absent_equal": 0,
+          "compared": 17077,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17077,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "account_distinct_mcc_5m": {
+          "absent_equal": 0,
+          "compared": 17077,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17077,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "account_distinct_merchants_1h": {
+          "absent_equal": 0,
+          "compared": 17077,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17077,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "account_tenure_days": {
+          "absent_equal": 17077,
+          "compared": 17077,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17077,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "account_tx_count_1h": {
+          "absent_equal": 0,
+          "compared": 17077,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17077,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "account_tx_count_1m": {
+          "absent_equal": 0,
+          "compared": 17077,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17077,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "account_tx_count_24h": {
+          "absent_equal": 0,
+          "compared": 17077,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17077,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "account_tx_count_5m": {
+          "absent_equal": 0,
+          "compared": 17077,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17077,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "amount_zscore_vs_account": {
+          "absent_equal": 17053,
+          "compared": 17077,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17077,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "card_tx_count_5m": {
+          "absent_equal": 0,
+          "compared": 17077,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17077,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "declined_ratio_1h": {
+          "absent_equal": 17077,
+          "compared": 17077,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17077,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "device_distinct_accounts_24h": {
+          "absent_equal": 0,
+          "compared": 17077,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17077,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "device_is_known_for_account": {
+          "absent_equal": 14537,
+          "compared": 17077,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17077,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "distance_from_account_home_km": {
+          "absent_equal": 16938,
+          "compared": 17077,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17077,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "failed_logins_1h": {
+          "absent_equal": 1155,
+          "compared": 17077,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17077,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "geo_distance_from_last_km": {
+          "absent_equal": 13388,
+          "compared": 17077,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17077,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "hours_since_identity_change": {
+          "absent_equal": 17025,
+          "compared": 17077,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17077,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "implied_speed_kmh_from_last": {
+          "absent_equal": 13388,
+          "compared": 17077,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17077,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "ip_distinct_accounts_1h": {
+          "absent_equal": 0,
+          "compared": 17077,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17077,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "mcc_is_habitual_for_account": {
+          "absent_equal": 17060,
+          "compared": 17077,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17077,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "merchant_amount_cv_24h": {
+          "absent_equal": 2982,
+          "compared": 17077,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17077,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "merchant_distinct_accounts_1h": {
+          "absent_equal": 0,
+          "compared": 17077,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17077,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "merchant_is_habitual": {
+          "absent_equal": 17069,
+          "compared": 17077,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17077,
+          "estimated": 0,
+          "not_vouched": 0
+        },
+        "seconds_since_last_transaction": {
+          "absent_equal": 13388,
+          "compared": 17077,
+          "declared_exception": 0,
+          "divergent": 0,
+          "equal": 17077,
+          "estimated": 0,
+          "not_vouched": 0
+        }
+      },
+      "not_vouched_by_feature_window": {},
+      "not_vouched_excluded": 0,
+      "not_vouched_fraction": 0.0,
+      "pairing": "EVENT_TIME_COMPLETE",
+      "skipped": {}
+    },
+    "history": {
+      "in_silver": 35985,
+      "in_silver_unrecorded_by_store": 0,
+      "recorded_by_store": 35985
+    },
+    "store_epoch_ms": 1789669756465
+  },
+  "run_id": "parity-20260918-174845-adversarial-ingress-a8198214",
+  "started_at": "2026-09-18T17:48:45.731Z",
+  "toolchain": {
+    "delta": "4.0.1",
+    "hadoop": "3.4.1",
+    "java": "17.0.20.1",
+    "python": "3.12.14",
+    "scala": "2.13.16",
+    "spark": "4.0.1"
+  },
+  "track": "SYNTHETIC",
+  "verdict": "FAIL"
+}

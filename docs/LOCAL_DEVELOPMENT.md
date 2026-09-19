@@ -20,14 +20,19 @@
 
 ### The Java trap
 
-If `java -version` reports anything other than 17 or 21, Spark **will** fail with an opaque
-`UnsupportedClassVersionError`. On macOS:
+Spark 4.0.1 runs on Java 17 or 21 only, and this project pins **Temurin 17** (ADR-0018). On anything
+else Spark fails with an opaque `UnsupportedClassVersionError`.
+
+**`make` selects it for you** once Temurin 17 is installed: every target resolves `JAVA_HOME` through
+`scripts/java_home.py`, which confirms a JDK's version by running it rather than trusting its directory
+name. Outside `make` — a bare `pytest`, an IDE test runner — select it yourself. On macOS:
 
 ```bash
 export JAVA_HOME=$(/usr/libexec/java_home -v 17)
 ```
 
-Put it in your shell profile. `make doctor` warns until it is correct.
+From Phase 3, `make doctor` **fails** on any other Java, and `trace_core.stream.session.build_session`
+refuses to start a JVM on one, naming the fix (ADR-0045).
 
 ---
 
@@ -35,7 +40,7 @@ Put it in your shell profile. `make doctor` warns until it is correct.
 
 ```bash
 git clone <repo> && cd trace-x
-make setup      # venv + dev dependencies, creates .env from the template
+make setup      # venv, every dependency from the hashed locks, verified Spark jars, .env from the template
 make doctor     # preflight — fix anything it reports before continuing
 make up         # core profile: postgres, redis, gateway, then applies migrations
 make verify     # ★ canonical health check
@@ -47,6 +52,13 @@ cold Docker cache and is then reused. It also needs one service token in `.env` 
 
 `make verify` is the single command that answers "is this repository healthy?". Run it before claiming
 anything works, and after every change.
+
+**Dependencies are installed from hashed lockfiles, never from `pyproject.toml` ranges.**
+`scripts/install_locked.sh` is the only install path, and every CI job runs the same script. The first
+`make setup` builds pyspark from its source archive and downloads the Spark JVM jars pinned in
+`packages/trace_core/stream/jars.lock` into `~/.cache/trace-x/spark-jars` (override with
+`TRACE_SPARK_JARS_DIR`), verifying each by SHA-256; later runs reuse both. After changing a dependency,
+run `make lock` and review the lock diff.
 
 ---
 
@@ -68,11 +80,12 @@ not fit in 8 GB alongside a laptop's other work.
 ```bash
 make up                  # core
 make up-streaming        # core + streaming
+make kafka-topics        # then create the declared topics: the broker never creates one
 make up-full             # everything — needs ~15 GB free and 8 GB Docker RAM
 ```
 
 The table is the design. **What `core` actually starts today is postgres, redis and the gateway**;
-`trace-api`, `trace-worker` and the dashboard arrive with their phases, and the MCP servers are
+`trace-api` and the dashboard arrive with their phases; `trace-worker` runs the outbox relay today, in the `streaming` profile, and its investigations arrive with their phase; and the MCP servers are
 spawned over stdio by the worker rather than run as containers. `docs/PROGRESS.md` is the live state.
 
 **Every degraded mode is visible, never silent.** A response made without reconciled features says so
@@ -169,7 +182,12 @@ without a `--result`.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `UnsupportedClassVersionError` from Spark | Java 25 (or 21+ mismatch) | `export JAVA_HOME=$(/usr/libexec/java_home -v 17)` |
+| `UnsupportedClassVersionError` from Spark | Java 25 (or 21+ mismatch) | Install Temurin 17; `make` selects it, or `export JAVA_HOME=$(/usr/libexec/java_home -v 17)` |
+| `ToolchainMismatchError` from `build_session` | The JVM, pyspark, Delta, Hadoop, Scala or a jar does not match its pin | The message lists every failed check with its fix; `make doctor` shows the same |
+| `does not match jars.lock` | A cached jar differs from its pinned SHA-256 | Delete it and run `make stream-jars`. Never edit `jars.lock` to match a download |
+| `THESE PACKAGES DO NOT MATCH THE HASHES` during install | The lock and the package index disagree | Do not bypass `--require-hashes`; regenerate deliberately with `make lock` and review the diff |
+| `BindException: Can't assign requested address` from Spark | The host name resolves to an address this machine cannot bind | Build sessions only through `build_session`, which binds local drivers to loopback |
+| `collection guard` failure after `pytest -m stream` | Every stream test was skipped (no Temurin 17, pyspark or verified jars) | `make setup`, select Temurin 17, re-run; a skip is not evidence |
 | `NoSuchMethodError` in Delta | Hadoop/Spark/Delta version drift | `make doctor` — pins must be 4.0.1 / 4.0.1 / 3.4.x |
 | `port is already allocated` | Another project holds the port | Change it in `.env`; `make doctor` lists conflicts |
 | Containers OOM-killed | Docker RAM too low for the profile | Raise Docker RAM, or use fewer profiles |
@@ -184,6 +202,9 @@ without a `--result`.
 | Gateway container restarts in a loop, logs `TokenConfigurationError` | A token shorter than 32 characters | `openssl rand -hex 32`. A short secret is guessable and a gateway is a public surface |
 | `make up` hangs on `Container tracex-gateway-1 Waiting` | The image is building on a cold cache, or the app is waiting out its Postgres pool timeout | `docker compose -f deploy/compose.yml logs -f gateway`. Start-up waits the pool's full timeout before serving degraded, which is why the healthcheck allows for it |
 | Gateway is healthy but `/readyz` returns 503 | Migrations have not run, so the `trace_app` role does not exist | `make migrate`. Health is liveness; readiness needs the database |
+| `/readyz` 503 with `writer_session: lock held elsewhere` | Another gateway process (a second `uvicorn`, a stale container) holds the online store's writer fence | Stop the other process cleanly. One gateway writes online state at a time (ADR-0051) |
+| `/readyz` shows `observation_log: not configured` | `TRACE_GATEWAY_KAFKA_BOOTSTRAP` is empty, the default, because Kafka is the `streaming` profile | Scoring works either way. To publish the observation log, start `--profile streaming`, apply the topics, and set `TRACE_GATEWAY_KAFKA_BOOTSTRAP=kafka:19092` |
+| Cases and authorization outcomes wait in `app.outbox` | The relay runs in the `worker` service (ADR-0051 §7), which needs the `streaming` profile | Start it with `--profile core --profile streaming up -d worker`. `/readyz` `outbox_relay: disabled` on the gateway is expected: its in-gateway relay exists only to reproduce the A/B |
 | Gateway logs `connection refused` for port 5442 or 6389 | The container inherited the **host** ports from `.env` | Inside the compose network Postgres is `postgres:5432` and Redis is `redis:6379`; `deploy/compose.yml` sets those explicitly |
 | Code changes have no effect on the running gateway | The image is built, not mounted | `docker compose -f deploy/compose.yml --env-file .env --profile core up -d --build gateway` |
 | Integration tests skipped | Docker not running | Start Docker; the skip message names the reason |
@@ -275,8 +296,14 @@ make seed ARGS="--rows 50000 --dataset-version dev-v1"
 # No database: events only. Says so in the run record rather than leaving it implicit.
 make seed ARGS="--rows 10000 --no-groundtruth --out /tmp/tx"
 
-# Publish to Kafka instead of files (needs the `stream` extra and a broker).
+# Publish to Kafka instead of files (needs the `stream` extra, a broker and `make kafka-topics`).
+# The run fails, and writes no run record, unless every event is confirmed delivered.
 make seed ARGS="--sink kafka --bootstrap localhost:9092"
+
+# A frozen dataset, exactly as its manifest describes it (eval-v2's gate included). Refused unless
+# the configuration digest matches, and exits before writing ground truth unless every recorded
+# stream digest is reproduced.
+make seed ARGS="--manifest eval/track_a/eval-v2.candidate.manifest.json --sink parquet --out data/generated"
 ```
 
 Useful options:
@@ -289,7 +316,8 @@ Useful options:
 | `--fraud-rate` | Target fraudulent share. Has no effect below the coverage floor — see `docs/FRAUD_SCENARIOS.md` §2. |
 | `--validate` | `all` (default), `sample`, or `none`. Produce-time schema validation (`docs/EVENT_CONTRACTS.md` §6.1). Whichever is used is recorded in the run record. |
 | `--no-groundtruth` | Skip the PostgreSQL write. |
-| `--sink` | `jsonl`, `kafka`, or `none`. `none` measures generation without I/O. |
+| `--sink` | `jsonl`, `parquet`, `kafka`, or `none`. `none` measures generation without I/O. |
+| `--manifest` | Generate a frozen manifest's configuration instead of the sizing options, and verify its digests. |
 
 **Every run writes a record** to `eval/manifest/`. That record is what
 `make check-claims` resolves when a number appears in the documentation — a measurement with no
@@ -299,6 +327,83 @@ publishable**, and the CLI says so when it happens.
 Ground truth is written as `trace_generator`, a role that may **insert** labels and cannot **read**
 them (ADR-0031). If that step fails, the command exits non-zero rather than leaving a dataset nobody
 can evaluate.
+
+## Replaying a frozen dataset through the gateway
+
+`eval/replay/gateway_replay.py` posts a dataset's prefix to the running gateway in event-time order,
+then joins labels as `trace_eval`. `eval/replay/r010_threshold_study.py` reads its saved decisions.
+
+```bash
+set -a; . ./.env; set +a
+
+# 1. The gateway must run the code you mean to validate.
+docker compose -f deploy/compose.yml --env-file .env --profile core up -d --build gateway
+
+# 2. Switching datasets? Reset the replay tables first, as the database owner. Frozen datasets reuse
+#    positional transaction ids, so a second dataset's outcomes conflict with the first one's (409)
+#    and its triage reuses the first one's cases. The harness refuses rather than finding out mid-run;
+#    `--reuse-existing-state` is for replaying the same dataset again.
+docker exec -e PGPASSWORD="$POSTGRES_SUPERUSER_PASSWORD" tracex-postgres-1 psql -U "$POSTGRES_SUPERUSER" \
+  -d tracex -c "TRUNCATE app.case_transitions, app.investigation_queue, app.cases, app.outbox, app.authorization_outcomes"
+
+# 3. An empty feature store, vouched for the whole replay from the dataset's shifted window start.
+docker exec tracex-redis-1 redis-cli -n 0 FLUSHDB
+.venv/bin/python eval/replay/gateway_replay.py --dataset-dir data/generated/eval-v2 \
+  --dataset-version eval-v2 --limit 60000 --vouch-from-manifest eval/track_a/eval-v2.manifest.json \
+  --decisions /tmp/decisions.jsonl --report benchmarks/gateway/triage-bands-eval-v2.md
+
+# 4. R010's operating points from those decisions.
+.venv/bin/python -m eval.replay.r010_threshold_study --dataset-dir data/generated/eval-v2 \
+  --dataset-version eval-v2 --limit 60000 --decisions /tmp/decisions.jsonl \
+  --report benchmarks/gateway/r010-threshold-study-eval-v2.md
+```
+
+- **eval-v1 has no outcome stream.** Pass its generation run record as `--source-manifest`
+  (`eval/manifest/gen-20260912-eval-v1-ccfd38d9.json`) so outcomes are derived with its seed.
+- **`history_incomplete` on every decision is expected** for a prefix of a few days. The store is
+  vouched from the window start, and a 30-day feature cannot be complete inside a few days of data, so
+  profile rules abstain. Windowed rules are unaffected.
+- **Comparing with an older gateway** that predates authorization outcomes: run it on another port and
+  add `--withhold-outcomes --base-url http://localhost:8011`. Outcomes are still derived and then
+  withheld, so both runs see the same events and time shift.
+
+## Stream throughput and outage benchmark
+
+`make load-stream` measures `P3.stream-throughput` against the ROADMAP Phase 3 targets: the target
+rate offered throughout (fixed before measurement, never lowered: the harness refuses a lower
+`--rate-events-per-s`), consumer lag below the 10 s target while it is offered, and recovering
+below it after a 2-minute outage, plus PHASE3_PLAN §4.3 Gold freshness. It is a heavy run: never
+start it beside another Spark, Kafka, chaos or benchmark job (CLAUDE.md §18).
+
+```bash
+make up-streaming && make kafka-topics      # the broker, and the declared topics
+make load-stream                            # the declared defaults; ARGS=... passes options
+make load-stream ARGS="--help"              # every option, each recorded in the run manifest
+```
+
+What it runs, all on the host: producer worker processes publishing the declared mix
+(`benchmarks/stream_throughput/spec.py`) through `EventPublisher` at a fixed schedule; one consumer
+process running the real Bronze and Silver queries in one JVM on `processingTime` triggers
+(`--master`, `--driver-memory`, `--shuffle-partitions` and the trigger intervals are options);
+and Gold builds back to back through `services.stream.gold build`. The **outage** stops the
+consumer process (its queries stop cleanly) and restarts it from its checkpoints 120 s later, while
+the producers keep publishing to the live broker: the target names consumer lag, and it must keep
+offering the rate during the outage, which a broker outage could not.
+
+- **Consumer lag is read from Silver's Delta log** after the run (`delta_log.py`): at every Silver
+  commit, the commit time minus the oldest of each partition's newest committed LogAppendTime. The
+  broker-to-host clock offset is bounded from delivery reports and recorded; a run whose offset
+  bound is wider than its declared tolerance is INVALID.
+- **Each run gets a fresh lake**, outside the repository (`--lake-parent`, default
+  `$TMPDIR/trace-x-load-stream/<run_id>`), with the consumer and Gold logs beside it. The lake is
+  kept as evidence; delete it when you are done with it. Records already on the topics are read too
+  (Bronze starts from earliest): the harness reports how many, and the warm-up absorbs them.
+- **Exit codes:** 0 every target met; 1 a target missed (record and `benchmarks/stream_throughput/
+  REPORT.md` written, as found); 2 the harness could not measure, so the run is INVALID (record
+  kept, no report); 3 a valid run on a dirty worktree (record kept, not publishable, no report).
+- **Local limits that can decide the result:** the tx topics' byte caps (`deploy/kafka/topics.yaml`)
+  bound how much unread backlog a 2-minute outage may leave; if the cap evicts unread records,
+  Bronze stops on `failOnDataLoss` and the outage target is recorded as failed, not skipped.
 
 ## Regenerating event models
 

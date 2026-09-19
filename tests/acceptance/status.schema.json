@@ -24,6 +24,10 @@
           "name": {"type": "string", "minLength": 8},
           "status": {"enum": ["NOT_STARTED", "IN_PROGRESS", "PASS", "FAIL", "BLOCKED"]},
           "notes": {"type": "string"},
+          "gating": {
+            "type": "boolean",
+            "description": "Whether the capability is a required phase exit capability. Absent means true. A non-gating capability keeps its real status; it is excluded only from the exit count."
+          },
           "evidence": {
             "type": "object",
             "required": ["command", "verified_at", "result"],

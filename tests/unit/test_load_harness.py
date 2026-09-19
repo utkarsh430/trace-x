@@ -18,6 +18,7 @@ the report this file renders is written to a temporary directory and discarded.
 
 from __future__ import annotations
 
+import datetime as dt
 import importlib.util
 import json
 import sys
@@ -672,3 +673,66 @@ def test_every_other_integrity_condition_applies_to_both_profiles() -> None:
         by_name = {v.name: v for v in harness.evaluate(broken, target_tps=500, profile=profile)}
         assert by_name["no_client_errors"].passed is False, profile
         assert by_name["not_rate_limited"].passed is False, profile
+
+
+# ------------------------------------------------------------- experiments ---
+
+
+def test_experiment_flags_come_together_and_record_outside_the_repository(tmp_path: Path) -> None:
+    """A comparison records every run on a clean tree: a record written inside the repository
+    would dirty the worktree for the next run before it started (docs/EVALUATION.md §8 rule 4)."""
+    assert harness.experiment_problem(None, None, None) is None
+    assert harness.experiment_problem("observation-log-ab", "log-on", tmp_path) is None
+    assert "together" in harness.experiment_problem("observation-log-ab", None, tmp_path)
+    assert "inside the repository" in harness.experiment_problem(
+        "observation-log-ab", "log-on", ROOT / "eval" / "manifest"
+    )
+    assert "lowercase" in harness.experiment_problem("Observation Log", "log-on", tmp_path)
+
+
+def test_an_experiment_record_carries_its_arm_and_the_live_checks_and_stays_complete() -> None:
+    checks = {"writer_session": "active s-1", "observation_log": "ok", "outbox_relay": "disabled"}
+    run = record(experiment="observation-log-ab", arm="log-on", gateway_checks=checks)
+    written = json.loads(json.dumps(asdict(run)))
+    assert (written["experiment"], written["arm"], written["gateway_checks"]) == (
+        "observation-log-ab",
+        "log-on",
+        checks,
+    )
+    assert linter.incomplete_fields(written) == []
+
+
+def test_a_gate_record_names_no_experiment() -> None:
+    written = asdict(record())
+    assert (written["experiment"], written["arm"], written["gateway_checks"]) == (None, None, {})
+
+
+def test_readiness_and_its_checks_are_read_from_the_gateway(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checks = {"writer_session": "active s-1", "observation_log": "ok"}
+    ready = {"ready": True, "checks": checks}
+    monkeypatch.setattr(harness, "_http_json", lambda *a, **k: (200, ready))
+    assert harness.probe_readiness("http://localhost:8010") == (True, checks)
+    not_ready = {"ready": False, "checks": checks}
+    monkeypatch.setattr(harness, "_http_json", lambda *a, **k: (503, not_ready))
+    assert harness.probe_readiness("http://localhost:8010") == (False, checks)
+    monkeypatch.setattr(harness, "_http_json", lambda *a, **k: (503, {}))
+    with pytest.raises(harness.LoadHarnessError):
+        harness.probe_readiness("http://localhost:8010")
+
+
+def test_runs_on_one_commit_and_day_get_distinct_run_ids() -> None:
+    """Two arms of one experiment, minutes apart on the same commit, once shared an id."""
+    first = harness.new_run_id(dt.datetime(2026, 9, 15, 1, 48, 53, tzinfo=dt.UTC))
+    second = harness.new_run_id(dt.datetime(2026, 9, 15, 1, 52, 9, tzinfo=dt.UTC))
+    assert first != second
+    assert first.startswith("load-20260915-014853-gateway-")
+    assert linter.RUN_ID.search(f"`run_id: {first}`").group(1) == first
+
+
+def test_a_run_record_is_never_overwritten(tmp_path: Path) -> None:
+    run = record()
+    run.write(tmp_path)
+    with pytest.raises(harness.LoadHarnessError, match="never overwritten"):
+        run.write(tmp_path)

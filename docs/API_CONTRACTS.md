@@ -57,6 +57,7 @@ bump **fails the build**. The diff is reviewed, not merely detected.
 | `/v1/transactions` | POST | **Synchronous** `RiskDecision`. p99 budget 100 ms |
 | `/v1/events/identity` | POST | 202 Accepted |
 | `/v1/events/device` | POST | 202 Accepted |
+| `/v1/events/authorization` | POST | 202 Accepted; 409 on a conflicting outcome, or on one naming another account than the transaction the online store holds; 503 without a system of record (ADR-0049) |
 | `/healthz` `/readyz` `/metrics` | GET | Liveness, readiness, Prometheus |
 
 ### `trace-api` — human RBAC via OIDC-style JWT

@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://trace-x.local/contracts/events/tx.authorization.v1.json",
+  "title": "TxAuthorizationV1",
+  "description": "One authorization outcome for one transaction, dated when the authorization system decided. Topic tx.authorization.v1, keyed by account_id and deduplicated by payload.transaction_id. A transaction's own outcome never reaches its own features (ADR-0049).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["envelope", "payload"],
+  "properties": {
+    "envelope": { "$ref": "envelope.v1.json" },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "transaction_id",
+        "account_id",
+        "authorization_outcome",
+        "transaction_occurred_at"
+      ],
+      "properties": {
+        "transaction_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "The transaction this outcome belongs to: the same value as its tx.raw.v1 payload.transaction_id."
+        },
+        "account_id": { "type": "string", "pattern": "^acct_\\d{6,}$" },
+        "authorization_outcome": {
+          "type": "string",
+          "enum": ["APPROVED", "DECLINED"],
+          "description": "What the authorization system decided. UNKNOWN carries no observation and REVERSED is a later event with other semantics, so neither is an outcome here."
+        },
+        "transaction_occurred_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "The transaction's event time, copied. The envelope's occurred_at is the outcome time."
+        }
+      }
+    }
+  }
+}

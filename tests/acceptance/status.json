@@ -1,10 +1,10 @@
 {
   "$schema": "./status.schema.json",
   "project": "TRACE-X",
-  "current_phase": "2",
-  "current_phase_name": "Hot Path: Gateway, Rules, Online Features",
-  "updated_at": "2026-09-12",
-  "last_verified_commit": "c86c6cd",
+  "current_phase": "3",
+  "current_phase_name": "Streaming & Medallion",
+  "updated_at": "2026-09-18",
+  "last_verified_commit": "4396c0f",
   "legend": {
     "NOT_STARTED": "No implementation exists.",
     "IN_PROGRESS": "Implementation started; acceptance evidence incomplete.",
@@ -137,7 +137,7 @@
       "evidence": {
         "command": "pytest -m property tests/unit/test_state_machines.py",
         "verified_at": "2026-09-12",
-        "result": "pytest -m property tests/unit/test_state_machines.py: 40 passed. Three machines (case/investigation/agent_invocation) as validated transition tables; every illegal transition raises across the full state x event product; tables self-validate at import (dead-end state refused); EXECUTING provably has exactly two entry points; no side effect reachable without passing DECIDED; investigation table diffed edge-for-edge against the ARCHITECTURE.md \u00a78 mermaid block. ADR-0027."
+        "result": "pytest -m property tests/unit/test_state_machines.py: 40 passed. Three machines (case/investigation/agent_invocation) as validated transition tables; every illegal transition raises across the full state x event product; tables self-validate at import (dead-end state refused); EXECUTING provably has exactly two entry points; no side effect reachable without passing DECIDED; investigation table diffed edge-for-edge against the ARCHITECTURE.md §8 mermaid block. ADR-0027."
       }
     },
     {
@@ -193,7 +193,8 @@
         "command": "pytest tests/unit/test_online_features.py",
         "verified_at": "2026-09-12",
         "result": "pytest tests/conformance + tests/integration/test_feature_semantics_redis.py: the SAME feature-semantics suite runs unmodified against the naive reference implementation and against Redis, now with completeness declared per test (ADR-0044): an unseen device is 'not known' on a store that has watched for its horizon and 'cannot tell' on one that started an hour ago; an unseen account on a complete store has measured-zero velocity; an empty store is never silently zero. 26 features with declarative semantics; hybrid EXACT/APPROXIMATE distinct storage (ADR-0034). The store writes only what the released features declare, with per-primitive retention derived from the declarations (state_plan.py; tests/unit/test_state_plan.py). Feature state cannot silently evict: the feature store is noeviction and separate from the disposable cache; tests/integration/test_online_store_capacity.py fills a real 2 MB noeviction Redis and proves evicted_keys stays 0, the refusal is typed, and the breaker stays closed. Memory model run_id bench-20260913-memory-model-5c770259: ten-minute working set 548 MiB, limit 704 MiB; steady state 25.82 GiB recorded as an open limitation, not tuned away."
-      }
+      },
+      "notes": "PASS stands on its recorded evidence, with a caveat recorded in Phase 3 planning: the online store disagrees with the reference on inputs the conformance suite never supplied (boundary minutes, duplicates, out-of-order arrival, currency scope, future-dated trims), the Redis conformance suite skips in CI, and an unreachable store does not withdraw completeness. Owned by Phase 3 Step 1 (docs/PHASE3_PLAN.md). Phase 3 Step 1b replaced the store's layout to implement ADR-0046; its conformance is tracked by P3.semantics-hardening."
     },
     {
       "id": "P2.rules-engine",
@@ -232,57 +233,151 @@
       "id": "P3.medallion",
       "phase": "3",
       "name": "Bronze/Silver/Gold Delta medallion",
-      "status": "NOT_STARTED",
+      "status": "PASS",
       "evidence": {
-        "command": "pytest -m integration tests/integration/test_medallion.py",
-        "verified_at": null,
-        "result": null
+        "command": "pytest -m 'integration and stream' tests/integration/test_bronze_kafka.py && pytest -m 'integration and stream' tests/integration/test_silver_kafka.py && pytest -m 'integration and stream' tests/integration/test_resource_bounds_kafka.py && pytest -m 'integration and stream' tests/integration/test_parity_run.py && pytest -m stream tests/stream/test_bronze_tables.py && pytest -m stream tests/stream/test_silver_tables.py && pytest -m stream tests/stream/test_gold_tables.py",
+        "verified_at": "2026-09-18",
+        "result": "Re-verified 2026-09-18 at b46e7e7 (store fix D26, feature set 6.0.0, and Silver's bounded MERGE D24), clean tree, commands run verbatim one segment at a time: every session passed again (Bronze Kafka 19 with the platform tests, Silver Kafka 1, resource-bounds Kafka 2, parity end-to-end 1, Bronze 5, Silver 13, Gold 7); 0 failed. Earlier evidence: All seven sessions passed, 0 failed, 0 skipped, at commit 1d22e75, one JVM per file (the 1 GiB driver heap does not survive several stream files in one session): Bronze Kafka 8 (116.13 s), Silver Kafka 1 (41.46 s), resource-bounds Kafka 2 (56.69 s), end-to-end parity run 1 (315.46 s), Bronze tables 5, Silver tables 12, Gold tables 7. Together they produce and check all 23 declared tables: 7 Bronze (6 topics byte-for-byte against a real broker, plus retention_audit), 9 Silver, and 7 Gold (built from real broker input by the parity run and checked by its zero-divergence oracle; minute_buckets, distinct_buckets and builds asserted directly and check_gold run in test_gold_tables). Limit, stated: silver.tx_raw_v1, silver.device_events_v1 and silver.investigation_requested_v1 are produced only from synthetic Bronze rows, never from real Kafka input (debt D23). The previous command named tests/integration/test_medallion.py, which never existed; repointed per docs/PHASE3_HANDOFF.md section 7 step 10."
       }
     },
     {
       "id": "P3.event-time",
       "phase": "3",
-      "name": "Watermarks, dedup, late-event routing, out-of-order correctness",
-      "status": "NOT_STARTED",
+      "name": "Duplicates (including retries with new envelope ids), out-of-order and late events handled exactly; future skew quarantined",
+      "status": "PASS",
       "evidence": {
-        "command": "pytest -m integration tests/integration/test_event_time.py",
-        "verified_at": null,
-        "result": null
-      }
+        "command": "pytest tests/unit/test_silver_rules.py tests/unit/test_silver_conservation.py tests/unit/test_stream_timing.py tests/unit/test_stream_silver_service.py && pytest -m stream tests/stream/test_silver_tables.py tests/stream/test_session_worker_python.py && pytest -m integration tests/integration/test_silver_kafka.py",
+        "verified_at": "2026-09-18",
+        "result": "Re-verified 2026-09-18 at b46e7e7 (store fix D26, feature set 6.0.0, and Silver's bounded MERGE D24), clean tree, commands run verbatim one segment at a time: 48 unit + 13 stream (silver_tables, session_worker_python) + 1 Silver Kafka integration passed; 0 failed. Earlier evidence: unit 48 passed; stream 69 passed on Temurin 17.0.18 and Delta 4.0.1, none skipped, including tests/stream/test_silver_tables.py 12 (two concurrent-write tests) and tests/stream/test_session_worker_python.py 1; integration 22 passed against a real broker and PostgreSQL, none skipped (Silver 1, Bronze 8, Kafka platform 11, worker relay 2)"
+      },
+      "notes": "Step 6 (ADR-0053, Proposed, amended after critic review). Silver admits each Bronze record with the producers' strict generated models, quarantines what it cannot admit with a reason, and holds one canonical row per declared identity (in-batch pick, MERGE, post-write uniqueness assertion). Producer retries with new envelope ids are identical duplicates. tx.scored.v1 keeps the RECORDED delivery under one total order, whatever the micro-batch boundaries. Lateness is stored (timing semantics v1, judged on stored milliseconds); a backfill is null. Future skew is quarantined. silver.late_events is a MERGE projection partitioned by silver_topic, after unpartitioned concurrent MERGEs failed 7 of 16 two-topic batches. Conservation accounts every Bronze row and cross-checks duplicates and late_events. Known limits: ADR-0053 section 7."
     },
     {
       "id": "P3.checkpoint-resume",
       "phase": "3",
       "name": "Checkpoint kill/resume: no loss, no double-count",
-      "status": "NOT_STARTED",
+      "status": "PASS",
       "evidence": {
         "command": "pytest -m chaos tests/chaos/test_spark_resume.py",
-        "verified_at": null,
-        "result": null
+        "verified_at": "2026-09-18",
+        "result": "Re-verified 2026-09-18 at b46e7e7 (store fix D26, feature set 6.0.0, and Silver's bounded MERGE D24), clean tree, commands run verbatim one segment at a time: 7 passed in 1007.47 s, one session; 0 failed. Earlier evidence: 7 passed, 0 failed, 0 skipped in 1001.12 s as ONE undivided session at commit 1d22e75 (Step 11 landed), TRACE_CHAOS_SEED=20260915 (default), test file unmodified (LATE_BY 20 min), clean tree, macOS M3 Pro, Docker Desktop 10 GiB, Temurin 17.0.20.1 / Spark 4.0.1 / Delta 4.0.1. All seven injections conserved Bronze and Silver at every kill and resume: process kill of the Bronze job and of the Silver job at seeded moments, a crash after the sink commit before Spark records the batch, a kill between Silver's per-target commits, replay from arbitrary offsets into a fresh lake, a Spark JVM kill mid-stream, and a broker restart during Bronze ingestion. Supersedes the earlier evidence that passed only in five -k splits."
       }
     },
     {
       "id": "P3.feature-parity",
       "phase": "3",
       "name": "Online vs offline feature parity within tolerance",
-      "status": "NOT_STARTED",
+      "status": "PASS",
       "evidence": {
-        "command": "pytest -m parity",
-        "verified_at": null,
-        "result": null
+        "command": "pytest -m 'parity and not integration and not stream' && pytest -m 'integration and stream' tests/integration/test_parity_run.py && python -m eval.parity.run --partition representative --mode measured ... && python -m eval.parity.run --partition adversarial-ingress --mode measured ...",
+        "verified_at": "2026-09-18",
+        "result": "PASS on ADR-0056 §Acceptance. Self-tests 183 passed and the end-to-end integration test passed at b46e7e7. Measured representative record parity-20260918-160446-representative-a3d51d7f (feature set 6.0.0, clean tree): 0 divergences in both pairings (445,484 / 445,302 compared), no unvouched exclusion, guard clean, arrival skew 0.30% < 1%. Measured adversarial record, recorded not gated: parity-20260918-174845-adversarial-ingress-a8198214, FAIL with 28 declined_ratio_1h lookback_completeness divergences where both sides are absent and the store is correctly INCOMPLETE (ADR-0056 §3 rule gap, PROGRESS D27; down from 169 before the store fix D26). Disclosed: both measured runs were taken at a3d51d7/a819821, before Silver's bounded MERGE (b46e7e7); that change is exact by construction (guarded), and the end-to-end parity test re-passed after it. declined_ratio_1h is never served with a value on this path (D28)."
       }
     },
     {
       "id": "P3.layout-benchmark",
       "phase": "3",
       "name": "Delta layout benchmark backing ADR-0015",
-      "status": "NOT_STARTED",
+      "status": "PASS",
       "evidence": {
-        "command": "make bench-layout",
-        "verified_at": null,
-        "result": null
+        "command": "make bench-layout ARGS=\"--optimize-max-file-size 134217728\"",
+        "verified_at": "2026-09-18",
+        "result": "Publishable run bench-20260918-135350-delta-layout-36816cc7 at commit 36816cc (clean tree): 10,000,000 rows shaped like gold.observations, 5 repetitions, 6 layouts (no-layout control, compacted control, PARTITIONED BY event_date, + ZORDER BY account_id, PARTITIONED BY stream, liquid CLUSTER BY (account_id, occurred_at)) x 4 query shapes (2 from Gold's code, 2 named by ADR-0015), files and bytes selected and bytes read recorded from the scan metrics, results identical across layouts. OPTIMIZE max file size 128 MiB declared before measurement. Ranking by the declared rule: date partitioning first (score 0.499; Z-order identical on every metric), liquid 0.807, controls 1.000, stream 1.169. Date partitioning loses on both code-backed shapes (2.6x and 1.4x the control's bytes) and wins on the two ADR-named shapes. Decision written into ADR-0015 (Proposed; acceptance is the user's at Phase 3 exit). Report: benchmarks/delta_layout/REPORT.md."
       },
       "notes": "ADR-0015 may not be merged until this produces committed output."
+    },
+    {
+      "id": "P3.kafka-ingest",
+      "phase": "3",
+      "name": "Declared Kafka topics, a correct producer, and conservation into Bronze",
+      "status": "PASS",
+      "evidence": {
+        "command": "pytest -m integration tests/integration/test_kafka_platform.py tests/integration/test_bronze_kafka.py && pytest -m stream tests/stream/test_bronze_tables.py && pytest tests/unit/test_bronze_conservation.py tests/unit/test_bronze_coverage_adapter.py tests/unit/test_bronze_registry.py tests/unit/test_lake_checkpoints.py tests/unit/test_stream_bronze_service.py",
+        "verified_at": "2026-09-18",
+        "result": "Re-verified 2026-09-18 at b46e7e7 (store fix D26, feature set 6.0.0, and Silver's bounded MERGE D24), clean tree, commands run verbatim one segment at a time: 19 Kafka integration + 5 Bronze stream + 161 unit passed; 0 failed. Earlier evidence: integration 19 passed (11 Kafka platform, 8 Bronze against a real broker and PostgreSQL), none skipped; stream 5 passed on Delta 4.0.1 and Temurin 17; unit 157 passed"
+      },
+      "notes": "Step 2 integrated (ADR-0047, Proposed): topics declared in deploy/kafka/topics.yaml and created and drift-verified only by scripts/kafka_topics.py; one producer factory (idempotent, murmur2 partitioning, schema-validated, EventPublishError unless every accepted record is delivered); a seeded fault overlay that keeps its publish schedule. tests/integration/test_kafka_platform.py passed 11 against a real broker. Step 4: the gateway publishes tx.scored.v1 and identity.events.v1 through the observation log, and tx.authorization.v1 through the outbox relay. Step 5 (ADR-0052, Proposed) was integrated on 2026-09-15. Each released topic has one append-only Bronze Delta table and one query. Conservation is judged over every checkpoint version, per topic id, and coverage is assessed over Bronze. The critic review's two Category A findings are fixed: a hole left by a reset read as conserved, and the high-water mark omitted unread partitions. Evidence: 157 Bronze unit tests passed; pytest -m stream tests/stream/test_bronze_tables.py passed 5; tests/integration/test_bronze_kafka.py passed 8 against a real broker. Step 5 closed (2026-09-15) on the existing suites; no new Bronze functionality. Evidence per invariant: produced records equal Bronze byte for byte (test_every_released_topic_lands_in_bronze_byte_for_byte_and_is_conserved, stream test_a_micro_batch_lands_byte_for_byte_through_the_checkpoint_and_is_never_parsed); a poison value is stored raw and blocks nothing (test_a_poison_value_between_valid_records_is_stored_raw_and_blocks_nothing); a restart neither loses nor duplicates, and a batch Spark replays from its offsets is skipped by Delta (test_a_restart_from_checkpoint_neither_loses_nor_duplicates); trimmed offsets and a recreated topic fail loudly (test_trimmed_unread_offsets_stop_bronze_loudly_and_trimmed_read_ones_do_not, test_a_recreated_topic_is_refused_where_spark_alone_silently_skips_its_first_records, test_a_topic_recreated_under_a_running_query_stops_it_and_lands_nothing_of_the_new_topic); conservation (unit suite, stream test_conservation_statistics_computed_in_spark_equal_the_reference); coverage (two integration tests, stream coverage rows); declared topics and a correct producer (test_kafka_platform.py). The acceptance command named tests/integration/test_kafka_ingest.py, which was never written; it now names the suites that hold the evidence. Not Step 5's: replay from an arbitrary offset into a fresh lake is P3.checkpoint-resume (Step 10); CI PostgreSQL for the live coverage tests is a Phase 3 exit item (Kafka and Spark tests in CI with nothing skipped); B6, a retention floor, is decided before Step 11."
+    },
+    {
+      "id": "P3.observation-log",
+      "phase": "3",
+      "name": "Gateway observation log: every crash, shed and outage loss is a detectable gap",
+      "status": "PASS",
+      "evidence": {
+        "command": "pytest -m chaos tests/chaos/test_observation_log.py",
+        "verified_at": "2026-09-18",
+        "result": "Re-verified 2026-09-18 at b46e7e7 (store fix D26, feature set 6.0.0, and Silver's bounded MERGE D24), clean tree, commands run verbatim one segment at a time: 10 passed; 0 failed. Earlier evidence: 10 passed, in two consecutive runs on the fixed tree; with tests/chaos/test_outbox_watermark.py, 11 passed"
+      },
+      "notes": "Phase 3 Step 4 (ADR-0051, Proposed). Slice 1 (2026-09-14): migration 0006 app.producer_sessions (database-clock timestamps, immutable identity, close-once, column-scoped trace_app grants), PostgresSessionLedger, PostgresWriterLock (a session-scoped advisory lock that ends with its connection) and trace_core.observation.session.WriterSession (fenced start, contiguous sequences, loss on any unconfirmed heartbeat, close only on a confirmed flush), with unit tests and integration tests against PostgreSQL. Slice 2 (2026-09-14): the gateway behind the fence. WriterSupervisor (heartbeat every 2 s off the event loop, a 6 s lease so a stuck heartbeat cannot keep an instance writing, an 8 s takeover grace after an unclosed predecessor, re-acquisition with a new session), /readyz writer_session, 503 with Retry-After for scoring, feature-read identity events and authorization outcomes while not the writer, start-up online-state writes only inside the fence, writer_refused_total. Evidence: 93 unit, contract and integration tests passed with none skipped; pytest -m chaos tests/chaos/test_writer_fence.py 1 passed (a terminated writer backend; never two ready writers). Slice 3 (2026-09-14): tx.scored.v1 released with its producer (schema, RELEASED entry, codegen model, topics.py key, topics.yaml declaration replacing the reservation with a measured record size) and the observation log: trace_core.observation.scored_event and ObservationLog sequence every online-state write (scored transactions, identity events that feed a stream), write online, then produce with block=False and tracex-session-id/tracex-seq headers; a session closes only on a confirmed flush of every assigned number, and the slice-2 shutdown that closed sessions with nothing logged was fixed. Evidence: 606 targeted unit, contract, conformance and integration tests passed with none skipped; tests/integration/test_observation_log_kafka.py against a real broker 2 passed (contiguous numbers across both topics, LogAppendTime, keyed; a paused broker refuses the close). Slice 4 (2026-09-14): OutboxRelay (SKIP LOCKED batches marked published only on a confirmed flush; rows whose own content cannot be published refused once and skipped; delivery failures retried) and migration 0007 (outbox rows inserted unpublished, relayed content immutable, published_at stamped once, trace_app UPDATE narrowed to the relay columns), wired into the gateway behind TRACE_GATEWAY_OUTBOX_RELAY and off until the A/B. Evidence: 276 targeted tests passed with none skipped, including the PostgreSQL relay and guard suites and fresh-migration ground-truth isolation; tests/integration/test_outbox_relay_kafka.py against a real broker 2 passed. Slice 5 (2026-09-15): the coverage rule (trace_core.observation.coverage, 14 unit tests) and the chaos suite. Scope: the kills hit a child process composing the production writer, pipeline, Redis store and log between the calls the gateway makes; the gateway's route order is unit-tested, and killing the rebuilt gateway under load belongs with the A/B. Reverted from PASS (2026-09-15): an independent critic found two Category A defects in the coverage rule, both confirmed by reproduction. A live session read before a later loss got a gap ending before it starts, and a gap started at the previous record's arrival, which can be later than the lost write. The critic also found that the chaos checks could not fail. Fixed (2026-09-15): the rule bounds gaps by the writer's own stamps, and by the ledger and log read times. Nothing at or after Coverage.through is vouched for. An unclosed tail is bounded by the writer's lease and takeover margin. Hypothesis property tests generate histories. The chaos checks put every lost write's recorded time inside a gap of its session, and one case reads the ledger mid-run before a loss. B2: the gateway pool bounds acquire and statement time by POSTGRES_TIMEOUT_S, and the writer is re-checked before every store write. Its unit tests are mutation-checked, and PostgreSQL enforcement passed 2. B3: rows handed over before a retryable failure are confirmed and marked. Rows after it are deferred, with no attempt. Authorization-outcome delivery watermark (user decision, 2026-09-15): migration 0008; outbox_watermark.advance in the relay's marking transaction, on every pass; and history_completeness, COMPLETE only when observation coverage and the watermark both vouch. Evidence: pytest -m chaos tests/chaos/test_observation_log.py passed 10 in two consecutive runs. tests/chaos/test_outbox_watermark.py passed 1: a lost marking commit keeps history INCOMPLETE though Kafka holds the records, duplicates are re-delivered, and history is COMPLETE only after the marks. The relay, watermark and pool suites passed 21 against PostgreSQL and 4 against a real broker. 185 gateway, observation and coverage unit tests passed. Critic re-review of 1d216c5 (2026-09-15) found one Category A defect: the write check asked whether the process was the writer, not whether the session that numbered the observation still was, so after a same-process re-acquisition an old session's number passed. It is fixed with WriterSupervisor.ready_as(session_id), and the tests fail when the session is ignored. Also fixed: readiness now reports a dead relay thread; a clock offset within the margin is no longer an anomaly; vouches refuses while any anomaly stands. Chaos on the fixed tree passed 11. Rule mutation checks, 10 mutants: the hand-written coverage tests catch every mutant on every run. The widened property tests catch 22 of 30 mutant-seed runs; two margin mutants, the lease bound and through, survive every seed. The old property tests caught 2 of 30. Step 4 exit (2026-09-15): scripts/observation_log_ab.py report applied the pre-registered hot-path A/B as written (benchmarks/gateway/observation-log-ab.md). It rejected option A on achieved rate: log-relay was the faster arm, just outside a noise band the fixed offered rate makes tiny, and the rule compares absolute differences, so it stands. Scoring-core p99 was within noise. Three runs that failed integrity were recorded and repeated. Option B is implemented: services/worker/relay.py runs OutboxRelay in trace-worker (compose `worker`, streaming profile). tests/unit/test_worker_relay.py passed 5 and tests/integration/test_worker_relay_kafka.py passed 2."
+    },
+    {
+      "id": "P3.semantics-hardening",
+      "phase": "3",
+      "name": "Declared feature semantics pass literal fixtures on every implementation; Phase 2 gates re-met",
+      "status": "PASS",
+      "evidence": {
+        "command": "pytest -m 'conformance or property' tests/conformance && pytest -m integration tests/integration/test_feature_semantics_redis.py tests/integration/test_redis_feature_store.py && pytest -m chaos tests/chaos && make load-gateway",
+        "verified_at": "2026-09-18",
+        "result": "Re-verified 2026-09-18 at b46e7e7 (store fix D26, feature set 6.0.0, and Silver's bounded MERGE D24), clean tree, commands run verbatim one segment at a time: conformance/property 271, Redis integration 99, `pytest -m chaos tests/chaos` 29 passed in one session at 4396c0f (after a class-C fix to test_writer_fence, which assumed no gateway was running); load gate load-20260918-193417-gateway-a8198214 PASS at a819821 (500.0 TPS, p50 2.69 ms, p99 40.53 ms, 0 5xx); 0 failed. Earlier evidence: Phase 2 gates re-met on feature set 3.0.0 with every threshold unchanged: load gate run_id load-20260914-gateway-bb2f0fa1 passes every exit condition (benchmarks/gateway/REPORT.md); the eval-v1 manual replay re-run (benchmarks/gateway/triage-bands.md); rule re-validation, controlled, byte-identical decisions against the 2.0.0 gateway (benchmarks/gateway/rule-revalidation-fs3.md). SERVED_FEATURES_CONFORM is True."
+      },
+      "notes": "Back to IN_PROGRESS on 2026-09-14 (Phase 3 Step E Stage 2, step 7 unit 2a), when feature set 3.0.0 declared declined_ratio_1h over verified authorization outcome events (ADR-0049, Proposed). Unit 2b: the Redis store passes every literal fixture as served again, including the outcome fixtures, and agrees with the reference on long histories with outcomes; the gateway applies outcomes online; SERVED_FEATURES_CONFORM is True. It returns to PASS when the Phase 2 gates are re-met on 3.0.0: the load gate, and the replay and rule re-validation, which run in Stage 2 step 13 with unit 3a's outcome replay. Last PASS, on feature set 2.0.0 (verified 2026-09-14): ADR-0046 semantics declared and pinned by literal fixtures in both evaluation modes, with 58 mutants and mode-agreement properties. The Redis store passes every literal fixture as served through one atomic record-and-read script, agrees with the reference on seeded months-long histories and eight concurrent writers, refuses whole when full, and withdraws completeness durably across restarts (chaos). Phase 2 load gate re-met on feature set 2.0.0 with thresholds unchanged: run_id load-20260914-gateway-b43a75ce. Manual replay re-run (benchmarks/gateway/triage-bands.md), and rule re-validation controlled against the Phase 2 commit on an identical store: the only legitimate-traffic regression, R010, is attributed exactly to self-inclusion (eval/replay/attribute_rule_changes.py) and surfaced as U10. Disclosures: one earlier load gate run was refused by the harness (dropped iterations and one timeout-degraded decision) and wrote no record. ADR-0046 is Proposed. U10 decided: R010 stays at >= 5; the eval-v1 delta (+9 legitimate, +3 fraud high-risk, all attributed to self-inclusion) is expected semantic drift, and a threshold study follows on eval-v2. Hot-account scoring cost and memory for the new layout are re-measured in Step 12; the store runs on one Redis instance, and several gateways need Step 4's writer fencing to learn of each other's holes. Stage 2 step 13 (2026-09-14), on feature set 3.0.0: the eval-v1 manual replay re-run on a vouched store with derived outcomes (benchmarks/gateway/triage-bands.md), and the rule re-validation re-met by a controlled comparison: the 2.0.0 gateway (b43a75c, outcomes withheld) and 3.0.0 produced byte-identical decisions on the same 60,000-transaction prefix (benchmarks/gateway/rule-revalidation-fs3.md; R002 and profile rules are not exercised there). PASS again on 2026-09-14: the Phase 2 load gate re-run on 3.0.0 passed every exit condition (run_id load-20260914-gateway-bb2f0fa1). Disclosures: the rule re-validation prefix exercises neither R002 nor the profile rules, whose 3.0.0 semantics are held by the literal fixtures and conformance suites."
+    },
+    {
+      "id": "P3.redis-hydration",
+      "phase": "3",
+      "name": "Redis reconstruction reaches completeness only through evidence, never across a gap",
+      "status": "PASS",
+      "evidence": {
+        "command": "pytest -m 'stream and integration' tests/integration/test_redis_hydration.py",
+        "verified_at": "2026-09-18",
+        "result": "Re-verified 2026-09-18 at b46e7e7 (store fix D26, feature set 6.0.0, and Silver's bounded MERGE D24), clean tree, commands run verbatim one segment at a time: 11 passed; 0 failed. Earlier evidence: 11 passed, 0 failed, 0 skipped in 233.55 s at commit 4fc23de, one undivided session against a throwaway Kafka broker, a real Redis, the suite's own migrated PostgreSQL database and Delta 4.0.1 on Temurin 17. Equality against the live store; all six refusals (a store another writer touched, a held fence, a withdrawal mid-run, a foreign write mid-run, an unknown session, Silver behind the evidence); the lost observation whose hole is withdrawn while the claim still starts after it; idempotence; a child SIGKILLed between two observe calls that resumes and converges; and the fifth declared difference (folded_out_of_order), which executed rather than passing vacuously. The memory spike ADR-0057 predicts remains unmeasured and is not claimed here."
+      }
+    },
+    {
+      "id": "P3.stream-throughput",
+      "phase": "3",
+      "name": "Sustained stream throughput and outage recovery at the 5,000 events/s target rate, recorded honestly",
+      "status": "FAIL",
+      "evidence": {
+        "command": "make load-stream",
+        "verified_at": null,
+        "result": "FAIL (2026-09-18), recorded honestly; the rate was never lowered. Latest valid record bench-20260918-200555-stream-throughput-b46e7e74 at b46e7e7, with Silver's canonical MERGE bounded (D24): every integrity check passed, and the consumer (Bronze + Silver in one JVM, 2g) again died of java.lang.OutOfMemoryError before the measured window. Diagnostics (not citable): a 4g run survived the 10-minute warm-up without reaching a steady state and died of OOM later (INVALID on host saturation, bench-20260918-201547-stream-throughput-b46e7e74); capping Bronze intake did not help; heap histograms are dominated by in-flight byte arrays. The remaining per-batch work that grows with the Silver table (the classification identity lookup and the post-write uniqueness check, not boundable on occurred_at) is the leading cause (D29); fixing it needs an identity-organised layout, a design decision. First valid FAIL: bench-20260918-141621-stream-throughput-50aad177."
+      }
+    },
+    {
+      "id": "P3.pin-failfast",
+      "phase": "3",
+      "name": "A wrong Java, Spark, Delta, Hadoop, Scala or jar fails fast with an actionable message",
+      "status": "PASS",
+      "evidence": {
+        "command": "pytest tests/unit/test_stream_toolchain.py tests/unit/test_doctor.py tests/unit/test_toolchain_consistency.py && JAVA_HOME=$(python scripts/java_home.py) pytest -m stream tests/stream/test_session.py",
+        "verified_at": "2026-09-18",
+        "result": "Re-verified 2026-09-18 at b46e7e7 (store fix D26, feature set 6.0.0, and Silver's bounded MERGE D24), clean tree, commands run verbatim one segment at a time: 79 unit + 8 stream passed, 1 loud skip (no second JDK installed to refuse); 0 failed. Earlier evidence: Unit, no JVM (fake JDKs are real executables printing a JDK version banner): Java 25 refused with the JAVA_HOME fix, and the PATH fallback checked exactly as Spark's launcher resolves it; an installed pip at another version and an uninstalled distribution refused; Hadoop 3.3 and Scala 2.12 jars refused; one flipped bit in a locked jar refused; PYSPARK_SUBMIT_ARGS, SPARK_CONF_DIR and a foreign SPARK_HOME refused before any JVM; every failure listed in one ToolchainMismatchError; doctor FAILs (required) on Java 25 and on missing jars from Phase 3, refuses an unparseable phase, and exits non-zero when run under Java 25; an all-skipped `-m stream` session exits non-zero with the collection-guard message; every pip install in the Makefile, workflows, Dockerfiles and shell scripts is hash-checked or the project's own --no-deps install; every CI job installs from the lock before its tooling; the lock is complete for Linux x86_64, Linux aarch64 and macOS arm64; the gateway's runtime lock is exactly derived from the main lock. Real JVM on Temurin 17: a Spark 4.0.1 session reports Java 17, Scala 2.13.x and Hadoop 3.4.x from the running JVM; Delta's session extension and the Kafka source provider load from the SHA-256-verified jars; a Delta table round-trips at millisecond UTC event time; the Kafka connector resolves with no spark.jars.packages; an invalid cast raises under ANSI; a real installed Temurin 25 is refused in a fresh interpreter before pyspark.sql is imported; a JVM contradicting a pin is stopped and refused after launch. Linux: a hashed install of both locks in python:3.12-slim passes pip check, and the gateway image builds from its hashed runtime lock with pip check clean and no pyspark or pytest inside. Pending: the first GitHub CI run. ADR-0045."
+      }
+    },
+    {
+      "id": "P3.resource-bounds",
+      "phase": "3",
+      "name": "Local resource caps asserted; unsafe lake maintenance refused",
+      "status": "PASS",
+      "evidence": {
+        "command": "pytest -m 'unit or integration' -k resource_bounds && pytest -m stream tests/stream/test_resource_bounds_maintenance.py",
+        "verified_at": "2026-09-18",
+        "result": "Re-verified 2026-09-18 at b46e7e7 (store fix D26, feature set 6.0.0, and Silver's bounded MERGE D24), clean tree, commands run verbatim one segment at a time: 46 unit/integration + 14 stream passed; 0 failed. Earlier evidence: 46 passed, 0 failed, 0 skipped in 59.51 s at commit 86d69e7 (the Step 11 landing, ADR-0052 Amendment 1): 44 unit cases and 2 integration cases against a throwaway Kafka broker, Postgres and Delta 4.0.1 on Temurin 17.0.20.1 (macOS, clean Docker environment). The same commit's Step 11 stream suite, marked `stream` only and so outside this command (debt D22), passed separately: `pytest -m stream tests/stream/test_resource_bounds_maintenance.py` 14 passed, 0 skipped in 409.15 s (crash at every maintenance step, refusals commit nothing, Bronze-only ignoreDeletes, Silver reset after retention, VACUUM/OPTIMIZE guards, an append racing maintenance). Hydration at the same commit: 11 passed. The first run of this command, on the pre-fix tree c4912d6, FAILED 1 of 44: a real broker's topic id contained '+', which the floor key refused; fixed in 86d69e7. Open: Amendment 1 Risks 1-3 (D21)."
+      }
+    },
+    {
+      "id": "P3.eval-v2",
+      "phase": "3",
+      "name": "eval-v2: legitimate identity/device activity, own manifest and digest, and presence is not a label proxy",
+      "status": "FAIL",
+      "gating": false,
+      "evidence": {
+        "command": "python -m eval.track_a.lpc5_control --control eval-v2 --candidate eval/track_a/eval-v2.candidate.manifest.json",
+        "verified_at": null,
+        "result": "LPC-5 revision 4 strict acceptance FAIL on the frozen eval-v2 candidate, with zero Category A (correctness, leakage or representation) findings (eval/track_a/audits/stage-2-evidence/lpc5-eval-v2-acceptance-rev4.txt)."
+      },
+      "notes": "Lead-added tracker for the user-approved Q5 requirements (docs/PHASE3_PLAN.md §3); not a separately approved capability. FAIL on its label-proxy acceptance: LPC-5 strict acceptance FAIL, Category A findings 0; the Category B and C reasons are in docs/PROGRESS.md. By the user's decision (2026-09-14) eval-v2 is nonetheless the frozen Phase 3 dataset (eval/track_a/eval-v2.manifest.json, materialisation run gen-20260914-eval-v2-276b661d), used with its limits disclosed: never described as LPC-5 compliant, a coverage-floor scenario mix, no natural-prevalence claim. The eval-v2 Stage 2 sub-track is CLOSED for Phase 3; acceptance-scale controls are deferred evaluation hardening (D15) and research-grade synthetic-data work is D16. LPC-5 reopens only for a downstream Category A correctness or leakage defect. Tracked, NON-GATING: not a required Phase 3 exit capability (user decision, 2026-09-15); its FAIL stands as recorded."
     },
     {
       "id": "P4.training",

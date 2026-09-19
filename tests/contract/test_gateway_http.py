@@ -50,11 +50,17 @@ class _ReferenceStore:
     def __init__(self) -> None:
         self.inner = ReferenceFeatureStore()
 
+    def score(self, event: Any) -> Any:
+        return self.inner.score(event)
+
     def snapshot(self, **kwargs: Any) -> Any:
         return self.inner.snapshot(**kwargs)
 
-    def observe(self, event: Any) -> None:
-        self.inner.observe(event)
+    def observe(self, event: Any) -> Any:
+        return self.inner.observe(event)
+
+    def withdraw_completeness(self, *, resume_at: Any) -> None:
+        self.inner.withdraw_completeness(resume_at=resume_at)
 
 
 def _state(*, feature_store: Any = None, triage: Any = None) -> GatewayState:
@@ -307,6 +313,72 @@ def test_identity_events_are_accepted(client: TestClient) -> None:
     assert response.json()["accepted"] is True
 
 
+class _RecordingStore(_ReferenceStore):
+    """Keeps what the gateway asked the store to record, in order."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.observed: list[Any] = []
+
+    def observe(self, event: Any) -> Any:
+        self.observed.append(event)
+        return super().observe(event)
+
+
+@pytest.mark.parametrize(
+    ("event_type", "stream"),
+    [
+        ("PASSWORD_CHANGE", "IDENTITY_CHANGE"),
+        ("EMAIL_CHANGE", "IDENTITY_CHANGE"),
+        ("PHONE_CHANGE", "IDENTITY_CHANGE"),
+        ("ADDRESS_CHANGE", "IDENTITY_CHANGE"),
+        ("MFA_RESET", "IDENTITY_CHANGE"),
+        ("LOGIN_FAILED", "IDENTITY_FAILED_LOGIN"),
+        ("LOGIN_SUCCEEDED", None),
+        ("MFA_ENROLLED", None),
+        ("UNKNOWN", None),
+    ],
+)
+def test_an_identity_event_feeds_only_its_declared_stream(
+    event_type: str, stream: str | None
+) -> None:
+    """ADR-0046 §4. The handler used to record every type that was not a failed login as an
+    identity change, so a successful login reset `hours_since_identity_change` -- the recency
+    signal an account takeover is detected by."""
+    store = _RecordingStore()
+    with TestClient(create_app(_state(feature_store=store))) as running:
+        response = running.post(
+            "/v1/events/identity",
+            json={
+                "account_id": "acct_000001",
+                "identity_event_type": event_type,
+                "occurred_at": dt.datetime.now(dt.UTC).isoformat().replace("+00:00", "Z"),
+            },
+            headers=AUTH,
+        )
+    assert response.status_code == 202
+    assert [event.stream.value for event in store.observed] == ([] if stream is None else [stream])
+
+
+def test_a_device_event_changes_no_online_state() -> None:
+    """No released feature reads a device event (ADR-0046 §4); recording one as a
+    transaction would add a phantom to every velocity count on the account."""
+    store = _RecordingStore()
+    with TestClient(create_app(_state(feature_store=store))) as running:
+        response = running.post(
+            "/v1/events/device",
+            json={
+                "device_id": "dev_000001",
+                "account_id": "acct_000001",
+                "device_event_type": "FIRST_SEEN",
+                "occurred_at": dt.datetime.now(dt.UTC).isoformat().replace("+00:00", "Z"),
+            },
+            headers=AUTH,
+        )
+    assert response.status_code == 202
+    assert store.observed == []
+
+
 def test_device_events_are_accepted(client: TestClient) -> None:
     response = client.post(
         "/v1/events/device",
@@ -331,3 +403,114 @@ def test_event_ingress_also_requires_authentication(client: TestClient) -> None:
         },
     )
     assert response.status_code == 401
+
+
+@pytest.mark.parametrize(
+    ("path", "body"),
+    [
+        (
+            "/v1/events/identity",
+            {"account_id": "acct_000001", "identity_event_type": "LOGIN_FAILED"},
+        ),
+        (
+            "/v1/events/device",
+            {
+                "device_id": "dev_000001",
+                "account_id": "acct_000001",
+                "device_event_type": "FIRST_SEEN",
+            },
+        ),
+    ],
+)
+def test_an_event_dated_beyond_the_future_skew_bound_is_refused_and_not_recorded(
+    path: str, body: dict[str, Any]
+) -> None:
+    """The same 24 h bound as transactions (docs/EVENT_CONTRACTS.md §6.3). The completeness
+    guard's resume margin assumes no recorded stream accepts anything further ahead."""
+    store = _RecordingStore()
+    ahead = dt.datetime.now(dt.UTC) + dt.timedelta(days=3)
+    with TestClient(create_app(_state(feature_store=store))) as running:
+        response = running.post(
+            path,
+            json={**body, "occurred_at": ahead.isoformat().replace("+00:00", "Z")},
+            headers=AUTH,
+        )
+    assert response.status_code == 422, response.text
+    assert store.observed == []
+
+
+def _identity_post(client: TestClient, key: str | None) -> Any:
+    headers = {**AUTH, **({"X-Idempotency-Key": key} if key else {})}
+    return client.post(
+        "/v1/events/identity",
+        json={
+            "account_id": "acct_000001",
+            "identity_event_type": "LOGIN_FAILED",
+            "occurred_at": dt.datetime.now(dt.UTC).isoformat().replace("+00:00", "Z"),
+        },
+        headers=headers,
+    )
+
+
+def test_an_identity_event_retried_under_one_key_is_one_observation() -> None:
+    """The event id is derived from the caller's token and key (plan §3 Q2), so a retry
+    counts once; without a key each delivery is new -- the limit ADR-0046 §1 states."""
+    store = _RecordingStore()
+    with TestClient(create_app(_state(feature_store=store))) as running:
+        first = _identity_post(running, "retry-me").json()["event_id"]
+        second = _identity_post(running, "retry-me").json()["event_id"]
+        other = _identity_post(running, "another").json()["event_id"]
+        unkeyed = {_identity_post(running, None).json()["event_id"] for _ in range(2)}
+    assert first == second
+    assert other != first
+    assert len(unkeyed) == 2
+    assert len(store.inner.events) == 1 + 1 + 2, "the retry was recorded as a second failed login"
+
+
+# --- authorization outcomes (ADR-0049 §4) --------------------------------------
+
+
+def _outcome_body(**over: Any) -> dict[str, Any]:
+    occurred = dt.datetime.now(dt.UTC) - dt.timedelta(seconds=5)
+    body: dict[str, Any] = {
+        "transaction_id": f"tx_{uuid.uuid4().hex[:16]}",
+        "account_id": "acct_000001",
+        "authorization_outcome": "DECLINED",
+        "decided_at": (occurred + dt.timedelta(milliseconds=340))
+        .isoformat()
+        .replace("+00:00", "Z"),
+        "transaction_occurred_at": occurred.isoformat().replace("+00:00", "Z"),
+    }
+    body.update(over)
+    return body
+
+
+def test_an_outcome_without_a_system_of_record_is_refused_not_acknowledged(
+    client: TestClient,
+) -> None:
+    """F15: an outcome the system of record did not keep is never acknowledged."""
+    response = client.post("/v1/events/authorization", json=_outcome_body(), headers=AUTH)
+    assert response.status_code == 503, response.text
+    assert response.headers["content-type"].startswith("application/problem+json")
+    assert response.headers["Retry-After"] == "5"
+
+
+def test_an_outcome_decided_before_its_transaction_is_a_422(client: TestClient) -> None:
+    body = _outcome_body()
+    body["decided_at"], body["transaction_occurred_at"] = (
+        body["transaction_occurred_at"],
+        body["decided_at"],
+    )
+    response = client.post("/v1/events/authorization", json=body, headers=AUTH)
+    assert response.status_code == 422, response.text
+
+
+def test_an_outcome_that_observes_nothing_is_a_422(client: TestClient) -> None:
+    body = _outcome_body(authorization_outcome="UNKNOWN")
+    response = client.post("/v1/events/authorization", json=body, headers=AUTH)
+    assert response.status_code == 422, response.text
+
+
+def test_an_unauthenticated_outcome_is_refused(client: TestClient) -> None:
+    response = client.post("/v1/events/authorization", json=_outcome_body())
+    assert response.status_code == 401, response.text

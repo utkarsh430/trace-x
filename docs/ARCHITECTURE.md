@@ -74,7 +74,7 @@ servers. Every process boundary has a stated technical reason; there are no othe
 |---|---|---|
 | `trace-gateway` | Hot path, ~100 ms p99 budget, stateless, scales on TPS | Must never share a thread pool, connection pool or GC pause with 60-second LLM investigations |
 | `trace-api` | Control plane; scales on analyst concurrency | Different SLO (seconds), different authz surface (human RBAC vs service tokens), different availability class |
-| `trace-worker` | Investigations: 30–120 s, LLM-bound, checkpointed, retried; scales on queue depth | A long-running non-idempotent workload inside an HTTP server loses work on restart and truncates on request timeout |
+| `trace-worker` | Investigations: 30–120 s, LLM-bound, checkpointed, retried; scales on queue depth. Since Phase 3 it also runs the outbox relay (ADR-0051 §7) | A long-running non-idempotent workload inside an HTTP server loses work on restart and truncates on request timeout. The pre-registered hot-path A/B ruled out the relay sharing the scoring process |
 | `trace-stream` | JVM runtime, checkpointed, event-time stateful | Cannot run inside a Python web process |
 | `trace-ui` | Different runtime | — |
 | 3 MCP servers | A genuine protocol + serialization boundary for tool domains that must be independently addressable, independently authorized, and federatable by AgentCore later | Merging collapses the boundary the design asserts, and turns the Phase 12 Gateway step into a rewrite |
@@ -167,9 +167,10 @@ records Redpanda as a documented alternative if the RAM ceiling binds).
 | `action.proposed.v1` | `investigation_id` | 3 / 6 | 90 d | worker → policy |
 | `action.executed.v1` | `action_id` | 3 / 6 | ∞ compacted | executor → audit |
 | `audit.v1` | `entity_id` | 3 / 6 | ∞ | all → audit sink |
-| `*.dlq` | original key | 1 / 3 | 30 d | poison messages, with full context |
 
-Envelope, keying and evolution rules: `docs/EVENT_CONTRACTS.md`.
+Topics are declared in `deploy/kafka/topics.yaml` and created only by `make kafka-topics`; the broker
+never creates one. There are no `.dlq` topics: a record Spark cannot parse or validate goes to a Delta
+quarantine table (ADR-0047). Envelope, keying and evolution rules: `docs/EVENT_CONTRACTS.md`.
 
 ---
 
@@ -205,12 +206,18 @@ blocker. Schemas, roles and grants are created **only** by Alembic
 
 Event-time semantics, explicitly implemented:
 
-- `withWatermark("occurred_at", "10 minutes")` on every stateful stage.
-- Deduplication via `dropDuplicatesWithinWatermark(["event_id"])`.
-- Late data beyond the watermark is routed to a `late_events` Delta table and counted — **never
-  silently dropped**.
+- **No watermark bounds Silver's deduplication** (ADR-0053; timing semantics v1 has no dedup
+  pre-filter). A stateful stage added later declares its own watermark, and may drop only rows it has
+  proven duplicate.
+- **Exact deduplication** by each topic's declared identity: deterministic within the micro-batch, a
+  MERGE on the identity, then a post-write uniqueness assertion. For `tx.scored.v1`, a preference
+  order keeps the recorded delivery rather than a retry that arrived first.
+- **Lateness is stored, not inferred:** `is_late` when arrival delay (LogAppendTime − `occurred_at`)
+  exceeds 600 s. A late event stays canonical, and `silver.late_events` holds exactly the late
+  canonical rows — **never silently dropped**.
 - All aggregation is event-time windowed. Processing time is never used for business logic.
-- Checkpoints per query under `_checkpoints/{query}/`; `availableNow` trigger for batch replay.
+- Checkpoints per query and version under `_checkpoints/<query>/v<N>/` (ADR-0048); `availableNow`
+  trigger for batch replay.
 - Stateful operations use `flatMapGroupsWithState` with explicit TTL.
 - **Data layout is deliberately undecided in code** — it is table DDL configured per ADR-0015, chosen
   by benchmark, and permitted to differ between local OSS Delta and Databricks.
@@ -299,7 +306,7 @@ recorded outcome, never a hang.
 |---|---|---|---|---|
 | Orchestrator | — (routes only) | **none — cannot retrieve** | 30 steps, 120 s | FAIL |
 | Behavioral | `SPEND_PROFILE`, `VELOCITY`, `AMOUNT_ANOMALY`, `ACCOUNT_TENURE` | in-process feature reads | 6 calls, 20 s | DEGRADE |
-| Device & Identity | `DEVICE_NOVELTY`, `DEVICE_SHARING`, `IP_REPUTATION`, `IDENTITY_CHANGE` | `identity-mcp` | 6, 20 s | DEGRADE |
+| Device & Identity | `DEVICE_NOVELTY`, `DEVICE_SHARING`, `IP_REPUTATION`, `IDENTITY_CHANGE`, `AUTHENTICATION_ANOMALY` | `identity-mcp` | 6, 20 s | DEGRADE |
 | Merchant Intelligence | `MERCHANT_RISK`, `MCC_ANOMALY`, `MERCHANT_PATTERN` | `fraud-intelligence-mcp` | 5, 20 s | DEGRADE |
 | Graph Investigation | `GRAPH_CLUSTER`, `RING_SCORE`, `LINK_PATH` | `graph-mcp` | 5, 30 s | DEGRADE |
 | Historical Case | `HISTORICAL_MATCH`, `PRIOR_OUTCOME` | `fraud-intelligence-mcp` | 4, 20 s | DEGRADE |
@@ -470,15 +477,17 @@ forbids UPDATE/DELETE, and a verifier job detects tampering. A broken chain is a
 **Tracing.** One `trace_id` flows HTTP ingress → Kafka header → Spark → worker → each agent node →
 each tool call (including across MCP) → action execution. An investigation is one distributed trace.
 
-**Metrics.** Hot path: `tx_score_latency_seconds`, `gateway_request_latency_seconds`, `online_store_memory_bytes{store}`, `online_store_evicted_keys_total{store}`, `tx_scored_total{band}`, `degraded_mode_total{reason}`.
+**Metrics.** Hot path: `tx_score_latency_seconds`, `gateway_request_latency_seconds`, `online_store_memory_bytes{store}`, `online_store_evicted_keys_total{store}`, `tx_scored_total{band}`, `degraded_mode_total{reason}`. Outcome ingress: `authorization_outcome_total{delivery,verification}` (ADR-0049).
 The two latency histograms measure deliberately different things and neither is a substitute for
 the other: `tx_score_latency_seconds` covers **scoring only** — the feature read, the rules and the
 banding — and is the `latency_ms` the caller is told; `gateway_request_latency_seconds` covers the
 **whole server-side request**, including authentication, the rate limit, the replay lookup, triage
-and the observe-write, and is the one to compare against the p99 budget. They were briefly one
+and the replay store, and is the one to compare against the p99 budget. Recording the transaction
+in the online store is part of scoring since ADR-0046: one atomic read-and-record. They were briefly one
 metric that spanned scoring plus triage plus the observe-write, which on a workload where most
 requests open an investigation reported a Postgres transaction as scoring time.
-Streaming: consumer lag, batch duration, `late_events_total`, `dedup_dropped_total`,
+Streaming: `event_publish_outcomes_total{topic,outcome}`, `event_publisher_errors_total{error,fatal}`,
+consumer lag, batch duration, `late_events_total`, `dedup_dropped_total`,
 `feature_parity_drift{feature}`. Agents: `investigation_duration_seconds`,
 `agent_invocations_total{agent,outcome}`, `tool_calls_total{tool,transport,status}`,
 `tool_authorization_denied_total`, `llm_tokens_total{agent,dir}`, `investigation_cost_usd`,
@@ -514,13 +523,17 @@ container cost, which is what makes local-first MCP viable on an 8 GB VM.
 
 **Two Redis instances, because eviction policy is per instance** (ADR-0044). The feature store holds
 correctness-relevant state and runs `noeviction`: when full it refuses the write, the decision says
-`feature_write_failed`, and its completeness epoch is withdrawn. The cache instance holds the replay
+`feature_write_failed`, and the gateway's completeness guard records a hole in PostgreSQL and moves the
+store's epoch forward (ADR-0046 §5). The cache instance holds the replay
 cache and rate-limit windows and runs `allkeys-lru`, because nothing in it decides — the replay
 guarantee's authority is `cases.trigger_transaction_id` in Postgres and the limiter fails open. The
-feature store's limit follows from `benchmarks/features/memory_model.py`: 704 MiB holds the
-ten-minute representative acceptance run with 1.25× headroom and about thirteen minutes of 500 TPS;
-the steady-state requirement at that rate is ~26 GiB and does not fit this profile, which ADR-0044
-states structure by structure rather than resolving by changing feature semantics. Allocated:
+feature store's limit follows from `benchmarks/features/memory_model.py`, which measures the Step 1b
+layout through the store itself (`run_id: bench-20260915-054159-memory-model-5ee55136`, ADR-0054). It
+projects 477.7 MiB for the ten-minute representative acceptance run, including an assumed
+authorization outcome per transaction, so its 1.25× headroom rule implies 640 MiB. The configured
+704 MiB stays until the Phase 3 re-run of the load gate measures this layout's real end-of-run
+memory. The steady-state requirement at 500 TPS is 36.53 GiB, dominated by one string key per
+observation, and does not fit this profile. Allocated:
 postgres 768M, redis 832M, redis-cache 160M, gateway 384M — 2,144 MiB, leaving 621 MiB for `api`,
 `worker` and `ui`.
 
@@ -557,17 +570,22 @@ it, and destroys it. Budget alarm, mandatory cost tags, and a scheduled teardown
 
 ## 16. Databricks environment (Phase 12)
 
-Asset Bundles (`databricks.yml`) for jobs and clusters as code. **The Spark code is identical to
-local** — notebooks are thin entrypoints calling `trace_core.stream.*`. That is the guard against
-"works on Databricks, unrunnable locally."
+Asset Bundles (`databricks.yml`) for jobs and clusters as code, applied once in ADR-0025's funded window.
+**The Spark code is identical to local**: jobs are thin entrypoints over `trace_core.stream.*`. That is
+the guard against "works on Databricks, unrunnable locally."
 
-Jobs: `bronze_ingest` (continuous), `silver_transform`, `gold_features`, `graph_sync`,
-`training_pipeline`, `drift_monitor`, `external_validation` (Track B).
+- **Jobs:** `bronze_ingest` (one query per topic), `silver_transform` (one query per topic) and
+  `gold_build` (batch). Redis reconstruction arrives with Phase 3 Step 9. `graph_sync`,
+  `training_pipeline`, `drift_monitor` and `external_validation` come in later phases.
+- **Unity Catalog:** `tracex.{bronze,silver,gold,ml,external}`, with the same identifiers as local, and
+  `groundtruth` in a **separately-granted** catalog mirroring the local Postgres isolation.
+- **Unchanged conventions:** declarations, checkpoints and loss refusals, and Silver's correctness
+  partition.
+- **Not carried over:** local-only retention (Q8, Step 11), and managed-property allowances.
+- **Table layout is re-decided for Databricks** (ADR-0015) rather than inheriting the local choice:
+  liquid clustering, with `CLUSTER BY AUTO` and predictive optimization where the runtime supports it.
 
-Unity Catalog `tracex.{bronze,silver,gold,ml,external}`, with `groundtruth` in a **separately-granted**
-catalog mirroring the local Postgres isolation. **Table layout is re-decided for Databricks**
-(ADR-0015) — liquid clustering, with `CLUSTER BY AUTO` + predictive optimization where the runtime
-supports it — rather than inheriting the local choice.
+Details and open Phase 12 decisions: `docs/DATA_ENGINEERING.md` §8.
 
 ---
 
@@ -604,12 +622,13 @@ zero unauthorized tool calls.
 
 | Failure | Detection | Behaviour |
 |---|---|---|
-| Feature-store Redis down | health probe / 20 ms timeout / breaker | Hot path → rules-only, `degraded=true` reason `redis_unavailable`, alert. Never fail-open silently. The cache instance and its limiter are NOT blamed |
-| Feature-store Redis **full** | `feature_write_failed` counted; `online_store_memory_bytes{store="features"}` at `maxmemory`; `online_store_evicted_keys_total{store="features"}` must stay 0 | Write refused (`noeviction`), decision made and marked degraded, completeness epoch withdrawn so every later decision says `history_incomplete`. Reads continue; the breaker does NOT open (ADR-0044) |
+| Feature-store Redis down | health probe / 20 ms timeout / breaker | Hot path → rules-only, `degraded=true` reason `redis_unavailable`, alert. Never fail-open silently. The cache instance and its limiter are NOT blamed. The unrecorded transactions are a hole, recorded and withdrawn as for a full store, and inherited by a gateway that restarts first (ADR-0046 §5) |
+| Feature-store Redis **full** | `feature_write_failed` counted; `online_store_memory_bytes{store="features"}` at `maxmemory`; `online_store_evicted_keys_total{store="features"}` must stay 0 | Write refused whole (`noeviction`; the record-and-read script is all or nothing), decision made on a read-only snapshot and marked degraded. A hole is recorded once in `app.feature_store_holes`; once writes succeed the epoch moves to that moment plus 24 h, so later decisions say `history_incomplete`, across restarts. Reads continue; the breaker does NOT open (ADR-0044, ADR-0046 §5) |
 | Feature-store Redis **empty or warming** (restart, `FLUSHALL`) | `/readyz` `feature_history: warming since …`; `degraded_mode_total{reason="history_incomplete"}` | Decisions made, `degraded=true` reason `history_incomplete`, until the store has recorded for the widest declared lookback (24 h windowed, 30 d profile). New-device and tenure rules cannot fire meanwhile. Readiness stays healthy (ADR-0044) |
-| Cache Redis down | health probe on `redis_cache` / cache breaker | Rate limiter fails open (`rate_limit_unavailable`), replay lookups skipped and retries re-scored against Postgres's `case_id`. **No decision changes** (ADR-0044) |
+| Cache Redis down | health probe on `redis_cache` / cache breaker | Rate limiter fails open (`rate_limit_unavailable`), replay lookups skipped and retries re-scored against Postgres's `case_id`. **No decision changes** (ADR-0044). A retry reusing its transaction id for a different payload, which the cache would have refused with 409, is decided rules-only with `observation_conflict` (ADR-0046 §1) |
 | Postgres down | connection error | Gateway 503; worker stops consuming — no work lost, the queue is in PG |
-| Kafka down | producer timeout | Gateway buffers to a bounded local WAL then sheds; scoring continues |
+| Online-store writer fence lost or held elsewhere (PostgreSQL restart, terminated backend, partition, a second gateway) | heartbeat every 2 s; 6 s lease; `/readyz` `checks.writer_session`; `writer_refused_total` | Instance not ready. Scoring, identity events a feature reads and authorization outcomes refused with 503 and `Retry-After`; events that change no online state accepted. A successor writes nothing until an unclosed, recently live predecessor's lease has expired. A lost session is never closed, so its gap is bounded by its last heartbeat (ADR-0051 §2) |
+| Kafka down | `/readyz` `checks.observation_log`; `observation_log_total` outcomes other than `handed_over`; `event_publish_outcomes_total{outcome="failed"}` | Scoring continues. The gateway producer buffers in memory, bounded, then sheds; there is no local WAL. Every observation shed, refused or undelivered leaves its writer session unclosed, a detectable gap bounded by its last heartbeat (ADR-0051) |
 | Model artifact missing/corrupt | digest check at boot | **Refuse to start.** A gateway serving an unknown model is worse than a down gateway |
 | Spark job crash | checkpoint + supervisor | Resume from checkpoint; online store serves stale-but-flagged features |
 | Neo4j down | health probe | Fall back to `PostgresGraphStore`; graph evidence confidence reduced and recorded |
@@ -621,7 +640,7 @@ zero unauthorized tool calls.
 | Worker crash mid-investigation | queue lease expiry | Another worker resumes from the LangGraph checkpoint, not from scratch |
 | Action execution fails | verification read-back | Compensate → `ESCALATED` → page |
 | Duplicate event | `event_id` dedup (Redis + Spark) | Idempotent; counted |
-| Poison message | 3 failures | → DLQ with full context; never blocks the partition |
+| Poison message | Spark parse or schema failure | → Delta quarantine with the raw bytes, the error and the consumer version; never blocks the partition (ADR-0047) |
 | Audit chain broken | verifier job | **Page immediately.** Treated as a security incident |
 
 **Fail-safe direction is explicit and asymmetric.** Scoring fails **open** (approve + flag) because

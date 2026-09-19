@@ -19,33 +19,77 @@
 | Hadoop | 3.4.x | Mismatch surfaces as an opaque `NoSuchMethodError` |
 | Scala | 2.13 | Spark 4.x baseline |
 
-`make doctor` asserts all six **before any Spark job starts**. Every pin is recorded in every run
-manifest; changing one invalidates prior benchmark comparability and requires a manifest-diff note
+`make doctor` asserts all six, and from Phase 3 each is a **required** check: Java by running the JDK
+Spark's launcher would use, pyspark and Delta from installed package metadata, and Hadoop and Scala from
+the jar names pyspark actually bundles. The Delta and Kafka-connector jars are pinned by SHA-256 and
+verified before a session may use them, and `trace_core.stream.session.build_session` repeats every
+check before a JVM starts, then asks the running JVM for its versions (ADR-0045). Every pin is recorded
+in every run manifest; changing one invalidates prior benchmark comparability and requires a manifest-diff note
 (ADR-0017).
 
 ---
 
 ## 2. Medallion architecture
 
+> **Being superseded in Phase 3.** The approved plan (`docs/PHASE3_PLAN.md` §2–§4) replaces parts of
+> §2–§4 below: Silver keeps every accepted event (late events are tagged and copied to `late_events`,
+> not removed) and is exactly deduplicated by a declared identity; Spark rejects go to a Delta
+> quarantine table; every table is created from its declaration before a query writes it (ADR-0048); Gold
+> is computed in batch; and reconstruction rebuilds the online store's
+> primitives rather than writing feature values back. Each section is rewritten by the step that
+> implements it, and until then the plan is authoritative where the two differ.
+
 | Tier | Content | Write mode | Guarantees |
 |---|---|---|---|
 | **Bronze** | Raw event plus envelope, untransformed | append | Nothing dropped, nothing altered. The replayable record of what actually arrived |
-| **Silver** | Deduplicated on `event_id`, watermarked, typed, validated, PII-tokenized | append + late routing | Event-time correct. Late events routed, never lost |
-| **Gold** | Event-time windowed aggregates, entity profiles, training features | upsert | Authoritative feature values. Reconciles the Redis online store |
+| **Silver** | Validated, typed, exactly deduplicated by each topic's identity, `trust_tier` carried | MERGE on the identity | One row per real event. Late events kept and tagged, never lost. Every Bronze row accounted for (ADR-0053) |
+| **Gold** | Event-time-complete point-in-time contexts per scored transaction, and primitive state shaped like the online store's (ADR-0055) | batch build: one MERGE per table from pinned Silver versions | Exact to the declared semantics in event-time-complete mode (three-way conformance). The oracle for parity (Step 8) and the source for Redis reconstruction (Step 9) |
 
 **Bronze is never rewritten.** A parsing bug is fixed by reprocessing Bronze into Silver, not by editing
 Bronze — that is the entire point of keeping it.
 
-### Silver transformations
-- Validate against the event JSON Schema; failures route to `<topic>.dlq` with the full envelope.
-- `dropDuplicatesWithinWatermark(["event_id"])` — exactly-once semantics within the watermark.
-- Type coercion to `CanonicalTransaction`, with `field_coverage` propagated from the source adapter.
-- PII tokenization per the field policy; `trust_tier` stamped and thereafter immutable.
-- Late-arrival tagging: events beyond the watermark go to `late_events` **and are counted**.
+### Silver transformations (ADR-0053)
+- **Validation.** Each Bronze value is validated with the topic's generated contract model, the one
+  producers validate with (strict, `extra="forbid"`). A record Silver cannot admit goes to
+  `silver.quarantine` with its raw bytes and a reason: `null_value`, `not_log_append_time`,
+  `invalid_event`, `unrepresentable`, `future_skew` or `identity_conflict`. Nothing goes to a
+  `.dlq` topic.
+- **Exact deduplication**, by each topic's declared identity. It is deterministic within the
+  micro-batch, then a MERGE on the identity, then a uniqueness assertion; no watermark bounds it.
+  - A delivery with the same content is recorded in `silver.duplicates`.
+  - One with different content is an identity conflict.
+  - `tx.scored.v1` keeps the recorded delivery, not a retry that happened to arrive first.
+- `trust_tier` stamped and thereafter immutable. **No PII tokenization is performed or claimed:** every
+  current source carries synthetic or already-anonymised identities, and tokenizing them would break joins
+  with the online store's keys. An explicit tokenization and privacy design is required before any source
+  containing real PII is admitted (`docs/PHASE3_PLAN.md` §3, Q9).
+- **Lateness is a stored fact** (timing semantics v1, `trace_core.stream.timing`).
+  - `arrival_delay_ms` is LogAppendTime − `occurred_at`.
+  - `is_late` is true when that exceeds 600,000 ms, and null for a backfill replay.
+  - A late event stays canonical; `silver.late_events` holds exactly the canonical rows that are late.
+- **Conservation.** Every Bronze row a Silver checkpoint consumed is a canonical row, a recorded
+  duplicate or a quarantine row (`python -m services.stream.silver conservation`).
 
-### Gold aggregates
-Event-time windowed velocity (1m/5m/1h/24h), amount statistics per account, distinct-entity counts,
-merchant risk aggregates, and entity profiles for the graph sync job.
+### Gold (ADR-0055)
+- **What a build reads.** `silver.tx_scored_v1`, `silver.identity_events_v1` and
+  `silver.tx_authorization_v1`, each at one pinned Delta version. Every transaction the gateway
+  accepted counts, including those the online store failed to record. `silver.tx_raw_v1` is not a
+  source: reading it as well would count a replayed transaction twice.
+- **What it writes.**
+  - Primitive state, shaped by the online store's plan: `gold.observations`, `gold.minute_buckets`
+    and `gold.distinct_buckets`.
+  - Point-in-time contexts: `gold.tx_windows`, `gold.tx_profiles` and `gold.tx_previous`.
+  - Build records: `gold.builds`, append-only, with each build's lag behind the Silver commits it
+    covers.
+- **Contexts, not finished values.** Gold stores what a feature context holds, and the shared feature
+  definitions evaluate it, so there is one meaning across the reference, Redis and Gold. Gold claims
+  no completeness itself.
+- **How a build is replayed.** Its plan is recorded in the `gold_build` checkpoint before any table is
+  touched, so a crashed build replays with the same pinned versions, and each table's MERGE is
+  idempotent.
+- **Cost.** Every build is a full rebuild, a recorded Negative consequence. Freshness is measured in
+  Step 13.
+- **Later phases, not built:** training features and graph-sync profiles.
 
 ---
 
@@ -56,12 +100,12 @@ only to measure lag.** Confusing them silently corrupts every windowed aggregate
 
 | Concern | Implementation |
 |---|---|
-| Watermark | `withWatermark("occurred_at", "10 minutes")` on every stateful stage |
-| Deduplication | `dropDuplicatesWithinWatermark(["event_id"])` |
+| Watermark | None in Silver, whose deduplication is bounded by the table, not a watermark (ADR-0053). A stateful streaming stage declares its own when one is added |
+| Deduplication | By each topic's declared identity (`deploy/kafka/topics.yaml`): deterministically within each micro-batch, then an insert-only MERGE through the query's checkpoint. Both are needed: Delta inserts every duplicate a MERGE source carries (ADR-0048) |
 | Out-of-order | Normal and expected. All aggregation is event-time windowed |
-| Late data | Beyond the watermark → `late_events` Delta table + counter. **Never silently dropped** |
+| Late data | Arrival delay over 600 s (timing semantics v1) → `is_late` on the canonical row, which `silver.late_events` also holds. **Never dropped** |
 | Stateful ops | `flatMapGroupsWithState` with explicit TTL for session and velocity state |
-| Checkpoints | Per query under `_checkpoints/{query}/` |
+| Checkpoints | `<lake root>/_checkpoints/<query>/v<N>/`, beside the tiers: each version owns its Delta app id and is the only way its query writes (ADR-0048) |
 | Replay | `availableNow` trigger for bounded batch reprocessing from any offset |
 | Local sizing | `spark.sql.shuffle.partitions=8`, driver 2g, executor 2g — sized for an 8 GB VM |
 
@@ -90,8 +134,10 @@ ADR-0002. The risk is silent divergence, so it is measured rather than trusted:
 - **Most features are compared by equality, not tolerance.** ADR-0034 stores distinct counts exactly
   wherever cardinality is bounded by one entity's own behaviour, so five of the seven distinct counts
   have a parity tolerance of *zero*; only the two whose cardinality is bounded by a sharing
-  population, plus the robust z-score, are estimates. A tolerance is a declared property of a named
-  feature, never a global allowance.
+  population are estimates. The robust z-score is exact since ADR-0046 declared its bounded sample to
+  be the definition. How each feature is compared -- equality, a `1e-9` floating-point tolerance, or
+  the per-stratum bound for an estimate -- is declared on the feature (`FeatureSpec.parity`), never a
+  global allowance.
 
 When the `streaming` profile is off, responses carry `X-Feature-Source: ONLINE_ONLY` so degradation is
 visible rather than silent.
@@ -195,10 +241,18 @@ Databricks answers are permitted to differ because the runtimes differ in capabi
 | `CLUSTER BY (…)` liquid | **supported**; manual `OPTIMIZE` | supported |
 | `CLUSTER BY AUTO` + predictive optimization | **not available** (needs Unity Catalog) | **candidate default** |
 
-`benchmarks/delta_layout/` runs the **real Gold query mix** — point lookup by `account_id`, time-range
-scan, training-set extract — at ≥ 10 M rows, recording **files scanned, bytes scanned, wall-clock and
-`OPTIMIZE` cost**. ADR-0015 is finalized from those numbers and cites them. A CI check asserts the ADR
-references non-empty benchmark output, so it cannot be accepted before its evidence exists.
+`benchmarks/delta_layout/` (`make bench-layout`) runs the **real Gold query mix** at ≥ 10 M rows
+shaped like `gold.observations`: the two `gold.read_context_rows` reads (one transaction's subject row
+by id, and the full context extract parity and training read) and ADR-0015's two further shapes that
+no Gold reader issues yet (point lookup by `account_id`, 24-hour time-range scan). It builds a no-layout
+control, a compacted control, `event_date` partitioning (a generated column, so readers keep filtering
+on `occurred_at`), partitioning plus `ZORDER BY (account_id)`, `stream` partitioning and liquid
+`CLUSTER BY (account_id, occurred_at)`, each filled by the MERGE Gold's writer issues. It records
+**files and bytes selected, bytes and records read (ADR-0048 §8), wall-clock, and write and
+`OPTIMIZE` cost**, refuses a missing metric or any difference in results between layouts, and ranks
+by a rule declared before measurement (`benchmarks/delta_layout/spec.py`). ADR-0015 is finalized from
+those numbers and cites them. A unit test keeps the ADR Proposed until `benchmarks/delta_layout/REPORT.md`
+cites a committed, publishable run of at least ten million rows.
 
 Nothing in the streaming code hardcodes a layout.
 
@@ -219,15 +273,56 @@ Nothing in the streaming code hardcodes a layout.
 
 ---
 
-## 8. Databricks parity
+## 8. Databricks strategy (documented in Phase 3, deployed in Phase 12)
 
-The Spark code is **identical** to local. Notebooks are thin entrypoints calling `trace_core.stream.*` —
-this is the guard against "works on Databricks, unrunnable locally", which would defeat the local-first
-requirement and make the pipeline untestable in CI.
+Nothing is deployed in Phase 3. ADR-0025 governs the one funded Phase 12 window: complete Terraform and
+Databricks Asset Bundles, applied once, then destroyed. This section records how what Phase 3 built maps
+onto Databricks, so that window adds deployment, not redesign. Decisions that need a Databricks runtime to
+settle stay open here and get their own ADRs in Phase 12.
 
-Jobs: `bronze_ingest` (continuous), `silver_transform`, `gold_features`, `graph_sync`,
-`training_pipeline`, `drift_monitor`, `external_validation` (Track B).
+**The Spark code is identical to local.** Jobs are thin entrypoints over `trace_core.stream.*`, the same
+modules `services/stream/*` call. That is the guard against "works on Databricks, unrunnable locally",
+which would defeat the local-first requirement and make the pipeline untestable in CI.
 
-Unity Catalog: `tracex.{bronze,silver,gold,ml,external}`, with `groundtruth` in a **separately-granted**
-catalog mirroring the local Postgres isolation (ADR-0004). Table layout is re-decided per ADR-0015
-rather than inherited.
+### What maps directly
+- **Jobs**, named as the local pipelines (snake_case, ADR-0048 U9):
+  - `bronze_ingest`: one continuous query per released topic;
+  - `silver_transform`: one query per topic, `silver_transform_<topic_name>`;
+  - `gold_build`: a batch build over pinned Silver versions (ADR-0055).
+  - The Redis reconstruction job arrives with Step 9.
+  - Planned for later phases: `graph_sync`, `training_pipeline`, `drift_monitor`, `external_validation`
+    (Track B).
+- **Tables**, with the same identifiers as local, under Unity Catalog `tracex.<tier>.<table>`:
+  - `tracex.bronze.<topic_name>`;
+  - `tracex.silver.<topic_name>`, `tracex.silver.duplicates`, `tracex.silver.late_events` and
+    `tracex.silver.quarantine`;
+  - `tracex.gold.*` (ADR-0055);
+  - `groundtruth` in a separately granted catalog, mirroring the local PostgreSQL isolation (ADR-0004).
+- **Declarations and checkpoints.** The ADR-0048 conventions are unchanged:
+  - every table is created from its declaration before a query writes it, and written only through
+    `OpenedCheckpoint`;
+  - checkpoints live per query and version (`_checkpoints/<query>/v<N>/`) on the job's storage
+    location.
+- **Loss refusals are identical.** `failOnDataLoss=true`, and every loss-tolerant reader option and
+  session setting is refused.
+- **Correctness-bearing layout travels as is.** `silver.late_events` is partitioned by `silver_topic`
+  because concurrent topic queries must not conflict (ADR-0053 §1), whatever the layout benchmark
+  decides.
+- **Dependencies outside the lake.** The observation-log coverage rule needs the `producer_sessions`
+  table (PostgreSQL, RDS on AWS) and Bronze. Kafka is MSK.
+
+### What does not travel, or is decided in Phase 12
+- **Local-only retention.** Step 11's audited retention floor, and Silver's `ignoreDeletes` allowance on
+  Bronze sources, are local-development overrides (Q8). Production Bronze stays append-only, the
+  production retention contract (`docs/EVENT_CONTRACTS.md`) is unchanged, and no Databricks job enables
+  the retention path.
+- **Table layout** is re-decided per environment (ADR-0015). Candidates are liquid clustering, and
+  `CLUSTER BY AUTO` with predictive optimization where the runtime supports it. The local benchmark
+  result is not inherited.
+- **Table protocol and managed properties.** Locally, tables use the minimum Delta protocol with an
+  allow-list of properties (ADR-0048 (k)). A Databricks runtime may set managed properties or defaults,
+  such as deletion vectors or row tracking, which the drift check refuses until they are explicitly
+  allowed. Phase 12 decides each allowance with evidence.
+- **Runtime version.** The local pins are Spark 4.0.1, Delta 4.0.1, Scala 2.13 and Java 17
+  (ADR-0018). Phase 12 selects a Databricks runtime matching them, and records any difference as a
+  manifest-diff note, as CLAUDE.md §5 requires.

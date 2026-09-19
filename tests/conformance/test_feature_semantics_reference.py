@@ -1,18 +1,24 @@
-"""Runs the shared feature-semantics suite against the naive reference store.
+"""The shared feature-semantics suite against the naive reference, in both evaluation modes.
 
-The suite itself lives in `feature_semantics_suite.py` and is implementation
-agnostic. Phase 2 adds a second subject (the Redis store) and Phase 3 a third
-(Spark Gold), each subclassing the **unmodified** suite -- which is what makes
-"online and offline agree" a checked property rather than an assurance.
+The suite lives in `feature_semantics_suite.py` and is implementation agnostic. The Redis store
+runs the as-served half; Phase 3's replay and Gold run the halves that match what they claim,
+each subclassing the unmodified suite (ADR-0046).
 """
 
 from __future__ import annotations
 
 import pytest
-from tests.conformance.feature_semantics_suite import ReferenceStoreConformanceTest
+from tests.conformance.feature_semantics_suite import (
+    ReferenceAsServedConformanceTest,
+    ReferenceEventTimeCompleteConformanceTest,
+)
 
 pytestmark = pytest.mark.conformance
 
 
-class TestReferenceFeatureStore(ReferenceStoreConformanceTest):
-    """The naive implementation must pass the suite it defines the meaning of."""
+class TestReferenceAsServed(ReferenceAsServedConformanceTest):
+    """The naive store must pass the literal fixtures, as served."""
+
+
+class TestReferenceEventTimeComplete(ReferenceEventTimeCompleteConformanceTest):
+    """The naive implementation must pass the literal fixtures over a complete history."""

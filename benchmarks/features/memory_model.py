@@ -1,44 +1,47 @@
 #!/usr/bin/env python3
-"""A memory model for the online feature store, derived from the released features.
+"""The online feature store's memory model, measured through the store itself (Phase 3 Step 12).
 
-**Why a model and not a measurement of the first ten minutes.** ADR-0041 sized
-the store from a sample taken while it was already evicting, and was wrong by
-2.8x. ADR-0042 corrected the number but still only knew what ten minutes of
-traffic cost. Neither says what the store needs at steady state, because a
-ten-minute run never sees a key expire and never sees a hot merchant's bucket
-hash reach its retention. This does: it measures the bytes each storage
-primitive actually costs in Redis -- base plus per-member, by writing synthetic
-keys and asking `MEMORY USAGE` -- and then projects every primitive the released
-`StatePlan` declares across the population, rate and retention it will see.
+**Why it was rewritten.** The Phase 2 model (`run_id: bench-20260913-memory-model-5c770259`) wrote
+synthetic keys of the Phase 2 shapes and fitted each with a straight line through two small sizes.
+The Step 1b store (ADR-0046 §5) no longer has those shapes. Every observation is now one string key
+for the raw window, beside per-account raw sets and a folded profile prefix. And a straight line
+through two small sizes cannot see a sorted set leave its compact encoding above 128 members.
 
-**Everything projected here is traceable to a declaration or a measurement.**
-The primitives, their retention and which entities get them come from
-`trace_core.features.state_plan.PLAN`. Bytes per key come from Redis. The
-population and per-account rate are the representative profile's, which are
-themselves derived from the frozen `eval-v1` manifest (ADR-0040). Nothing is a
-guess, and the report says which of the two kinds each number is.
+**What this does.**
+- It starts a throwaway Redis of the image the compose feature store runs, and refuses any other.
+- It drives `RedisOnlineFeatureStore` itself, the production Lua scripts, through controlled
+  scenarios, so every key shape is the store's by construction, never restated here.
+- After each scenario it reads Redis's exact `MEMORY USAGE` (SAMPLES 0) for every key and sums it by
+  key family. Nothing else writes to that Redis (ADR-0042 §3).
+- Each family becomes a curve over its size driver, measured on both sides of the encoding
+  threshold, and is projected over the representative profile's population and rate (ADR-0040),
+  unchanged from the Phase 2 model so that the correction isolates the layout, with the store's own
+  retentions (`LAYOUT`).
 
-Two projections, because they answer different questions:
+Two projections, as before: the ten-minute acceptance run, which sizes the configured limit, and
+steady state at the target rate, which is the honest capacity requirement and is not expected to fit
+a laptop.
 
-* **the ten-minute acceptance run** -- what the gate needs, so it can run with
-  `noeviction` and zero refused writes;
-* **steady state at 500 TPS** -- what the store needs to serve the target rate
-  indefinitely with the declared retention, which is the honest capacity
-  requirement and is NOT expected to fit a laptop.
-
-Writes a `BENCHMARK` record (`eval/manifest/`) and `benchmarks/features/MEMORY.md`,
-so every figure it publishes carries a `run_id` that `make check-claims` resolves.
+Writes a `BENCHMARK` record (`eval/manifest/`) and `benchmarks/features/MEMORY.md`, so every
+published figure carries the run's `run_id`.
 """
 
 from __future__ import annotations
 
 import argparse
 import datetime as dt
+import itertools
 import json
 import math
 import platform
+import re
+import shutil
+import socket
+import subprocess
 import sys
+import time
 import uuid
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Final
@@ -53,13 +56,16 @@ from data.generator.record import (  # noqa: E402
     is_dirty,
 )
 
-from trace_core.features.semantics import Entity, Stream  # noqa: E402
-from trace_core.features.state_plan import PLAN  # noqa: E402
+from trace_core.domain.enums import AuthorizationOutcome  # noqa: E402
+from trace_core.domain.time import event_time  # noqa: E402
+from trace_core.features.observation import Event, authorization_observation  # noqa: E402
+from trace_core.features.semantics import Stream  # noqa: E402
 
 MANIFEST_DIR: Final = ROOT / "eval" / "manifest"
 REPORT: Final = Path(__file__).resolve().parent / "MEMORY.md"
+COMPOSE: Final = ROOT / "deploy" / "compose.yml"
 
-# --- the representative profile (ADR-0040), restated from the k6 derivation ---
+# --- the representative profile (ADR-0040), restated from the k6 derivation, as in Phase 2 ---
 TARGET_TPS: Final = 500
 CANONICAL_WINDOW_S: Final = 600
 EVAL_V1_TX_PER_ACCOUNT_PER_DAY: Final = 0.43
@@ -72,155 +78,243 @@ IPS: Final = max(20_000, round(ACCOUNTS * 20_000 / 40_000))
 CARDS: Final = ACCOUNTS  # cards_per_account = 1 in the frozen manifest
 IDENTITY_EVENT_FRACTION: Final = 865 / 1_000_000
 """identity.events.v1 rows per tx.raw.v1 row in eval-v1."""
-HABITUAL_MERCHANT_RATIO: Final = 0.75
-HABITUAL_MERCHANTS_PER_ACCOUNT: Final = 8  # randrange(4, 13) mean
+HABITUAL_MERCHANTS_PER_ACCOUNT: Final = 8
 
-POPULATION: Final[dict[Entity, int]] = {
-    Entity.ACCOUNT: ACCOUNTS,
-    Entity.CARD: CARDS,
-    Entity.DEVICE: DEVICES,
-    Entity.MERCHANT: MERCHANTS,
-    Entity.IP: IPS,
-}
-"""Uniform draw over each pool, as the representative profile does (no hot
-skew; the skew was what made the old profile adversarial). Merchant choice is
-75% from an account's habitual set, so merchant arrivals are less uniform than
-the pool size suggests; treated as uniform here, which OVERSTATES merchant key
-count and is therefore conservative."""
+STORE_IMAGE: Final = "redis:7-alpine"
+NAMESPACE: Final = "mm"
+MIB: Final = 1_048_576
+SIZES: Final = (1, 16, 64, 128, 129, 256, 1_024)
+"""Members per key, on both sides of Redis's 128-entry compact sorted-set encoding."""
+FOLDED_SIZES: Final = (1, 20, 128, 512)
+HLL_SIZES: Final = (1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1_024)
+MINUTE_SIZES: Final = (1, 16, 128, 512, 1_440)
+OUTCOME_SIZES: Final = (1, 16, 128, 129)
 
 
 # ------------------------------------------------------------- measurement ---
 
 
 @dataclass(frozen=True)
-class Fit:
-    """bytes(key) ~= base + per_member * members, from two measured points."""
+class Curve:
+    """Bytes of one key of a family against its size driver, as measured."""
 
-    primitive: str
-    base_bytes: int
-    per_member_bytes: float
-    points: tuple[tuple[int, int], ...]
+    family: str
+    driver: str
+    points: tuple[tuple[float, float], ...]
+    """(size, bytes per key), sorted by size."""
 
-    def bytes_for(self, members: float) -> float:
-        if len(self.points) > 2:
-            # A measured curve: step up to the first point at or above `members`,
-            # which rounds a sketch UP to the next measured size (conservative).
-            for n, size in self.points:
-                if members <= n:
-                    return float(size)
-            return float(self.points[-1][1])
-        return self.base_bytes + self.per_member_bytes * members
-
-
-def _usage(client: Any, key: str) -> int:
-    usage = client.memory_usage(key)
-    return int(usage or 0)
+    def bytes_for(self, size: float) -> float:
+        """Piecewise linear between measured sizes; beyond the largest, the last segment's slope."""
+        if size <= 0:
+            return 0.0
+        points = self.points
+        if size <= points[0][0] or len(points) == 1:
+            return points[0][1] if size <= points[0][0] else points[-1][1]
+        for (x0, y0), (x1, y1) in itertools.pairwise(points):
+            if size <= x1:
+                return y0 + (y1 - y0) * (size - x0) / (x1 - x0)
+        (x0, y0), (x1, y1) = points[-2], points[-1]
+        return y1 + (y1 - y0) / (x1 - x0) * (size - x1)
 
 
-def measure_primitives(client: Any) -> dict[str, Fit]:
-    """Write synthetic keys of each shape at two sizes and fit base + slope.
+def family_of(key: str, namespace: str = NAMESPACE) -> str:
+    """`mm:obs:transaction:evt-1` -> `obs`: the store's key family, its first segment."""
+    prefix = f"{namespace}:"
+    if not key.startswith(prefix):
+        raise ValueError(f"{key!r} is not in namespace {namespace!r}")
+    return key[len(prefix) :].split(":", 1)[0]
 
-    Under a throwaway namespace on the live feature store; every key is deleted
-    afterwards. Member shapes mirror `RedisOnlineFeatureStore` exactly: velocity
-    members are dedup keys scored by ms, bucket fields are `{minute}:{kind}`,
-    exact-distinct members are entity ids, HLL is a sketch, the profile hash
-    carries one counter per distinct merchant/mcc/device, amounts are
-    `{ms}:{dedup}:{amount}`.
-    """
-    ns = f"mm:{uuid.uuid4().hex[:8]}"
-    fits: dict[str, Fit] = {}
-    now_ms = 1_790_000_000_000
 
-    def _fit(name: str, write: Any, sizes: tuple[int, int]) -> None:
-        points = []
-        for n in sizes:
-            key = f"{ns}:{name}:{n}"
-            write(key, n)
-            points.append((n, _usage(client, key)))
-            client.delete(key)
-        (n0, b0), (n1, b1) = points
-        slope = (b1 - b0) / (n1 - n0)
-        fits[name] = Fit(name, max(0, round(b0 - slope * n0)), slope, tuple(points))
+def family_usage(client: Any, namespace: str = NAMESPACE) -> dict[str, tuple[int, int]]:
+    """Every key's exact `MEMORY USAGE`, summed by family: {family: (keys, bytes)}."""
+    totals: dict[str, list[int]] = {}
+    for key in client.scan_iter(match=f"{namespace}:*", count=1_000):
+        size = int(client.memory_usage(key, samples=0) or 0)
+        entry = totals.setdefault(family_of(key, namespace), [0, 0])
+        entry[0] += 1
+        entry[1] += size
+    return {family: (keys, size) for family, (keys, size) in totals.items()}
 
-    def _fixed(name: str, write: Any, n: int) -> None:
-        """A primitive whose size does not grow with members: one point, slope 0."""
-        key = f"{ns}:{name}:{n}"
-        write(key, n)
-        size = _usage(client, key)
-        client.delete(key)
-        fits[name] = Fit(name, size, 0.0, ((n, size),))
 
-    def velocity(key: str, n: int) -> None:
-        client.zadd(key, {f"evt-{uuid.uuid4().hex}": now_ms + i for i in range(n)})
+def _at(ms: int) -> Any:
+    return event_time(dt.datetime.fromtimestamp(ms / 1000, tz=dt.UTC))
 
-    def buckets(key: str, n: int) -> None:
-        mapping = {}
-        for i in range(n):
-            minute = now_ms // 60_000 + i
-            mapping[f"{minute}:c"] = 3
-            mapping[f"{minute}:s"] = 12_345
-            mapping[f"{minute}:q"] = 152_399_025
-            mapping[f"{minute}:k"] = 3
-            mapping[f"{minute}:d"] = 0
-        client.hset(key, mapping=mapping)
 
-    def exact_distinct(key: str, n: int) -> None:
-        client.zadd(key, {f"dev_{i:09d}": now_ms + i for i in range(n)})
+def _tx(
+    i: int,
+    *,
+    account: str,
+    at_ms: int,
+    merchant: str = "mrch_000001",
+    device: str = "dev_000000001",
+    card: str = "card_000000001",
+    ip: str = "ip_0000001",
+    mcc: str = "5411",
+) -> Event:
+    return Event(
+        stream=Stream.TRANSACTION,
+        occurred_at=_at(at_ms),
+        account_id=account,
+        event_id=f"tx_{account}_{i:08d}",
+        currency="GBP",
+        amount_minor=1_000 + i,
+        card_id=card,
+        device_id=device,
+        merchant_id=merchant,
+        ip_id=ip,
+        merchant_mcc=mcc,
+        merchant_country="GB",
+        latitude=51.5 + (i % 7) * 0.01,
+        longitude=-0.12,
+    )
 
-    def hll(key: str, n: int) -> None:
-        client.pfadd(key, *[f"acct_{i:09d}" for i in range(n)])
 
-    def previous(key: str, n: int) -> None:
-        del n  # one hash of four fields, whatever the history
-        client.hset(
-            key,
-            mapping={
-                "occurred_ms": now_ms,
-                "latitude": 51.5074,
-                "longitude": -0.1278,
-                "card_present": 1,
-            },
-        )
+def measure(client: Any, store: Any, now_ms: int) -> dict[str, Curve]:
+    """Every family's curve, one scenario at a time on an otherwise empty Redis."""
+    points: dict[str, list[tuple[float, float]]] = {}
 
-    def profile(key: str, n: int) -> None:
-        mapping: dict[str, Any] = {
-            "first_seen_ms": now_ms,
-            "observations": n,
-            "lat": 51.5,
-            "lon": -0.1,
-        }
-        for i in range(n):
-            mapping[f"m:mrch_{i:06d}"] = 2
-            mapping[f"c:{5000 + (i % 40)}"] = 2
-            mapping[f"d:dev_{i:09d}"] = 2
-        client.hset(key, mapping=mapping)
+    def run(scenario: Callable[[], None]) -> dict[str, tuple[int, int]]:
+        client.flushall()
+        scenario()
+        return family_usage(client)
 
-    def amounts(key: str, n: int) -> None:
-        client.zadd(
-            key,
-            {f"{now_ms + i}:evt-{uuid.uuid4().hex[:12]}:{1000 + i}": now_ms + i for i in range(n)},
-        )
+    def per_key(usage: Mapping[str, tuple[int, int]], family: str) -> float:
+        keys, size = usage.get(family, (0, 0))
+        return size / keys if keys else 0.0
 
-    _fit("velocity", velocity, (1, 64))
-    _fit("buckets", buckets, (1, 120))  # n = active minutes
-    _fit("exact_distinct", exact_distinct, (1, 32))
-    # A HyperLogLog is SPARSE at low cardinality -- tens of bytes for a handful
-    # of members -- and converts to a dense ~12 KiB block only once enough
-    # registers are set. Almost every real bucket holds a few accounts per five
-    # minutes, so sizing every sketch at the dense figure overstated the store
-    # by 5x on the first run of this model. Measured as a curve instead, and
-    # looked up by each entity's expected cardinality per bucket.
-    hll_points: list[tuple[int, int]] = []
-    for n in (1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1_024, 5_000):
-        key = f"{ns}:hll:{n}"
-        hll(key, n)
-        hll_points.append((n, _usage(client, key)))
-        client.delete(key)
-    fits["hll"] = Fit("hll", hll_points[0][1], 0.0, tuple(hll_points))
-    _fixed("previous", previous, 1)
-    _fit("profile", profile, (1, 12))  # n = distinct merchants ~ devices
-    _fit("amounts", amounts, (1, 128))
-    return fits
+    def add(name: str, size: float, value: float) -> None:
+        points.setdefault(name, []).append((float(size), float(value)))
+
+    for n in SIZES:  # one account's raw transactions on one card, device and merchant, 1 s apart
+
+        def raw(n: int = n) -> None:
+            for i in range(n):
+                store.observe(_tx(i, account="acct_000000001", at_ms=now_ms - (n - i) * 1_000))
+
+        usage = run(raw)
+        add("obs", 1, per_key(usage, "obs"))
+        for family in ("tx", "card", "dev"):
+            add(family, n, usage.get(family, (0, 0))[1])
+        for family in ("epoch", "position", "hw"):
+            add(family, 1, per_key(usage, family))
+
+    for n in FOLDED_SIZES:  # a fully folded history: n transactions two days back, then one now
+
+        def folded(n: int = n) -> None:
+            start = now_ms - 3 * 86_400_000
+            for i in range(n):
+                store.observe(
+                    _tx(
+                        i,
+                        account="acct_000000002",
+                        at_ms=start + i * 60_000,
+                        merchant=f"mrch_{i % HABITUAL_MERCHANTS_PER_ACCOUNT:06d}",
+                        device=f"dev_{i % 2:09d}",
+                        mcc=f"{5400 + i % 4}",
+                    )
+                )
+            store.observe(_tx(n, account="acct_000000002", at_ms=now_ms))
+
+        usage = run(folded)
+        for family in ("pf", "pfh", "pfa", "pfl", "pfc"):
+            add(family, n, usage.get(family, (0, 0))[1])
+
+    for k in HLL_SIZES:  # k accounts at one IP and one merchant inside one five-minute bucket
+        bucket = (now_ms // 300_000) * 300_000
+
+        def sketch(k: int = k, bucket: int = bucket) -> None:
+            for i in range(k):
+                store.observe(
+                    _tx(
+                        0,
+                        account=f"acct_{i + 10:09d}",
+                        at_ms=bucket + i,
+                        card=f"card_{i:09d}",
+                        device=f"dev_{i:09d}",
+                    )
+                )
+
+        add("hll", k, per_key(run(sketch), "hll"))
+
+    for m in MINUTE_SIZES:  # one merchant and currency, one transaction per minute
+
+        def minutes(m: int = m) -> None:
+            for i in range(m):
+                store.observe(
+                    _tx(
+                        i,
+                        account=f"acct_{i % 50 + 100:09d}",
+                        at_ms=now_ms - (m - i) * 60_000,
+                        card=f"card_{i:09d}",
+                        device=f"dev_{i:09d}",
+                    )
+                )
+
+        add("mcv", m, run(minutes).get("mcv", (0, 0))[1])
+
+    for n in SIZES:  # one account's identity changes
+
+        def identity(n: int = n) -> None:
+            for i in range(n):
+                store.observe(
+                    Event(
+                        stream=Stream.IDENTITY_CHANGE,
+                        occurred_at=_at(now_ms - (n - i) * 1_000),
+                        account_id="acct_000000003",
+                        event_id=f"ie_{i:08d}",
+                    )
+                )
+
+        usage = run(identity)
+        add("obs_identity", 1, per_key(usage, "obs"))
+        add("ie", n, usage.get("ie", (0, 0))[1])
+
+    for n in OUTCOME_SIZES:  # one account's transactions, each then declined a second later
+
+        def outcomes(n: int = n) -> dict[str, tuple[int, int]]:
+            for i in range(n):
+                store.observe(_tx(i, account="acct_000000004", at_ms=now_ms - (n - i) * 2_000))
+            before = family_usage(client)
+            for i in range(n):
+                store.observe(
+                    authorization_observation(
+                        transaction_id=f"tx_acct_000000004_{i:08d}",
+                        account_id="acct_000000004",
+                        authorization_outcome=AuthorizationOutcome.DECLINED,
+                        decided_at=_at(now_ms - (n - i) * 2_000 + 1_000),
+                    )
+                )
+            return before
+
+        client.flushall()
+        before = outcomes(n)
+        after = family_usage(client)
+        added_obs = after.get("obs", (0, 0))[1] - before.get("obs", (0, 0))[1]
+        add("obs_outcome", 1, added_obs / n)
+        add("aov", 1, per_key(after, "aov"))
+        for family in ("ao", "aod"):
+            add(family, n, after.get(family, (0, 0))[1])
+
+    drivers = {
+        "obs": "one key",
+        "obs_identity": "one key",
+        "obs_outcome": "one outcome",
+        "aov": "one key",
+        "epoch": "one key",
+        "position": "one key",
+        "hw": "one key",
+        "hll": "accounts in the bucket",
+        "mcv": "minutes held",
+        "pf": "folded observations",
+        "pfh": "folded observations",
+        "pfa": "folded observations",
+        "pfl": "folded observations",
+        "pfc": "folded observations",
+    }
+    return {
+        name: Curve(name, drivers.get(name, "members"), tuple(sorted(set(values))))
+        for name, values in points.items()
+    }
 
 
 # -------------------------------------------------------------- projection ---
@@ -228,200 +322,196 @@ def measure_primitives(client: Any) -> dict[str, Fit]:
 
 @dataclass
 class Line:
-    primitive: str
+    family: str
     scope: str
-    retention_s: int
+    retention_s: float
     keys: float
-    members_per_key: float
+    size: float
     bytes_per_key: float
     total_bytes: float
     basis: str
 
 
-def _active_entities(pool: int, arrivals_per_s: float, horizon_s: float) -> float:
-    """How many distinct entities from `pool` appear within `horizon_s` of
-    uniform arrivals: pool * (1 - exp(-arrivals*horizon/pool))."""
-    expected = arrivals_per_s * horizon_s
-    return pool * (1.0 - math.exp(-expected / pool))
+def active_entities(pool: int, arrivals_per_s: float, span_s: float) -> float:
+    """Distinct entities of `pool` seen in `span_s` of uniform arrivals."""
+    if span_s <= 0 or arrivals_per_s <= 0:
+        return 0.0
+    return pool * (1.0 - math.exp(-arrivals_per_s * span_s / pool))
 
 
-def _members(pool: int, arrivals_per_s: float, retention_s: float) -> float:
-    """Observations per active entity inside its retention window."""
-    active = _active_entities(pool, arrivals_per_s, retention_s)
-    return (arrivals_per_s * retention_s) / max(active, 1.0)
+def retentions_s() -> dict[str, float]:
+    """The store's own retentions (`LAYOUT`), in seconds."""
+    from trace_core.repositories.redis_features import LAYOUT
+
+    config = json.loads(LAYOUT.config_json())
+    return {
+        name: config[f"{name}_ms"] / 1000
+        for name in ("raw_tx", "raw_ie", "profile", "card", "dev", "hll", "cv", "ao")
+    } | {"hll_bucket": config["hll_bucket_ms"] / 1000, "minute": config["minute_ms"] / 1000}
 
 
-def _line(
-    primitive: str,
-    scope: str,
-    retention: int,
-    keys: float,
-    members: float,
-    per_key: float,
-    basis: str,
-) -> Line:
-    return Line(primitive, scope, retention, keys, members, per_key, keys * per_key, basis)
-
-
-def project(fits: dict[str, Fit], *, horizon_s: float, tps: float) -> list[Line]:
-    """Every primitive the plan declares, over `horizon_s` of traffic at `tps`.
-
-    Retention caps the horizon per primitive: a ten-minute run keeps everything
-    it wrote, steady state keeps `retention` seconds of it.
-    """
+def project(
+    curves: Mapping[str, Curve],
+    retention: Mapping[str, float],
+    *,
+    horizon_s: float,
+    tps: float = TARGET_TPS,
+) -> list[Line]:
+    """Every family the store writes, over `horizon_s` of traffic at `tps`."""
     lines: list[Line] = []
-    identity_tps = tps * IDENTITY_EVENT_FRACTION
 
-    for (entity, stream), _windows in PLAN.velocity.items():
-        retention = PLAN.velocity_retention(entity, stream).seconds
-        rate = identity_tps if stream is not Stream.TRANSACTION else tps
-        span = min(horizon_s, retention)
-        keys = _active_entities(POPULATION[entity], rate, span)
-        members = _members(POPULATION[entity], rate, span)
-        per_key = fits["velocity"].bytes_for(members)
+    def line(
+        family: str, scope: str, keep: str, keys: float, size: float, per_key: float, basis: str
+    ) -> None:
         lines.append(
-            Line(
-                "velocity",
-                f"{entity.value}/{stream.value}",
-                retention,
-                keys,
-                members,
-                per_key,
-                keys * per_key,
-                "measured fit x plan retention",
-            )
+            Line(family, scope, retention[keep], keys, size, per_key, keys * per_key, basis)
         )
 
-    for entity, _windows in PLAN.buckets.items():
-        retention = PLAN.bucket_retention(entity).seconds
-        span = min(horizon_s, retention)
-        keys = _active_entities(POPULATION[entity], tps, span)
-        obs = _members(POPULATION[entity], tps, span)
-        active_minutes = min(
-            obs, span / 60.0
-        )  # one field set per active minute, at most one per minute
-        per_key = fits["buckets"].bytes_for(active_minutes)
-        lines.append(
-            Line(
-                "buckets",
-                entity.value,
-                retention,
-                keys,
-                active_minutes,
-                per_key,
-                keys * per_key,
-                "measured fit x plan retention; trimmed per write",
-            )
+    raw = min(horizon_s, retention["raw_tx"])
+    line(
+        "obs",
+        "transaction",
+        "raw_tx",
+        tps * raw,
+        1,
+        curves["obs"].bytes_for(1),
+        "one string key per observation, for the raw window",
+    )
+    accounts = active_entities(ACCOUNTS, tps, raw)
+    members = tps * raw / max(accounts, 1.0)
+    line(
+        "tx",
+        "account",
+        "raw_tx",
+        accounts,
+        members,
+        curves["tx"].bytes_for(members),
+        "measured curve at the active accounts' raw depth",
+    )
+
+    span = min(horizon_s, retention["profile"])
+    folded_accounts = active_entities(ACCOUNTS, tps, span)
+    folded = tps * max(0.0, span - retention["raw_tx"]) / max(folded_accounts, 1.0)
+    if folded > 0:
+        per_key = sum(curves[f].bytes_for(folded) for f in ("pf", "pfh", "pfa", "pfl", "pfc"))
+        line(
+            "pf..pfc",
+            "account",
+            "profile",
+            folded_accounts,
+            folded,
+            per_key,
+            "folded profile prefix, measured through the store's own fold",
         )
 
-    for (entity, dimension), _w in PLAN.exact_distinct.items():
-        retention = PLAN.exact_distinct_retention(entity, dimension).seconds
-        span = min(horizon_s, retention)
-        keys = _active_entities(POPULATION[entity], tps, span)
-        obs = _members(POPULATION[entity], tps, span)
-        # Distinct values per entity are bounded by the entity's own behaviour
-        # (ADR-0034): habitual merchants ~8, devices 1-3, countries ~1-2.
-        cap = {
-            "MERCHANT": HABITUAL_MERCHANTS_PER_ACCOUNT,
-            "DEVICE": 2.0,
-            "COUNTRY": 1.5,
-            "MCC": 4.0,
-            "ACCOUNT": obs,
-        }[dimension.value]
-        members = min(obs, cap) if entity is Entity.ACCOUNT else obs
-        per_key = fits["exact_distinct"].bytes_for(members)
-        lines.append(
-            Line(
-                "exact_distinct",
-                f"{entity.value}.{dimension.value}",
-                retention,
-                keys,
-                members,
-                per_key,
-                keys * per_key,
-                "measured fit x plan retention; members capped by ADR-0034 bound",
-            )
+    for family, pool, keep in (("card", CARDS, "card"), ("dev", DEVICES, "dev")):
+        window = min(horizon_s, retention[keep])
+        keys = active_entities(pool, tps, window)
+        size = tps * window / max(keys, 1.0)
+        line(
+            family,
+            family,
+            keep,
+            keys,
+            size,
+            curves[family].bytes_for(size),
+            "measured curve at the active entities' depth",
         )
 
-    for (entity, dimension), _windows in PLAN.approx_distinct.items():
-        retention = PLAN.approx_distinct_retention(entity, dimension).seconds
-        span = min(horizon_s, retention)
-        active = _active_entities(POPULATION[entity], tps, span)
-        obs = _members(POPULATION[entity], tps, span)
-        # One HLL key per active 5-minute bucket; its cardinality is the number
-        # of observations that landed in that bucket.
-        buckets_per_entity = min(obs, span / 300.0)
-        keys = active * buckets_per_entity
-        per_bucket_cardinality = obs / max(buckets_per_entity, 1.0)
-        per_key = fits["hll"].bytes_for(per_bucket_cardinality)
+    window = min(horizon_s, retention["hll"])
+    for scope, pool in (("IP", IPS), ("MERCHANT", MERCHANTS)):
+        entities = active_entities(pool, tps, window)
+        per_entity = tps * window / max(entities, 1.0)
+        buckets = max(1.0, min(per_entity, window / retention["hll_bucket"]))
+        cardinality = per_entity / buckets
+        line(
+            "hll",
+            scope,
+            "hll",
+            entities * buckets,
+            cardinality,
+            curves["hll"].bytes_for(cardinality),
+            "measured sketch at its bucket's cardinality x active buckets",
+        )
+
+    window = min(horizon_s, retention["cv"])
+    merchants = active_entities(MERCHANTS, tps, window)
+    minutes = min(tps * window / max(merchants, 1.0), window / retention["minute"])
+    line(
+        "mcv",
+        "merchant/GBP",
+        "cv",
+        merchants,
+        minutes,
+        curves["mcv"].bytes_for(minutes),
+        "measured curve at the minutes each merchant holds",
+    )
+
+    identity_rate = tps * IDENTITY_EVENT_FRACTION
+    window = min(horizon_s, retention["raw_ie"])
+    line(
+        "obs",
+        "identity",
+        "raw_ie",
+        identity_rate * window,
+        1,
+        curves["obs_identity"].bytes_for(1),
+        "one string key per identity event, for the raw window",
+    )
+    identity_accounts = active_entities(ACCOUNTS, identity_rate, window)
+    size = identity_rate * window / max(identity_accounts, 1.0)
+    line(
+        "ie",
+        "account",
+        "raw_ie",
+        identity_accounts,
+        size,
+        curves["ie"].bytes_for(size),
+        "measured curve at the active accounts' depth",
+    )
+
+    window = min(horizon_s, retention["ao"])
+    outcomes = tps * window
+    line(
+        "obs+aov",
+        "authorization outcome",
+        "ao",
+        outcomes,
+        1,
+        curves["obs_outcome"].bytes_for(1) + curves["aov"].bytes_for(1),
+        "ASSUMED one outcome per transaction, the upper bound",
+    )
+    outcome_accounts = active_entities(ACCOUNTS, tps, window)
+    size = outcomes / max(outcome_accounts, 1.0)
+    line(
+        "ao+aod",
+        "account",
+        "ao",
+        outcome_accounts,
+        size,
+        curves["ao"].bytes_for(size) + curves["aod"].bytes_for(size),
+        "ASSUMED one outcome per transaction; measured curve at the accounts' depth",
+    )
+
+    for family in ("epoch", "position", "hw"):
         lines.append(
             Line(
-                "hll",
-                f"{entity.value}.{dimension.value}",
-                retention,
-                keys,
+                family,
+                "store",
+                0,
                 1,
-                per_key,
-                keys * per_key,
-                "measured sketch size x active 5-min buckets",
-            )
-        )
-
-    for (entity, stream), _lb in PLAN.previous.items():
-        retention = PLAN.previous_retention(entity, stream).seconds
-        rate = identity_tps if stream is not Stream.TRANSACTION else tps
-        span = min(horizon_s, retention)
-        keys = _active_entities(POPULATION[entity], rate, span)
-        per_key = fits["previous"].bytes_for(1)
-        lines.append(
-            Line(
-                "previous",
-                f"{entity.value}/{stream.value}",
-                retention,
-                keys,
                 1,
-                per_key,
-                keys * per_key,
-                "measured x plan retention",
+                curves[family].bytes_for(1),
+                curves[family].bytes_for(1),
+                "one key",
             )
         )
-
-    for entity, _h in PLAN.profiles.items():
-        retention = PLAN.profile_retention(entity).seconds
-        span = min(horizon_s, retention)
-        keys = _active_entities(POPULATION[entity], tps, span)
-        obs = _members(POPULATION[entity], tps, span)
-        distinct_counters = min(obs, HABITUAL_MERCHANTS_PER_ACCOUNT + 3)
-        per_key = fits["profile"].bytes_for(distinct_counters)
-        lines.append(
-            Line(
-                "profile",
-                entity.value,
-                retention,
-                keys,
-                distinct_counters,
-                per_key,
-                keys * per_key,
-                "measured fit x plan horizon",
-            )
-        )
-        sample = min(obs, 128)
-        per_key = fits["amounts"].bytes_for(sample)
-        lines.append(
-            Line(
-                "amounts",
-                entity.value,
-                retention,
-                keys,
-                sample,
-                per_key,
-                keys * per_key,
-                "measured fit; sample capped at 128",
-            )
-        )
-
-    lines.append(Line("epoch", "store", 0, 1, 1, 64, 64, "one key"))
     return lines
+
+
+def configured_limit_mib(ten_minute_bytes: float, headroom: float) -> int:
+    """The ten-minute working set with headroom, rounded up to 64 MiB."""
+    return int(math.ceil(ten_minute_bytes * headroom / (64 * MIB)) * 64)
 
 
 # ------------------------------------------------------------------ record ---
@@ -446,30 +536,34 @@ class BenchmarkRunRecord:
     def write(self) -> Path:
         target = MANIFEST_DIR / f"{self.run_id}.json"
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(json.dumps(asdict(self), indent=2, sort_keys=True) + "\n")
+        with target.open("x") as handle:
+            handle.write(json.dumps(asdict(self), indent=2, sort_keys=True) + "\n")
         return target
 
 
 def _mib(b: float) -> str:
-    return f"{b / 1_048_576:,.1f} MiB"
+    return f"{b / MIB:,.1f} MiB"
 
 
 def render(
     record_id: str,
-    fits: dict[str, Fit],
-    ten_min: list[Line],
-    steady: list[Line],
-    limits: dict[str, Any],
+    curves: Mapping[str, Curve],
+    ten_min: Iterable[Line],
+    steady: Iterable[Line],
+    limits: Mapping[str, Any],
+    redis_version: str,
 ) -> str:
+    ten_min, steady = list(ten_min), list(steady)
+
     def table(lines: list[Line]) -> list[str]:
         rows = [
-            "| primitive | scope | retention | keys | members/key | bytes/key | total | basis |",
+            "| family | scope | retention | keys | size | bytes/key | total | basis |",
             "|---|---|---|---|---|---|---|---|",
         ]
         for ln in sorted(lines, key=lambda x: -x.total_bytes):
             rows.append(
-                f"| `{ln.primitive}` | {ln.scope} | {ln.retention_s:,}s | {ln.keys:,.0f} | "
-                f"{ln.members_per_key:,.1f} | {ln.bytes_per_key:,.0f} | "
+                f"| `{ln.family}` | {ln.scope} | {ln.retention_s:,.0f}s | {ln.keys:,.0f} | "
+                f"{ln.size:,.1f} | {ln.bytes_per_key:,.0f} | "
                 f"**{_mib(ln.total_bytes)}** | {ln.basis} |"
             )
         rows.append(f"| | | | | | | **{_mib(sum(x.total_bytes for x in lines))}** | |")
@@ -481,95 +575,139 @@ def render(
         "> Written by `benchmarks/features/memory_model.py`, never by hand. Every figure comes",
         f"> from the run recorded as `run_id: {record_id}`, which `make check-claims` resolves.",
         "",
-        "Derived from the released `StatePlan` (what is stored, for how long) and from Redis's",
-        "own `MEMORY USAGE` on synthetic keys of each shape. Population and rate are the",
-        f"representative profile's (ADR-0040): {ACCOUNTS:,} accounts, {MERCHANTS:,} merchants,",
-        f"{DEVICES:,} devices, {IPS:,} IPs, {TARGET_TPS} TPS, uniform arrivals.",
+        "Measured through `RedisOnlineFeatureStore` itself, the Step 1b layout (ADR-0046 §5), on a",
+        f"throwaway `{STORE_IMAGE}` (Redis {redis_version}), with Redis's exact",
+        "`MEMORY USAGE` summed by",
+        "key family. Population and rate are the representative profile's (ADR-0040), unchanged",
+        f"from Phase 2: {ACCOUNTS:,} accounts, {MERCHANTS:,} merchants, {DEVICES:,} devices,",
+        f"{IPS:,} IPs, {TARGET_TPS} TPS, uniform arrivals. Retentions are the store's `LAYOUT`.",
+        "It supersedes the Phase 2 model (`run_id: bench-20260913-memory-model-5c770259`), which",
+        "measured the Phase 2 key shapes.",
         "",
-        f"## Measured bytes per primitive — `run_id: {record_id}`",
+        f"## Measured curves — `run_id: {record_id}`",
         "",
-        "| primitive | base bytes | bytes per member | measured points (members, bytes) |",
-        "|---|---|---|---|",
+        "| family | size driver | measured points (size, bytes per key) |",
+        "|---|---|---|",
     ]
-    for f in fits.values():
-        points = ", ".join(f"({n}, {b:,})" for n, b in f.points)
-        out.append(f"| `{f.primitive}` | {f.base_bytes:,} | {f.per_member_bytes:,.1f} | {points} |")
+    for curve in curves.values():
+        pts = ", ".join(f"({s:,.0f}, {b:,.0f})" for s, b in curve.points)
+        out.append(f"| `{curve.family}` | {curve.driver} | {pts} |")
     out += [
         "",
         f"## The ten-minute acceptance run — `run_id: {record_id}`",
         "",
         *table(ten_min),
         "",
-        f"**Configured feature-store limit: {limits['feature_maxmemory']}** — the projection above",
-        f"with {limits['headroom_factor']}x headroom for fragmentation and for the model's own",
-        "error, rounded up to 64 MiB. The gate runs with `noeviction`, so exceeding it would be a",
-        "refused write and a failed run, not a silent loss.",
+        f"**Configured feature-store limit: {limits['feature_maxmemory']}**: the projection above",
+        f"with {limits['headroom_factor']}x headroom for fragmentation and for the model's",
+        "own error,",
+        "rounded up to 64 MiB. The store runs with `noeviction`, so exceeding it is a refused",
+        "write",
+        "and a failed run, not a silent loss.",
         "",
         f"## Steady state at {TARGET_TPS} TPS with the declared retention — `run_id: {record_id}`",
         "",
         *table(steady),
         "",
-        "This is the honest capacity requirement for serving the target rate indefinitely. It",
-        "does not fit a laptop, and the local budget does not pretend to: at the configured limit",
-        f"the local store holds **{limits['local_minutes_at_target']:,.0f} minutes** of",
-        f"{TARGET_TPS} TPS before it refuses writes -- loudly, with `feature_write_failed` on",
-        "every",
-        "decision and the completeness epoch withdrawn (ADR-0044). The largest lines above are",
-        "where any reduction would have to come from, and each is a feature-semantics decision",
-        "rather than a tuning one.",
+        "This is the capacity requirement for serving the target rate indefinitely, and it is not",
+        "expected to fit a laptop. Lines marked ASSUMED rest on a stated upper bound, not on the",
+        "profile.",
         "",
     ]
     return "\n".join(out) + "\n"
 
 
+# ------------------------------------------------------------- operations ---
+
+
+def compose_store_image(compose_text: str) -> str:
+    """The image of the compose `redis` service: the feature store."""
+    match = re.search(r"^  redis:\n(?:    .*\n)*?    image: (\S+)", compose_text, re.MULTILINE)
+    if match is None:
+        raise SystemExit("deploy/compose.yml has no `redis` service image")
+    return match.group(1)
+
+
+def _docker(*args: str) -> subprocess.CompletedProcess[str]:
+    binary = shutil.which("docker") or "docker"
+    return subprocess.run([binary, *args], capture_output=True, text=True, timeout=120)  # noqa: S603
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--host", default="localhost")
-    parser.add_argument("--port", type=int, default=6389)
-    parser.add_argument(
-        "--headroom",
-        type=float,
-        default=1.25,
-        help=(
-            "multiplier over the ten-minute projection for the configured limit. 1.25 keeps the "
-            "core profile inside ARCHITECTURE §14's 2.7 GB budget with room for api/worker/ui; the "
-            "acceptance run records the store's real end-of-run memory, which is what validates it."
-        ),
-    )
+    parser.add_argument("--headroom", type=float, default=1.25)
     args = parser.parse_args()
 
+    image = compose_store_image(COMPOSE.read_text())
+    if image != STORE_IMAGE:
+        raise SystemExit(
+            f"the compose feature store runs {image}, not {STORE_IMAGE}: "
+            "refusing to measure another"
+        )
     import redis
 
-    client = redis.Redis(host=args.host, port=args.port, decode_responses=True)
-    started = dt.datetime.now(dt.UTC)
-    tool_version = str(client.info("server")["redis_version"])
-    fits = measure_primitives(client)
+    from trace_core.repositories.redis_features import RedisOnlineFeatureStore
 
-    ten_min = project(fits, horizon_s=CANONICAL_WINDOW_S, tps=TARGET_TPS)
-    steady = project(fits, horizon_s=RETENTION_25H_S * 30, tps=TARGET_TPS)
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = int(probe.getsockname()[1])
+    name = f"tracex-memory-model-{uuid.uuid4().hex[:8]}"
+    started_container = _docker(
+        "run",
+        "-d",
+        "--rm",
+        "--name",
+        name,
+        "-p",
+        f"127.0.0.1:{port}:6379",
+        STORE_IMAGE,
+        "redis-server",
+        "--appendonly",
+        "no",
+        "--save",
+        "",
+    )
+    if started_container.returncode != 0:
+        raise SystemExit(f"could not start {STORE_IMAGE}: {started_container.stderr[:300]}")
+    started = dt.datetime.now(dt.UTC)
+    try:
+        client = redis.Redis(host="127.0.0.1", port=port, decode_responses=True, socket_timeout=30)
+        for _ in range(100):
+            try:
+                if client.ping():
+                    break
+            except Exception:
+                time.sleep(0.1)
+        redis_version = str(client.info("server")["redis_version"])
+        store = RedisOnlineFeatureStore(client, namespace=NAMESPACE)
+        curves = measure(client, store, int(time.time() * 1000))
+    finally:
+        _docker("rm", "-f", name)
+
+    retention = retentions_s()
+    ten_min = project(curves, retention, horizon_s=CANONICAL_WINDOW_S)
+    steady = project(curves, retention, horizon_s=retention["profile"])
     ten_total = sum(x.total_bytes for x in ten_min)
     steady_total = sum(x.total_bytes for x in steady)
-
-    # The configured limit: ten-minute working set with headroom, rounded up to 64 MiB.
-    needed = ten_total * args.headroom
-    limit_mib = int(math.ceil(needed / (64 * 1_048_576)) * 64)
-    bytes_per_second_at_target = ten_total / CANONICAL_WINDOW_S
-    local_minutes = (limit_mib * 1_048_576) / bytes_per_second_at_target / 60
-
-    record_id = f"bench-{started:%Y%m%d}-memory-model-{git_commit_sha()[:8]}"
-    limits = {
-        "feature_maxmemory": f"{limit_mib}mb",
-        "headroom_factor": args.headroom,
-        "local_minutes_at_target": local_minutes,
-    }
+    limit_mib = configured_limit_mib(ten_total, args.headroom)
+    record_id = f"bench-{started:%Y%m%d-%H%M%S}-memory-model-{git_commit_sha()[:8]}"
+    limits = {"feature_maxmemory": f"{limit_mib}mb", "headroom_factor": args.headroom}
     record = BenchmarkRunRecord(
         run_id=record_id,
         started_at=started.isoformat(),
         finished_at=dt.datetime.now(dt.UTC).isoformat(),
-        tool_version=tool_version,
+        tool_version=redis_version,
         measured={
-            "fits": {k: asdict(v) for k, v in fits.items()},
-            "population": {e.value: n for e, n in POPULATION.items()},
+            "store_image": STORE_IMAGE,
+            "curves": {k: asdict(v) for k, v in curves.items()},
+            "retention_s": retention,
+            "population": {
+                "accounts": ACCOUNTS,
+                "cards": CARDS,
+                "devices": DEVICES,
+                "merchants": MERCHANTS,
+                "ips": IPS,
+            },
             "target_tps": TARGET_TPS,
             "ten_minute_bytes": ten_total,
             "ten_minute_lines": [asdict(x) for x in ten_min],
@@ -577,26 +715,21 @@ def main() -> int:
             "steady_state_lines": [asdict(x) for x in steady],
             "configured_feature_maxmemory_mib": limit_mib,
             "headroom_factor": args.headroom,
-            "local_minutes_at_target_tps": local_minutes,
         },
     )
     path = record.write()
-    REPORT.parent.mkdir(parents=True, exist_ok=True)
-    REPORT.write_text(render(record_id, fits, ten_min, steady, limits))
-
+    REPORT.write_text(render(record_id, curves, ten_min, steady, limits, redis_version))
     print(f"run_id: {record_id}")
     print(f"record: {path.relative_to(ROOT)}")
     print(f"report: {REPORT.relative_to(ROOT)}")
     print(
-        f"ten-minute run  : {_mib(ten_total)}   -> configured limit {limit_mib} MiB "
-        f"({args.headroom}x headroom)"
+        f"ten-minute run : {_mib(ten_total)} -> configured limit {limit_mib} MiB ({args.headroom}x)"
     )
-    print(f"steady state    : {_mib(steady_total)}  ({steady_total / 1_073_741_824:.2f} GiB)")
-    print(f"local store holds ~{local_minutes:,.0f} min of {TARGET_TPS} TPS before refusing writes")
+    print(f"steady state   : {_mib(steady_total)} ({steady_total / 1_073_741_824:.2f} GiB)")
     if record.dirty_worktree:
-        print("NOTE: dirty worktree -- record written, but not publishable until committed clean.")
+        print("NOTE: dirty worktree -- the record is not publishable until run on a clean commit.")
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    sys.exit(main())

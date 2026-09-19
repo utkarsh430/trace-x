@@ -265,6 +265,10 @@ def test_topic_keys_match_the_documented_keys(manifest: dict[str, Any]) -> None:
         # investigation is minted by the worker that leases the case, so at
         # produce time it does not exist yet (ADR-0027).
         "investigation.requested.v1": "case_id",
+        # ADR-0049 §2: the only reader is a per-account window.
+        "tx.authorization.v1": "account_id",
+        # ADR-0051 §6: the observation log of per-account online state.
+        "tx.scored.v1": "account_id",
     }
     for entry in manifest["released"]:
         assert entry["key"] == expected[entry["topic"]]

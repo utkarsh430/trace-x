@@ -58,6 +58,9 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
+from trace_core.domain.errors import NonConformantFeatureSetError
+from trace_core.features.spec import require_served_conformance
+
 ROOT: Final = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "packages"))
 sys.path.insert(0, str(ROOT))
@@ -370,6 +373,52 @@ def probe_gateway(base_url: str, token: str) -> GatewayIdentity:
         feature_set_version=str(decision["feature_set_version"]),
         probe_degraded=bool(decision.get("degraded", False)),
     )
+
+
+EXPERIMENT_NAME: Final = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
+
+
+def experiment_problem(
+    experiment: str | None, arm: str | None, record_dir: Path | None
+) -> str | None:
+    """Why the experiment flags cannot be used as given, or None.
+
+    All three together or none. The record directory must lie outside the repository: every run
+    of a comparison is recorded on a clean tree, and a record written into the tree would make the
+    next run's worktree dirty -- and so unpublishable -- before it started.
+    """
+    given = [value is not None for value in (experiment, arm, record_dir)]
+    if not any(given):
+        return None
+    if not all(given):
+        return "--experiment, --arm and --record-dir are given together or not at all"
+    assert experiment is not None and arm is not None and record_dir is not None
+    for flag, value in (("--experiment", experiment), ("--arm", arm)):
+        if not EXPERIMENT_NAME.match(value):
+            return f"{flag} {value!r} must be lowercase letters, digits and hyphens"
+    resolved = record_dir.resolve()
+    if resolved == ROOT or ROOT in resolved.parents:
+        return (
+            f"--record-dir {record_dir} is inside the repository; a record written there dirties "
+            f"the worktree for the next run of the comparison"
+        )
+    return None
+
+
+def probe_readiness(base_url: str) -> tuple[bool, dict[str, str]]:
+    """Whether the gateway reports itself ready, and the checks it reports, from `/readyz`."""
+    status, body = _http_json(
+        f"{base_url.rstrip('/')}/readyz", method="GET", token=None, body=None, timeout=10
+    )
+    checks = body.get("checks")
+    if not isinstance(checks, dict):
+        raise LoadHarnessError(f"GET /readyz returned {status} with no checks: {body!r}")
+    return status == 200 and body.get("ready") is True, {str(k): str(v) for k, v in checks.items()}
+
+
+def _shown(path: Path) -> str:
+    resolved = path.resolve()
+    return str(resolved.relative_to(ROOT)) if ROOT in resolved.parents else str(resolved)
 
 
 def local_configuration() -> dict[str, str] | None:
@@ -900,6 +949,16 @@ class LoadTestRunRecord:
     0.222% under the frozen dataset's own distribution: a latency figure without
     its workload is as unattributable as one without its rule pack digest."""
 
+    experiment: str | None = None
+    """The controlled comparison this run belongs to, or None for a gate run. An experiment run
+    writes no profile report: its numbers are published only by the comparison that cites them."""
+    arm: str | None = None
+    """The arm of that experiment. A label for grouping only; the arm's configuration is what
+    `gateway_checks` records the live gateway reporting."""
+    gateway_checks: dict[str, str] = field(default_factory=dict)
+    """The gateway's own `/readyz` checks when the run started, so an arm is read from the service
+    under test, never trusted from the label that named it."""
+
     record_type: str = "LOADTEST"
     track: str = "SYNTHETIC"
     tool: str = TOOL
@@ -930,14 +989,25 @@ class LoadTestRunRecord:
     def write(self, directory: Path | None = None) -> Path:
         target = (directory or MANIFEST_DIR) / f"{self.run_id}.json"
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(json.dumps(asdict(self), indent=2, sort_keys=True) + "\n")
+        try:
+            with target.open("x") as handle:
+                handle.write(json.dumps(asdict(self), indent=2, sort_keys=True) + "\n")
+        except FileExistsError as exc:
+            raise LoadHarnessError(
+                f"{target} already exists; a run record is never overwritten, because a replaced "
+                f"record is evidence lost without a trace"
+            ) from exc
         return target
 
 
 def new_run_id(started: dt.datetime) -> str:
-    """Date-prefixed so a listing is chronological, commit-suffixed so two runs
-    of the same day on different commits are distinguishable."""
-    return f"load-{started:%Y%m%d}-gateway-{git_commit_sha()[:8]}"
+    """Timestamp-prefixed, so a listing is chronological and two runs on one commit never share an
+    id; commit-suffixed, so runs on different commits are distinguishable.
+
+    It was date-prefixed only. An experiment's second arm then took the first arm's id on the same
+    commit and day, and its record silently replaced the first -- found when the observation-log
+    A/B's second run left one record where there should have been two."""
+    return f"load-{started:%Y%m%d-%H%M%S}-gateway-{git_commit_sha()[:8]}"
 
 
 # ------------------------------------------------------------- the report ---
@@ -1132,7 +1202,31 @@ def main(argv: list[str] | None = None) -> int:
         help="where k6 writes summary.json (default: a temporary directory OUTSIDE the "
         "repository, so the run does not dirty the worktree it is recording)",
     )
+    parser.add_argument(
+        "--experiment",
+        default=None,
+        help="the controlled comparison this run belongs to; no profile report is written",
+    )
+    parser.add_argument("--arm", default=None, help="the experiment arm this run measures")
+    parser.add_argument(
+        "--record-dir",
+        type=Path,
+        default=None,
+        help="where an experiment run's record is written: outside the repository",
+    )
     args = parser.parse_args(argv)
+    if (problem := experiment_problem(args.experiment, args.arm, args.record_dir)) is not None:
+        print(f"refused: {problem}", file=sys.stderr)
+        return 2
+
+    # A run record names the feature set its values were computed with. While the online
+    # path does not serve that version, no record may be produced (ADR-0046,
+    # spec.SERVED_FEATURES_CONFORM).
+    try:
+        require_served_conformance("A gateway load-test record")
+    except NonConformantFeatureSetError as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return 2
 
     try:
         image = k6_image()
@@ -1148,6 +1242,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"    rule pack   {identity.rule_pack_id} {identity.rule_pack_digest}")
         print(f"    thresholds  {identity.threshold_config_digest}")
         print(f"    feature set {identity.feature_set_version}")
+        checks: dict[str, str] = {}
+        if args.experiment is not None:
+            ready, checks = probe_readiness(args.base_url)
+            if not ready:
+                raise LoadHarnessError(
+                    f"the gateway is not ready ({checks}); an experiment arm is measured only on a "
+                    f"ready gateway whose checks say what it is running"
+                )
+            print(f"    experiment  {args.experiment} arm {args.arm}: {checks}")
 
         out_dir = args.out_dir or Path(tempfile.mkdtemp(prefix="trace-load-"))
         if args.out_dir is not None and ROOT in out_dir.resolve().parents:
@@ -1200,6 +1303,9 @@ def main(argv: list[str] | None = None) -> int:
 
         record = LoadTestRunRecord(
             workload_profile=args.profile,
+            experiment=args.experiment,
+            arm=args.arm,
+            gateway_checks=checks,
             run_id=new_run_id(started),
             service=identity.service,
             service_version=identity.service_version,
@@ -1221,8 +1327,8 @@ def main(argv: list[str] | None = None) -> int:
             started_at=started.isoformat().replace("+00:00", "Z"),
             finished_at=finished.isoformat().replace("+00:00", "Z"),
         )
-        path = record.write()
-        print(f"\n  run record: {path.relative_to(ROOT)}")
+        path = record.write(directory=args.record_dir)
+        print(f"\n  run record: {_shown(path)}")
 
         if not record.publishable:
             print(
@@ -1236,10 +1342,13 @@ def main(argv: list[str] | None = None) -> int:
             print("  Commit the worktree and re-run to publish.")
             return 1
 
-        report_path = REPORT_FOR[args.profile]
-        report_path.parent.mkdir(parents=True, exist_ok=True)
-        report_path.write_text(render_report(record, measured, verdicts))
-        print(f"  report:     {report_path.relative_to(ROOT)}")
+        if args.experiment is not None:
+            print("  experiment run: no profile report is written; the comparison publishes it")
+        else:
+            report_path = REPORT_FOR[args.profile]
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path.write_text(render_report(record, measured, verdicts))
+            print(f"  report:     {report_path.relative_to(ROOT)}")
 
         target_failures = failures(verdicts, TARGET)
         if target_failures:

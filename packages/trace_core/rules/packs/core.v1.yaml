@@ -1,7 +1,7 @@
 # =============================================================================
 # TRACE-X core rule pack v1
 #
-# Eighteen deterministic rules over the 26 declared online features. Digest-
+# Nineteen deterministic rules over the 26 declared online features. Digest-
 # pinned: every RiskDecision carries this pack's sha256, so "which rules were
 # live at 14:03?" is answerable from the decision rather than from a deploy log.
 #
@@ -17,7 +17,7 @@
 # false: that would make a missing feature look like a measured "no risk".
 # =============================================================================
 pack_id: core
-version: 1.0.0
+version: 1.1.0
 description: >-
   Baseline deterministic rules for the synchronous scoring path, covering all ten
   documented Track A fraud signatures plus supporting context.
@@ -242,3 +242,20 @@ rules:
         - { field: merchant_mcc, in_set: high_risk_mcc }
         - { feature: mcc_is_habitual_for_account, op: "==", value: 0 }
         - { feature: account_tenure_days, op: "<=", value: 30 }
+
+  # --- depth (ADR-0046 §8) --------------------------------------------------
+  # Declared from the score-time read cap, not fitted: 513 is the exact 24-hour count at which the
+  # account's 24-hour content read is capped. Its weight is R006's (sustained hourly volume far above
+  # one cardholder, 0.5, no floor) because it is the same kind of evidence at a wider window --
+  # volume no ordinary customer produces -- and, like R006, it is not by itself proof enough to
+  # force a band: alone it scores 0.5, MEDIUM, and it moves a decision only beside another signal.
+  # Under noisy-OR no decision below the depth changes.
+  - id: R019_history_depth_capped
+    version: 1.0.0
+    description: >-
+      More transactions on this account in 24 hours than the score-time read holds content for,
+      so its sums, distinct counts and profile negatives were not assessed. Depth an adversary
+      controls is itself declared as risk rather than left as silent blindness.
+    weight: 0.5
+    when:
+      { feature: account_tx_count_24h, op: ">=", value: 513 }

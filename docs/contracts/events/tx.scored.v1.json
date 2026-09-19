@@ -1,0 +1,200 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://trace-x.local/contracts/events/tx.scored.v1.json",
+  "title": "TxScoredV1",
+  "description": "One scored transaction as the gateway served it: the transaction, the decision, every feature value the decision read, and what the online store did with the transaction. Topic tx.scored.v1, keyed by account_id and deduplicated by payload.transaction_id. The durable observation log of the online store (ADR-0051): the producer session and sequence number travel as the tracex-session-id and tracex-seq headers, never in the payload, so no content depends on which session carried it. The envelope's occurred_at is the transaction's event time. Never labels, causal evidence keys or any evaluation-only data (PHASE3_PLAN §3 Q1).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["envelope", "payload"],
+  "properties": {
+    "envelope": { "$ref": "envelope.v1.json" },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "transaction_id",
+        "account_id",
+        "amount_minor",
+        "currency",
+        "field_coverage",
+        "decision_summary",
+        "served_features",
+        "observe_outcome",
+        "store_position",
+        "store_epoch"
+      ],
+      "properties": {
+        "transaction_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "account_id": { "type": "string", "pattern": "^acct_\\d{6,}$" },
+        "card_id": { "type": "string", "pattern": "^card_\\d{6,}$" },
+        "device_id": { "type": "string", "pattern": "^dev_\\d{6,}$" },
+        "merchant_id": { "type": "string", "pattern": "^mrch_\\d{5,}$" },
+        "ip_id": { "type": "string", "pattern": "^ip_\\d{5,}$" },
+        "amount_minor": {
+          "type": "integer",
+          "description": "Integer minor units as the API accepted them. NEVER a float (CLAUDE.md §6). Signed: a refund is negative. Bounded by a signed 64-bit integer, the width every consumer parses.",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
+        },
+        "currency": { "type": "string", "description": "ISO 4217 alphabetic code.", "pattern": "^[A-Z]{3}$" },
+        "channel": {
+          "type": "string",
+          "description": "Consumers must tolerate an unseen value (docs/EVENT_CONTRACTS.md §4).",
+          "enum": ["CARD_PRESENT", "CARD_NOT_PRESENT", "ATM", "RECURRING", "UNKNOWN"]
+        },
+        "entry_mode": {
+          "type": "string",
+          "enum": ["CHIP", "CONTACTLESS", "MAGSTRIPE", "MANUAL", "ECOMMERCE", "TOKEN", "UNKNOWN"]
+        },
+        "merchant_mcc": { "type": "string", "pattern": "^\\d{4}$" },
+        "merchant_country": { "type": "string", "pattern": "^[A-Z]{2}$" },
+        "merchant_name": {
+          "type": "string",
+          "description": "ATTACKER-CONTROLLED: set at merchant registration, carried as served. Stamped trust_tier=UNTRUSTED and never loses it.",
+          "maxLength": 128,
+          "x-trust-tier": "UNTRUSTED"
+        },
+        "latitude": { "type": "number", "minimum": -90, "maximum": 90 },
+        "longitude": { "type": "number", "minimum": -180, "maximum": 180 },
+        "user_agent": {
+          "type": "string",
+          "description": "ATTACKER-CONTROLLED: a client-supplied header.",
+          "maxLength": 256,
+          "x-trust-tier": "UNTRUSTED"
+        },
+        "memo": {
+          "type": "string",
+          "description": "ATTACKER-CONTROLLED: free text accompanying the payment.",
+          "maxLength": 256,
+          "x-trust-tier": "UNTRUSTED"
+        },
+        "authorization_outcome": {
+          "type": "string",
+          "enum": ["APPROVED", "DECLINED", "REVERSED", "UNKNOWN"]
+        },
+        "field_coverage": {
+          "type": "array",
+          "description": "Which canonical fields the request supplied. An optional transaction field is present in the payload exactly when it is listed here.",
+          "uniqueItems": true,
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "enum": [
+              "transaction_id", "account_id", "card_id", "device_id", "merchant_id", "ip_id",
+              "amount_minor", "currency", "occurred_at", "ingested_at", "channel", "entry_mode",
+              "merchant_mcc", "merchant_country", "merchant_name", "latitude", "longitude",
+              "user_agent", "memo", "authorization_outcome"
+            ]
+          }
+        },
+        "decision_summary": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "decision",
+            "risk_band",
+            "score",
+            "degraded",
+            "degraded_reasons",
+            "fired_rules",
+            "rule_pack_id",
+            "rule_pack_digest",
+            "threshold_config_digest",
+            "feature_set_version",
+            "feature_source",
+            "scored_at"
+          ],
+          "properties": {
+            "decision": { "type": "string", "enum": ["APPROVE", "FLAG", "DECLINE"] },
+            "risk_band": { "type": "string", "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"] },
+            "score": { "type": "number", "minimum": 0, "maximum": 1 },
+            "degraded": { "type": "boolean" },
+            "degraded_reasons": {
+              "type": "array",
+              "maxItems": 32,
+              "items": { "type": "string", "minLength": 1, "maxLength": 64 }
+            },
+            "fired_rules": {
+              "type": "array",
+              "maxItems": 256,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["rule_id", "rule_version", "weight"],
+                "properties": {
+                  "rule_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+                  "rule_version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+                  "weight": { "type": "number", "minimum": 0, "maximum": 1 },
+                  "band_floor": { "type": "string", "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"] }
+                }
+              }
+            },
+            "rule_pack_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "rule_pack_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+            "threshold_config_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+            "feature_set_version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+            "feature_source": { "type": "string", "enum": ["ONLINE_ONLY", "RECONCILED"] },
+            "case_id": { "type": "string", "pattern": "^case_[0-9a-f]{32}$" },
+            "scored_at": {
+              "type": "string",
+              "format": "date-time",
+              "description": "PROCESSING TIME: when the decision was made. The transaction's event time is the envelope's occurred_at."
+            }
+          }
+        },
+        "served_features": {
+          "type": "array",
+          "description": "Every feature the decision read, one entry each: an extensible collection, so a later feature set needs no new schema.",
+          "maxItems": 512,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["feature_id", "state", "approximate", "source", "missing_fields", "lookback_completeness"],
+            "properties": {
+              "feature_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+              "state": { "type": "string", "enum": ["AVAILABLE", "UNAVAILABLE", "INSUFFICIENT_HISTORY"] },
+              "value": { "type": "number", "description": "Present exactly when state is AVAILABLE." },
+              "approximate": { "type": "boolean" },
+              "source": { "type": "string", "enum": ["ONLINE_ONLY", "RECONCILED"] },
+              "missing_fields": {
+                "type": "array",
+                "description": "For UNAVAILABLE: the canonical fields the request did not supply.",
+                "uniqueItems": true,
+                "maxItems": 32,
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "transaction_id", "account_id", "card_id", "device_id", "merchant_id", "ip_id",
+                    "amount_minor", "currency", "occurred_at", "ingested_at", "channel", "entry_mode",
+                    "merchant_mcc", "merchant_country", "merchant_name", "latitude", "longitude",
+                    "user_agent", "memo", "authorization_outcome"
+                  ]
+                }
+              },
+              "lookback_completeness": {
+                "type": "string",
+                "enum": ["COMPLETE", "INCOMPLETE", "UNKNOWN", "NOT_APPLICABLE"],
+                "description": "Whether the store could vouch for the feature's whole lookback when it was served. For INSUFFICIENT_HISTORY, COMPLETE means the entity is genuinely new, and INCOMPLETE or UNKNOWN mean the store could not vouch. NOT_APPLICABLE for a feature with no lookback."
+              }
+            }
+          }
+        },
+        "observe_outcome": {
+          "type": "string",
+          "enum": ["RECORDED", "REDELIVERY", "CONFLICT", "REFUSED", "UNREACHABLE", "SKIPPED"],
+          "description": "What happened to this transaction's write to the online store (ADR-0046 §5). The event is published whatever it was (ADR-0051 §3)."
+        },
+        "store_position": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "The store's observation counter after the write; null when the store did not answer or was not asked."
+        },
+        "store_epoch": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "The store's recording epoch the position was counted in; null when unknown."
+        }
+      }
+    }
+  }
+}

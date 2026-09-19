@@ -53,9 +53,22 @@ been thought through.
 | [0039](0039-event-loop-over-threadpool.md) | The hot path stays on the event loop; the workload, not the scheduler, is the bottleneck | 2 | Accepted |
 | [0040](0040-two-workload-profiles.md) | Two workload profiles: a representative acceptance gate and an adversarial saturation benchmark | 2 | Accepted |
 | [0041](0041-online-store-memory-and-eviction.md) | Online-store memory classes: a best-effort cache must not evict correctness-relevant state | 2 | Superseded by 0042 |
-| [0042](0042-online-store-memory-corrected.md) | Online-store memory corrected: AOF was the latency cause, eviction is the correctness cause | 2 | Accepted |
+| [0042](0042-online-store-memory-corrected.md) | Online-store memory corrected: AOF was the latency cause, eviction is the correctness cause | 2 | Superseded by 0054 |
 | [0043](0043-small-threadpool-measured.md) | The small-threadpool middle ground is measured, and it is worse | 2 | Accepted |
 | [0044](0044-online-store-correctness-topology.md) | Feature state cannot silently evict: two Redis instances, a declaration-driven write plan, and a completeness epoch | 2 | Accepted |
+| [0045](0045-phase3-toolchain-contract.md) | The Phase 3 toolchain contract: hashed installs, verified JVM jars, and Java 17 enforced by the repository | 3 | Accepted |
+| [0046](0046-feature-semantics-precision.md) | Feature semantics made precise: one declared meaning per feature, and an idempotent, order-independent online store | 3 | Proposed |
+| [0047](0047-event-transport.md) | Event transport: declared topics, one producer factory, and a scheduled fault overlay | 3 | Proposed |
+| [0048](0048-delta-capabilities-and-lake-conventions.md) | What Delta 4.0.1 actually does, and the lake conventions built on it | 3 | Proposed |
+| [0049](0049-authorization-outcome-events.md) | Authorization outcomes are their own dated events; `declined_ratio_1h` reads only verified outcomes known before the score | 3 | Proposed |
+| [0050](0050-scenario-identity-and-nuisance-parameters.md) | A scenario's identity is its mechanism, relationships, signature and tests; everything else is a nuisance parameter (refines ADR-0030 for eval-v2) | 3 | Proposed |
+| [0051](0051-gateway-observation-log.md) | The gateway's durable observation log: fenced producer sessions, contiguous sequences and detectable gaps | 3 | Proposed |
+| [0052](0052-bronze-ingest-topology.md) | Bronze ingest topology and its no-skip guards: a table and query per topic, the raw row, topic-id and conservation checks. **Amendment 1 (Step 11):** the audited local Bronze retention floor — file-aligned retention deletes, `ignoreDeletes` on Silver's Bronze reader only, retention-aware Silver starts | 3 | Proposed (Amendment 1 Proposed) |
+| [0053](0053-silver-canonical-events.md) | Silver: validated, exactly deduplicated, late-tagged canonical events, with quarantine and Bronze-to-Silver conservation. §7 amended by [0052](0052-bronze-ingest-topology.md) Amendment 1, point 6: after retention, a new checkpoint starts at the first live Bronze version | 3 | Proposed |
+| [0054](0054-online-store-memory-step1b-layout.md) | Online-store memory re-measured through the store for the Step 1b layout; the configured limit stays until the load gate re-runs | 3 | Proposed |
+| [0055](0055-gold-batch-build.md) | Gold is a batch build of primitive-shaped state and event-time-complete point-in-time context from Silver | 3 | Proposed |
+| [0056](0056-feature-parity-and-arrival-skew.md) | Feature parity: exact implementation parity on the store's own order, and arrival skew on a frozen partition | 3 | Proposed |
+| [0057](0057-redis-reconstruction.md) | Redis reconstruction: replay history through the store's own write path, and claim completeness by compare-and-set under the writer fence | 3 | Proposed |
 
 ## Notes on status
 
