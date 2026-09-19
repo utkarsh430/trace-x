@@ -19,7 +19,8 @@ concurrency:
 jobs:
   stream:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # One JVM per test file, run in sequence: about 35 min locally, slower on a hosted runner.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
 
@@ -49,5 +50,17 @@ jobs:
 
       # Stream tests that also need a broker or PostgreSQL are integration-marked and run in
       # test-integration, which provisions them; here they would only skip.
-      - name: Stream tests (the session fails if none executed, or if any skipped)
-        run: pytest -m "stream and not integration" -v -rs
+      # One pytest session -- one Spark JVM -- per file. The stream session's driver heap is fixed
+      # (stream/session.py), and every stream file in one JVM exhausted it locally (a GC death
+      # spiral, 2026-09-16 and 2026-09-18); the first CI run of the single session was cancelled at
+      # 30 minutes, 72% through. The list is the directory itself, so no file is left out. Each
+      # session still fails if nothing executed or anything skipped (tests/conftest.py).
+      - name: Stream tests, one JVM per file
+        run: |
+          status=0
+          for file in tests/stream/test_*.py; do
+            echo "::group::$file"
+            pytest -m "stream and not integration" -v -rs "$file" || status=1
+            echo "::endgroup::"
+          done
+          exit $status

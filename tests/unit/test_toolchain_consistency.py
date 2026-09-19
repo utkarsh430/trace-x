@@ -302,7 +302,8 @@ def test_every_workflow_running_spark_installs_the_pinned_java(pyproject: dict) 
     running = [
         wf
         for wf in sorted(WORKFLOWS.glob("*.yml"))
-        if re.search(r"^\s+run:.*-m\s+\"?(stream|parity)\b", wf.read_text(), re.M)
+        # Anywhere in a run block, one-line or multi-line (test-stream loops over files).
+        if re.search(r"pytest\s+-m\s+\"?(stream|parity)\b", wf.read_text())
     ]
     assert running, "no workflow runs the stream suite; Spark would never be exercised in CI"
     for wf in running:
