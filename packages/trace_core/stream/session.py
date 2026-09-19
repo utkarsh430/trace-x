@@ -27,12 +27,14 @@ before one is launched.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import sys
-from collections.abc import Mapping, MutableMapping
+import traceback
+from collections.abc import Callable, Mapping, MutableMapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, NoReturn
 
 from trace_core.domain.errors import ToolchainMismatchError
 from trace_core.stream import toolchain
@@ -305,3 +307,32 @@ __all__ = [
     "running_versions",
     "verify_running_jvm",
 ]
+
+
+EXIT_DRIVER_CRASHED: Final = 1
+"""A driver whose main raised: never 0, so a supervisor restarts it."""
+
+
+def run_driver(main: Callable[[], int]) -> NoReturn:
+    """Run a Spark driver's `main`; leave the process with its exit code, whatever threads remain.
+
+    A Spark JVM killed while a `foreachBatch` callback is in flight leaves py4j's non-daemon
+    callback-server threads behind. The driver's own exception propagates (and `spark.stop()`
+    against the dead JVM raises too), but the interpreter then waits on those threads at shutdown
+    and the process never exits: nothing restarts it (tests/chaos/test_spark_resume.py, JVM
+    kill mid-stream, 2026-09-19). So the exit is `os._exit`, after the output is flushed, and an
+    exception is always a non-zero code.
+    """
+    code = EXIT_DRIVER_CRASHED
+    try:
+        code = main()
+    except SystemExit as exc:  # argparse's --help and usage errors carry their own code
+        code = exc.code if isinstance(exc.code, int) else EXIT_DRIVER_CRASHED
+    except BaseException:  # reported, never swallowed: the exit is non-zero
+        traceback.print_exc()
+        code = EXIT_DRIVER_CRASHED
+    finally:
+        for stream in (sys.stdout, sys.stderr):
+            with contextlib.suppress(OSError, ValueError):
+                stream.flush()
+        os._exit(code)

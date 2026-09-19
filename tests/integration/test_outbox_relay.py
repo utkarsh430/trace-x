@@ -244,7 +244,7 @@ def test_an_undeliverable_row_blocks_its_own_key_and_nothing_else(pool: Any) -> 
     orders within a partition key, so that is the only ordering a relay owes.
     """
     stuck = _insert(pool, _event(1), key="acct_000001")
-    other = _insert(pool, _event(2), key="acct_000002")
+    other = _insert(pool, _event(2, account="acct_000002"), key="acct_000002")
     behind = _insert(pool, _event(3), key="acct_000001")
     relay, producer, _ = _relay(pool, producer_cls=LaneProducer)
     assert isinstance(producer, LaneProducer)

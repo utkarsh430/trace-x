@@ -97,4 +97,6 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    from trace_core.stream.session import run_driver
+
+    run_driver(main)
