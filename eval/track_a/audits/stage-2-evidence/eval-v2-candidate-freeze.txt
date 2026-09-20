@@ -1,0 +1,50 @@
+# Stage 2 step 10: the eval-v2 candidate freeze and its regeneration check.
+# The dataset is not committed; eval/track_a/eval-v2.candidate.manifest.json is its reproduction
+# contract (run_id gen-20260914-eval-v2-7dac6635).
+# Freeze: python -m eval.track_a.freeze_candidate, at commit 55e83cf on a clean worktree.
+# Check:  python -m eval.track_a.freeze_candidate --check, the same tree, manifest not yet committed.
+# Each block ends with /usr/bin/time -l.
+
+## freeze
+written: /Users/singh/Downloads/trace-x/.claude/worktrees/agent-aae9faa608636c9c8/eval/track_a/eval-v2.candidate.manifest.json
+      136.57 real       135.93 user         0.46 sys
+          1394720768  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+              105348  page reclaims
+                  52  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+                 104  voluntary context switches
+               10423  involuntary context switches
+       1874615648523  instructions retired
+        550414238316  cycles elapsed
+          1360233768  peak memory footprint
+EXIT=0
+
+## check
+candidate reproduced
+      138.39 real       137.51 user         0.52 sys
+          1390297088  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+              101297  page reclaims
+                  13  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+                 735  voluntary context switches
+               19769  involuntary context switches
+       1867978686319  instructions retired
+        556170060399  cycles elapsed
+          1359922472  peak memory footprint
+EXIT=0

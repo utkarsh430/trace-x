@@ -22,6 +22,8 @@ from services.gateway.pipeline import (
     REASON_CLOCK_SKEW,
     REASON_HISTORY_INCOMPLETE,
     REASON_REDIS,
+    REASON_WRITE_FAILED,
+    ObserveOutcome,
     ScoringPipeline,
     absent_feature_reasons,
 )
@@ -29,9 +31,13 @@ from services.gateway.pipeline import (
 from trace_core.contracts.api.transaction import TransactionRequest
 from trace_core.contracts.canonical import CanonicalField
 from trace_core.domain.enums import RiskBand
+from trace_core.domain.errors import FeatureWriteFailedError
+from trace_core.domain.time import event_time, to_millis
 from trace_core.features import FeatureState
+from trace_core.features.completeness import CompletenessGuard, HoleReason
 from trace_core.features.definitions import ONLINE_FEATURES
-from trace_core.features.reference import Event, ReferenceFeatureStore
+from trace_core.features.observation import Event, transaction_observation
+from trace_core.features.reference import ReferenceFeatureStore
 from trace_core.rules.loader import default_loader
 from trace_core.scoring.banding import load_thresholds
 
@@ -44,7 +50,7 @@ class _ReferenceBackedStore:
     """The naive store behind the pipeline's expected shape.
 
     A genuine second implementation of the same declared semantics (ADR-0032),
-    not a stub: the pipeline depends on `snapshot`/`observe`, never on Redis, and
+    not a stub: the pipeline depends on `score`/`snapshot`, never on Redis, and
     this proves that boundary holds.
     """
 
@@ -52,30 +58,84 @@ class _ReferenceBackedStore:
         self.inner = ReferenceFeatureStore()
         self.observed: list[Event] = []
 
+    def score(self, event: Event) -> Any:
+        self.observed.append(event)
+        return self.inner.score(event)
+
     def snapshot(self, **kwargs: Any) -> Any:
         return self.inner.snapshot(**kwargs)
 
-    def observe(self, event: Event) -> None:
+    def observe(self, event: Event) -> Any:
         self.observed.append(event)
-        self.inner.observe(event)
+        return self.inner.observe(event)
+
+    def withdraw_completeness(self, *, resume_at: Any) -> None:
+        self.inner.withdraw_completeness(resume_at=resume_at)
 
 
 class _BrokenStore:
     """A store that fails the way an unreachable Redis does."""
 
+    def score(self, event: Event) -> Any:
+        raise ConnectionError("redis is gone")
+
     def snapshot(self, **kwargs: Any) -> Any:
         raise ConnectionError("redis is gone")
 
-    def observe(self, event: Event) -> None:
+    def observe(self, event: Event) -> Any:
+        raise ConnectionError("redis is gone")
+
+    def withdraw_completeness(self, *, resume_at: Any) -> None:
         raise ConnectionError("redis is gone")
 
 
-def _pipeline(store: Any = None) -> ScoringPipeline:
+class _FullStore(_ReferenceBackedStore):
+    """Reachable, and refusing every write, the way a Redis at `maxmemory` does."""
+
+    def score(self, event: Event) -> Any:
+        raise FeatureWriteFailedError("OOM command not allowed")
+
+
+class _FlakyStore(_ReferenceBackedStore):
+    """Unreachable until told otherwise."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.reachable = False
+
+    def score(self, event: Event) -> Any:
+        if not self.reachable:
+            raise ConnectionError("redis is gone")
+        return super().score(event)
+
+    def withdraw_completeness(self, *, resume_at: Any) -> None:
+        if not self.reachable:
+            raise ConnectionError("redis is gone")
+        super().withdraw_completeness(resume_at=resume_at)
+
+
+class _OpenBreaker:
+    def allows(self) -> bool:
+        return False
+
+    def record_success(self) -> None:
+        return None
+
+    def record_failure(self) -> None:
+        return None
+
+
+def _pipeline(store: Any = None, **over: Any) -> ScoringPipeline:
     return ScoringPipeline(
         pack=default_loader(frozenset(ONLINE_FEATURES.ids)).load(),
         thresholds=load_thresholds(),
         feature_store=store,
+        **over,
     )
+
+
+def _guard(store: Any) -> CompletenessGuard:
+    return CompletenessGuard(store, None, instance_id="gw-test", clock=lambda: NOW)
 
 
 def _request(**over: Any) -> TransactionRequest:
@@ -123,7 +183,9 @@ def test_coverage_reflects_what_the_caller_actually_supplied() -> None:
     without_geo = _pipeline().to_canonical(_request(latitude=None, longitude=None))
     assert CanonicalField.LATITUDE not in without_geo.field_coverage
 
-    features = ONLINE_FEATURES.evaluate_all(without_geo, _pipeline().read_features(without_geo)[0])
+    features = ONLINE_FEATURES.evaluate_all(
+        without_geo, _pipeline().record_and_read(without_geo)[0]
+    )
     assert features["geo_distance_from_last_km"].state is FeatureState.UNAVAILABLE
     assert features["account_tx_count_1m"].state is FeatureState.INSUFFICIENT_HISTORY
 
@@ -188,15 +250,13 @@ def test_accumulated_history_produces_a_firing_rule() -> None:
     store = _ReferenceBackedStore()
     pipeline = _pipeline(store)
     for i in range(1, 14):
-        pipeline.observe(
-            pipeline.to_canonical(
-                _request(
-                    transaction_id=f"tx_{i:010d}",
-                    occurred_at=(NOW - dt.timedelta(seconds=i * 10))
-                    .isoformat()
-                    .replace("+00:00", "Z"),
-                )
-            )
+        # Scoring records each transaction; there is no separate write.
+        pipeline.score(
+            _request(
+                transaction_id=f"tx_{i:010d}",
+                occurred_at=(NOW - dt.timedelta(seconds=i * 10)).isoformat().replace("+00:00", "Z"),
+            ),
+            now=NOW,
         )
     outcome = pipeline.score(_request(transaction_id="tx_9999999999"), now=NOW)
     fired = {reason.rule_id for reason in outcome.decision.reasons}
@@ -243,11 +303,90 @@ def test_degradation_makes_rules_abstain_rather_than_report_false() -> None:
 
 
 def test_a_failed_observation_does_not_cost_the_caller_its_answer() -> None:
-    """The write happens after the decision, and best effort: a store that cannot
-    accept the observation must not turn a scored transaction into an error."""
-    pipeline = _pipeline(_BrokenStore())
-    outcome = pipeline.score(_request(), now=NOW)
-    assert pipeline.observe(outcome.canonical) == REASON_REDIS
+    """A store that cannot record the transaction must not turn it into an error."""
+    outcome = _pipeline(_BrokenStore()).score(_request(), now=NOW)
+    assert outcome.observe_outcome is ObserveOutcome.UNREACHABLE
+    assert outcome.decision.decision == "APPROVE"
+
+
+def test_the_scoring_read_records_the_transaction_it_scores() -> None:
+    """One atomic call records and reads (ADR-0046 §2): the transaction is in its own
+    windows, and scoring it again is recognised as a redelivery."""
+    store = _ReferenceBackedStore()
+    pipeline = _pipeline(store)
+    first = pipeline.score(_request(), now=NOW)
+    assert first.observe_outcome is ObserveOutcome.RECORDED
+    assert first.observe_position == 1
+    assert first.features["account_tx_count_1m"].value == 1.0
+    again = pipeline.score(_request(), now=NOW)
+    assert again.observe_outcome is ObserveOutcome.REDELIVERY
+    assert again.features["account_tx_count_1m"].value == 1.0
+    assert len(store.inner.events) == 1
+
+
+def test_a_refused_write_serves_a_snapshot_without_the_transaction_and_opens_a_hole() -> None:
+    store = _FullStore()
+    store.inner.observe(
+        transaction_observation(
+            _pipeline().to_canonical(
+                _request(
+                    transaction_id="tx_earlier",
+                    occurred_at=(NOW - dt.timedelta(seconds=10)).isoformat().replace("+00:00", "Z"),
+                )
+            )
+        )
+    )
+    guard = _guard(store)
+    outcome = _pipeline(store, completeness=guard).score(_request(), now=NOW)
+    assert outcome.observe_outcome is ObserveOutcome.REFUSED
+    assert REASON_WRITE_FAILED in outcome.decision.degraded_reasons
+    assert REASON_REDIS not in outcome.decision.degraded_reasons
+    assert outcome.features["account_tx_count_1m"].value == 1.0, (
+        "the snapshot holds the earlier transaction and not the refused one"
+    )
+    assert guard.pending
+
+
+def test_an_unreachable_store_opens_a_hole_that_withdraws_completeness_on_recovery() -> None:
+    """Deleting nothing is not enough and deleting the epoch is not enough: completeness
+    resumes only 24 h after the store came back (ADR-0046 §5)."""
+    store = _FlakyStore()
+    store.inner.complete_since = event_time(NOW - dt.timedelta(days=90))
+    guard = _guard(store)
+    pipeline = _pipeline(store, completeness=guard)
+    down = pipeline.score(_request(transaction_id="tx_lost"), now=NOW)
+    assert down.observe_outcome is ObserveOutcome.UNREACHABLE
+    assert guard.pending
+    store.reachable = True
+    back = pipeline.score(_request(transaction_id="tx_after"), now=NOW)
+    assert back.observe_outcome is ObserveOutcome.RECORDED
+    assert not guard.pending
+    assert store.inner.complete_since == event_time(NOW + dt.timedelta(hours=24))
+    assert REASON_HISTORY_INCOMPLETE in back.decision.degraded_reasons
+
+
+def test_a_pending_hole_suppresses_the_stores_completeness_claim() -> None:
+    """While the withdrawal cannot happen, whatever epoch the store still holds is ignored."""
+    store = _ReferenceBackedStore()
+    store.inner.complete_since = event_time(NOW - dt.timedelta(days=90))
+    guard = _guard(_BrokenStore())
+    guard.observation_unrecorded(HoleReason.UNREACHABLE)
+    outcome = _pipeline(store, completeness=guard).score(_request(), now=NOW)
+    assert outcome.observe_outcome is ObserveOutcome.RECORDED
+    assert guard.pending
+    assert REASON_HISTORY_INCOMPLETE in outcome.decision.degraded_reasons
+
+
+def test_a_write_skipped_by_an_open_breaker_is_a_hole_too() -> None:
+    store = _ReferenceBackedStore()
+    guard = _guard(store)
+    outcome = _pipeline(store, breaker=_OpenBreaker(), completeness=guard).score(
+        _request(), now=NOW
+    )
+    assert outcome.observe_outcome is ObserveOutcome.SKIPPED
+    assert REASON_REDIS in outcome.decision.degraded_reasons
+    assert guard.pending
+    assert store.observed == []
 
 
 def test_extra_degradation_reasons_are_carried_through() -> None:
@@ -277,7 +416,121 @@ def test_the_two_kinds_of_absence_are_counted_separately() -> None:
     source that will never supply the input, the other is a store that has not
     warmed up yet."""
     canonical = _pipeline().to_canonical(_request(latitude=None, longitude=None))
-    context, _elapsed, _reason = _pipeline().read_features(canonical)
+    context, *_ = _pipeline().record_and_read(canonical)
     reasons = absent_feature_reasons(ONLINE_FEATURES.evaluate_all(canonical, context))
     assert reasons["geo_distance_from_last_km"] == FeatureState.UNAVAILABLE.value
     assert reasons["account_tx_count_1m"] == FeatureState.INSUFFICIENT_HISTORY.value
+
+
+def test_a_transaction_id_reused_for_another_payload_is_decided_rules_only() -> None:
+    """The replay cache is disposable, so a reused transaction id can reach scoring. The store
+    serves the first delivery's context (ADR-0046 §1); evaluated for another account it would read
+    that account's windows as measured zeros. Rules-only, and the decision says why."""
+    from services.gateway.pipeline import REASON_OBSERVATION_CONFLICT, ObserveOutcome
+
+    pipeline = _pipeline(_ReferenceBackedStore())
+    body = {
+        "transaction_id": "tx_reused_000001",
+        "account_id": "acct_000000001",
+        "amount_minor": 4_200,
+        "currency": "GBP",
+        "occurred_at": dt.datetime.now(dt.UTC).isoformat().replace("+00:00", "Z"),
+        "merchant_id": "mrch_000001",
+        "merchant_mcc": "5411",
+        "merchant_country": "GB",
+        "channel": "CARD_NOT_PRESENT",
+        "entry_mode": "ECOMMERCE",
+    }
+    scored = pipeline.score(TransactionRequest.model_validate(body))
+    assert scored.observe_outcome is ObserveOutcome.RECORDED
+    assert scored.features["account_tx_count_1m"].is_available, "fixture: nothing to lose"
+
+    retried = pipeline.score(TransactionRequest.model_validate(body))
+    assert retried.observe_outcome is ObserveOutcome.REDELIVERY
+    assert REASON_OBSERVATION_CONFLICT not in retried.degraded_reasons
+    assert retried.features["account_tx_count_1m"].is_available
+
+    reused = pipeline.score(
+        TransactionRequest.model_validate(
+            {**body, "account_id": "acct_000000002", "amount_minor": 99_000}
+        )
+    )
+    assert reused.observe_outcome is ObserveOutcome.CONFLICT
+    assert REASON_OBSERVATION_CONFLICT in reused.decision.degraded_reasons
+    assert not reused.features["account_tx_count_1m"].is_available, (
+        "another payload's context was evaluated as this one's"
+    )
+
+
+# --- what the observation log publishes ------------------------------------------
+
+
+def test_the_outcome_carries_the_epoch_its_position_was_counted_in_and_the_served_context() -> None:
+    """ADR-0051 §3: a store that restarts empty restarts its counter, so a position names a served
+    state only together with its epoch. Both travel on the outcome the observation log publishes,
+    with the context the features were evaluated against."""
+    since = event_time(NOW - dt.timedelta(days=2))
+    outcome = _pipeline(ReferenceFeatureStore(complete_since=since)).score(_request(), now=NOW)
+    assert outcome.observe_position == 1
+    assert outcome.store_epoch_ms == to_millis(since)
+    assert outcome.context is not None and outcome.context.complete_since == since
+
+
+def test_a_store_that_claims_no_epoch_serves_a_position_without_one() -> None:
+    outcome = _pipeline(ReferenceFeatureStore()).score(_request(), now=NOW)
+    assert (outcome.observe_position, outcome.store_epoch_ms) == (1, None)
+
+
+@pytest.mark.parametrize("store", [None, _BrokenStore()], ids=["no-store", "unreachable"])
+def test_an_outcome_with_no_store_write_carries_no_position_or_epoch(store: Any) -> None:
+    outcome = _pipeline(store).score(_request(), now=NOW)
+    assert (outcome.observe_position, outcome.store_epoch_ms) == (None, None)
+    assert outcome.context is not None, "the empty context the decision was made on"
+
+
+def _deep_store(earlier: int) -> _ReferenceBackedStore:
+    """`earlier` transactions 100 s apart before NOW, all in GB, observed into the reference."""
+    from trace_core.features.semantics import Stream
+
+    store = _ReferenceBackedStore()
+    for j in range(earlier, 0, -1):
+        store.inner.observe(
+            Event(
+                stream=Stream.TRANSACTION,
+                occurred_at=event_time(NOW - dt.timedelta(seconds=100 * j)),
+                account_id="acct_000001",
+                event_id=f"tx_d{j:04d}",
+                currency="GBP",
+                amount_minor=5_000,
+                device_id="dev_000001",
+                merchant_id="mrch_00001",
+                merchant_mcc="5411",
+                merchant_country="GB",
+            )
+        )
+    return store
+
+
+def test_a_history_deeper_than_the_read_is_declared_and_its_content_withheld() -> None:
+    """ADR-0046 §8 through the real pack. At 512 in 24 hours nothing is capped. At 513 the counts
+    stay exact, the content features are absent and marked as the cap's, the decision says
+    `history_depth_capped`, and R019 fires."""
+    from services.gateway.pipeline import REASON_HISTORY_DEPTH_CAPPED
+
+    request = _request(transaction_id="tx_9999999999")
+    at_cap = _pipeline(_deep_store(511)).score(request, now=NOW)
+    assert at_cap.features["account_tx_count_24h"].value == 512
+    assert at_cap.features["account_distinct_countries_24h"].value == 1
+    assert REASON_HISTORY_DEPTH_CAPPED not in at_cap.decision.degraded_reasons
+    assert "R019_history_depth_capped" not in {r.rule_id for r in at_cap.decision.reasons}
+
+    past = _pipeline(_deep_store(512)).score(request, now=NOW)
+    count = past.features["account_tx_count_24h"]
+    assert count.value == 513
+    assert not count.depth_capped
+    countries = past.features["account_distinct_countries_24h"]
+    assert countries.state is FeatureState.INSUFFICIENT_HISTORY
+    assert countries.depth_capped
+    assert REASON_HISTORY_DEPTH_CAPPED in past.decision.degraded_reasons
+    assert past.decision.degraded
+    assert "R019_history_depth_capped" in {r.rule_id for r in past.decision.reasons}

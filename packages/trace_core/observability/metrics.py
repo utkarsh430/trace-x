@@ -53,7 +53,8 @@ telemetry that gets trusted."""
 
 REQUEST_LATENCY: Final = "gateway_request_latency_seconds"
 """THE WHOLE server-side request: authentication, rate limiting, the replay
-lookup, scoring, triage, the observe-write, the replay store and serialisation.
+lookup, scoring (which records the transaction in the online store), triage, the replay store
+and serialisation.
 
 The one to compare against a p99 budget. Measured from the first thing the
 handler does to the last, so the only latency it excludes is what happens
@@ -69,7 +70,16 @@ TRIAGE_ENQUEUED_TOTAL: Final = "triage_enqueued_total"
 IDEMPOTENT_REPLAY_TOTAL: Final = "idempotent_replay_total"
 RATE_LIMITED_TOTAL: Final = "rate_limited_total"
 UNAUTHENTICATED_TOTAL: Final = "unauthenticated_total"
+AUTHORIZATION_OUTCOME_TOTAL: Final = "authorization_outcome_total"
 RULE_PACK_RELOAD_FAILED_TOTAL: Final = "rule_pack_reload_failed_total"
+WRITER_REFUSED_TOTAL: Final = "writer_refused_total"
+"""Requests refused because this instance is not the online store's fenced writer (ADR-0051)."""
+OUTBOX_RELAY_ROWS_TOTAL: Final = "outbox_relay_rows_total"
+"""Outbox rows the relay published, failed to deliver (retried) or refused (never retried), by
+topic and outcome (ADR-0051 §7)."""
+OBSERVATION_LOG_TOTAL: Final = "observation_log_total"
+"""Sequenced observations handed to the log's producer, or lost from the log, by topic and
+outcome (ADR-0051 §3). Any outcome but `handed_over` leaves the session unclosable."""
 
 ONLINE_STORE_EVICTED_KEYS: Final = "online_store_evicted_keys_total"
 """Keys Redis has discarded under its own memory pressure.
@@ -105,6 +115,10 @@ HOT_PATH_METRICS: Final[frozenset[str]] = frozenset(
         RATE_LIMITED_TOTAL,
         UNAUTHENTICATED_TOTAL,
         RULE_PACK_RELOAD_FAILED_TOTAL,
+        AUTHORIZATION_OUTCOME_TOTAL,
+        WRITER_REFUSED_TOTAL,
+        OBSERVATION_LOG_TOTAL,
+        OUTBOX_RELAY_ROWS_TOTAL,
         ONLINE_STORE_EVICTED_KEYS,
         ONLINE_STORE_MEMORY_BYTES,
     }
@@ -133,10 +147,13 @@ class HotPathMetrics:
 
     __slots__ = (
         "abstained",
+        "authorization_outcomes",
         "degraded",
         "feature_read_latency",
         "feature_unavailable",
         "latency",
+        "observation_log",
+        "outbox_relay_rows",
         "rate_limited",
         "reload_failed",
         "replays",
@@ -145,6 +162,7 @@ class HotPathMetrics:
         "scored",
         "triaged",
         "unauthenticated",
+        "writer_refused",
     )
 
     def __init__(self, meter_name: str = "trace_core.gateway") -> None:
@@ -165,7 +183,7 @@ class HotPathMetrics:
         self.request_latency: Histogram = meter.create_histogram(
             REQUEST_LATENCY,
             unit="s",
-            description="Whole server-side request, including triage and the observe-write.",
+            description="Whole server-side request, including triage and the replay store.",
             explicit_bucket_boundaries_advisory=list(LATENCY_BUCKETS_S),
         )
         self.feature_read_latency: Histogram = meter.create_histogram(
@@ -207,6 +225,32 @@ class HotPathMetrics:
         self.reload_failed: Counter = meter.create_counter(
             RULE_PACK_RELOAD_FAILED_TOTAL,
             description="Rule-pack reloads refused; the previous pack stayed in force.",
+        )
+        self.observation_log: Counter = meter.create_counter(
+            OBSERVATION_LOG_TOTAL,
+            description=(
+                "Sequenced observations handed to the log's producer, or lost from the log, by "
+                "topic and outcome."
+            ),
+        )
+        self.outbox_relay_rows: Counter = meter.create_counter(
+            OUTBOX_RELAY_ROWS_TOTAL,
+            description=(
+                "Outbox rows published, failed to deliver or refused, by topic and outcome."
+            ),
+        )
+        self.writer_refused: Counter = meter.create_counter(
+            WRITER_REFUSED_TOTAL,
+            description=(
+                "Requests refused because this instance is not the online store's fenced writer, "
+                "by surface."
+            ),
+        )
+        self.authorization_outcomes: Counter = meter.create_counter(
+            AUTHORIZATION_OUTCOME_TOTAL,
+            description=(
+                "Authorization outcomes delivered, by durable delivery and online verification."
+            ),
         )
 
 

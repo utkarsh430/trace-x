@@ -32,6 +32,10 @@ BASELINE = ROOT / ".secrets.baseline"
 EXCLUDE_FILES = (
     r"\.venv/",
     r"\.git/",
+    # Nested git worktrees of OTHER branches (parallel agents' isolated checkouts). Git
+    # excludes them locally and cannot commit their files from this checkout; their
+    # content is scanned here once it is integrated into this tree, like any other change.
+    r"^\.claude/worktrees/",
     r"node_modules/",
     r"\.mypy_cache/",
     r"\.pytest_cache/",
@@ -45,6 +49,12 @@ EXCLUDE_FILES = (
     # by scripts/check_claims.py and tests/unit/test_eval_v1_freeze.py.
     r"^eval/manifest/",
     r"^eval/track_a/.*\.manifest\.json$",
+    # The Delta layout benchmark's machine-written results (committed) and its local run
+    # output (gitignored): sha256 digests of result sets and git SHAs, like the run records
+    # above, with fixed field sets (benchmarks/delta_layout/report.py). Added 2026-09-18, when
+    # the first smoke run's results.json tripped the entropy heuristic.
+    r"^benchmarks/delta_layout/results/",
+    r"^data/bench/",
     # The event-contract release ledger: sha256 digests of committed schema
     # files, high entropy by design and public. It holds schema filenames,
     # partition keys and digests -- there is nowhere in its shape for a
@@ -99,6 +109,25 @@ def check_env_is_not_committed() -> list[str]:
     return problems
 
 
+def check_worktrees_are_not_tracked() -> list[str]:
+    """`.claude/worktrees/` is excluded from the scan because nothing under it can be committed
+    from this checkout. That holds only while git tracks nothing there: a force-added file would
+    otherwise be committed without ever being scanned."""
+    proc = subprocess.run(  # noqa: S603 -- git, a fixed argument list
+        [GIT, "ls-files", "--", ".claude/worktrees"],
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+        timeout=60,
+        check=False,
+    )
+    return [
+        f"{path} is tracked by git inside .claude/worktrees/, which the scan excludes"
+        for path in proc.stdout.splitlines()
+        if path.strip()
+    ]
+
+
 def run_scan() -> dict:
     cmd = [sys.executable, "-m", "detect_secrets", "scan", "--all-files"]
     for pattern in EXCLUDE_FILES:
@@ -130,6 +159,11 @@ def main() -> int:
 
     if env_problems := check_env_is_not_committed():
         for problem in env_problems:
+            print(f"  FAIL {problem}", file=sys.stderr)
+        return 1
+
+    if worktree_problems := check_worktrees_are_not_tracked():
+        for problem in worktree_problems:
             print(f"  FAIL {problem}", file=sys.stderr)
         return 1
 

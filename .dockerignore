@@ -10,9 +10,11 @@
 # ============================================================================
 *
 
-# The project metadata and the pinned dependency set (ADR-0018 / `make lock`).
+# The project metadata and the hashed dependency sets the image installs: the
+# build backends and the runtime subset of requirements.lock (ADR-0045).
 !pyproject.toml
-!requirements.lock
+!requirements-build.lock
+!requirements-gateway.lock
 
 # The modular monolith, installed as a package: its rule packs and threshold
 # config ship as package data, so the gateway can boot on its own.

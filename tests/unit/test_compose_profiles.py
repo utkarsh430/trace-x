@@ -26,6 +26,7 @@ from typing import Any
 
 import pytest
 import yaml
+from services.gateway.app import POOL_READY_WAIT_S as POOL_OPEN_TIMEOUT_S
 
 pytestmark = pytest.mark.unit
 
@@ -41,9 +42,8 @@ CORE_SERVICES_STILL_TO_COME = ("api", "worker", "ui")
 container. Whatever the containerised services claim, these three must still
 fit in what is left."""
 
-POOL_OPEN_TIMEOUT_S = 10
-"""`services/gateway/app.py` opens the psycopg pool with `timeout=10` at
-start-up and serves anyway when it expires."""
+# POOL_OPEN_TIMEOUT_S: start-up waits this long for a first connection, then serves not-ready
+# with the pool left open (services/gateway/app.py `open_pool`).
 
 SENSITIVE_KEY = re.compile(r"TOKEN|PASSWORD|SECRET|KEY|AUTH", re.I)
 INTERPOLATED = re.compile(r"\$\{[A-Z_][A-Z0-9_]*")
@@ -210,8 +210,8 @@ def test_the_gateway_healthcheck_probes_liveness_not_readiness() -> None:
 def test_the_gateway_start_period_outlasts_the_pool_open_timeout() -> None:
     """Start-up waits the pool's full timeout when Postgres is not ready yet.
 
-    Measured at ~11 s on a first `make up`, because `pool.open(timeout=10)`
-    expires before the app logs postgres_pool_not_ready and serves anyway. A
+    Measured at ~11 s on a first `make up`, because `open_pool`'s first checkout
+    waits POOL_READY_WAIT_S and before the app logs postgres_pool_not_ready and serves anyway. A
     shorter grace period reports a gateway starting exactly as designed as a
     failed one.
     """

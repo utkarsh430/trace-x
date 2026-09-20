@@ -209,7 +209,23 @@ def test_fraudulent_and_legitimate_rows_are_structurally_identical(
 
 
 def test_the_dataset_is_event_time_ordered(dataset: list[GeneratedRow]) -> None:
-    times = [r.event["envelope"]["occurred_at"] for r in dataset]
+    """Compared as parsed milliseconds, never as strings.
+
+    `_iso` drops the fractional part of a whole-second timestamp, and
+    "...21Z" sorts after "...21.500000Z" as text although it is earlier in time.
+    A string comparison can therefore hide a real misordering, or report a false
+    one.
+    """
+    import datetime as dt
+
+    from trace_core.domain.time import to_millis
+
+    times = [
+        to_millis(
+            dt.datetime.fromisoformat(r.event["envelope"]["occurred_at"].replace("Z", "+00:00"))
+        )
+        for r in dataset
+    ]
     assert times == sorted(times)
 
 

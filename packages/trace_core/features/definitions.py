@@ -36,7 +36,9 @@ from trace_core.contracts.canonical import CanonicalTransaction
 from trace_core.domain.enums import TransactionChannel
 from trace_core.domain.geo import GeoPoint, haversine_km, implied_speed_kmh
 from trace_core.features.context import (
+    HISTORY_DEPTH_CAPPED,
     INSUFFICIENT_HISTORY,
+    LIFETIME_UNOBSERVED,
     MIN_OBSERVATIONS_FOR_ROBUST_Z,
     Completeness,
     FeatureContext,
@@ -59,6 +61,7 @@ from trace_core.features.semantics import (
 from trace_core.features.semantics import (
     Aggregation,
     CardinalityStorage,
+    CurrentObservation,
     Dimension,
     Entity,
     PairwiseMetric,
@@ -111,6 +114,8 @@ def _amount_sum(spec: WindowedAggregate) -> Compute:
         state = ctx.window(spec.entity, _entity_id(tx, spec.entity), spec.stream, spec.window.label)
         if state is None:
             return INSUFFICIENT_HISTORY
+        if state.content_capped:
+            return HISTORY_DEPTH_CAPPED  # the sum needs content past the cap (ADR-0046 §8)
         return float(state.amount_sum_minor)
 
     return compute
@@ -121,6 +126,8 @@ def _distinct(spec: WindowedAggregate) -> Compute:
         state = ctx.window(spec.entity, _entity_id(tx, spec.entity), spec.stream, spec.window.label)
         if state is None or spec.dimension is None:
             return INSUFFICIENT_HISTORY
+        if state.content_capped and spec.storage is CardinalityStorage.EXACT:
+            return HISTORY_DEPTH_CAPPED  # the members past the cap are not read (ADR-0046 §8)
         value = state.distinct.get(spec.dimension)
         return INSUFFICIENT_HISTORY if value is None else float(value)
 
@@ -132,7 +139,9 @@ def _declined_ratio(spec: WindowedAggregate) -> Compute:
         state = ctx.window(spec.entity, _entity_id(tx, spec.entity), spec.stream, spec.window.label)
         if state is None or state.outcome_known_count == 0:
             # Zero known outcomes is NOT a zero ratio. Dividing by the wrong
-            # denominator would report a ratio that was never measured.
+            # denominator would report a ratio that was never measured. The scored
+            # transaction's own outcome is never among them: it is decided after
+            # TRACE-X answers (observation.POST_DECISION_FIELDS, ADR-0046 §7).
             return INSUFFICIENT_HISTORY
         return state.declined_count / state.outcome_known_count
 
@@ -142,12 +151,16 @@ def _declined_ratio(spec: WindowedAggregate) -> Compute:
 def _amount_cv(spec: WindowedAggregate) -> Compute:
     def compute(tx: CanonicalTransaction, ctx: FeatureContext) -> float | InsufficientHistory:
         state = ctx.window(spec.entity, _entity_id(tx, spec.entity), spec.stream, spec.window.label)
-        if state is None or state.count < 2:
+        if state is None or state.aligned_count < 2:
             return INSUFFICIENT_HISTORY
-        mean = state.amount_sum_minor / state.count
+        # Same-currency count over same-currency sums, both minute-aligned (ADR-0046 §2).
+        # The previous form divided same-currency sums by the all-currency count, in BOTH
+        # implementations, so a mixed-currency merchant read as uniform or dispersed at
+        # random and implementation parity could not see it.
+        mean = state.aligned_amount_sum_minor / state.aligned_count
         if mean == 0:
             return INSUFFICIENT_HISTORY
-        variance = state.amount_sum_squares / state.count - mean * mean
+        variance = state.aligned_amount_sum_squares / state.aligned_count - mean * mean
         # Floating error can make a genuinely-zero variance very slightly
         # negative; clamping is correct, and a real negative is impossible.
         return math.sqrt(max(variance, 0.0)) / abs(mean)
@@ -213,12 +226,18 @@ _register_window(
     _count(_spec),
 )
 
-_spec = WindowedAggregate(Entity.ACCOUNT, W1H, Aggregation.DECLINED_RATIO)
+_spec = WindowedAggregate(
+    Entity.ACCOUNT,
+    W1H,
+    Aggregation.DECLINED_RATIO,
+    stream=Stream.AUTHORIZATION_OUTCOME,
+    current_observation=CurrentObservation.PRIOR_KNOWN,
+)
 _register_window(
     "declined_ratio_1h",
-    "Share of this account's authorised-or-declined transactions in the last hour "
-    "that were declined. A high ratio is the card-testing tell that survives when "
-    "amounts are deliberately small.",
+    "Share of this account's verified authorization outcomes decided in the last hour, and known "
+    "before this transaction was scored, that were declines. A high ratio is the card-testing tell "
+    "that survives when amounts are deliberately small.",
     _ACCOUNT_TX | {F.AUTHORIZATION_OUTCOME},
     _spec,
     _declined_ratio(_spec),
@@ -345,6 +364,8 @@ def _robust_z(spec: ProfileAttribute) -> Compute:
 
     def compute(tx: CanonicalTransaction, ctx: FeatureContext) -> float | InsufficientHistory:
         profile = _profile(tx, ctx, Entity.ACCOUNT)
+        if profile is not None and profile.depth_capped and profile.amount_median_minor is None:
+            return HISTORY_DEPTH_CAPPED  # the capped read does not hold the whole sample
         if profile is None or profile.observation_count < MIN_OBSERVATIONS_FOR_ROBUST_Z:
             return INSUFFICIENT_HISTORY
         if profile.amount_median_minor is None or profile.amount_mad_minor is None:
@@ -353,9 +374,11 @@ def _robust_z(spec: ProfileAttribute) -> Compute:
         deviation = abs(tx.amount_minor) - profile.amount_median_minor
         if scale <= 0:
             # An account that has always spent exactly the same amount. Any
-            # departure is maximally anomalous; an identical amount is not anomalous
-            # at all. Returning 0/0 or infinity would be worse than either.
-            return 0.0 if deviation == 0 else ROBUST_Z_CAP
+            # departure is maximally anomalous IN ITS OWN DIRECTION; an identical amount
+            # is not anomalous at all. Phase 2 returned +50 for a LOWER amount too, so
+            # R015, R009 and R016 read a small payment as a high-value anomaly
+            # (ADR-0046 §3).
+            return 0.0 if deviation == 0 else math.copysign(ROBUST_Z_CAP, deviation)
         return max(-ROBUST_Z_CAP, min(ROBUST_Z_CAP, deviation / scale))
 
     return compute
@@ -364,8 +387,11 @@ def _robust_z(spec: ProfileAttribute) -> Compute:
 def _tenure_days(spec: ProfileAttribute) -> Compute:
     def compute(tx: CanonicalTransaction, ctx: FeatureContext) -> float | InsufficientHistory:
         profile = _profile(tx, ctx, Entity.ACCOUNT)
-        if profile is None or profile.first_seen_at is None:
+        if profile is None:
             return INSUFFICIENT_HISTORY
+        if profile.first_seen_at is None:
+            # A capped read knows the lifetime's start only when the folded prefix holds it.
+            return HISTORY_DEPTH_CAPPED if profile.depth_capped else INSUFFICIENT_HISTORY
         # "First seen N days ago" is only tenure if the store has been watching
         # for at least its horizon: to a store that started last week, an
         # account opened last year and one opened last week look identical, and
@@ -373,6 +399,11 @@ def _tenure_days(spec: ProfileAttribute) -> Compute:
         # regular customer into a fresh account for the tenure rules.
         if ctx.completeness(spec.horizon.seconds) is not Completeness.COMPLETE:
             return INSUFFICIENT_HISTORY
+        # ...and watching since before the lifetime began, not merely for the horizon: a store that
+        # started INSIDE an ongoing lifetime would otherwise serve the time since it started, as
+        # COMPLETE, turning every long-standing customer into a new account (ADR-0046 §3).
+        if not ctx.vouched_lifetime_start(profile.first_seen_at, spec.horizon.seconds):
+            return LIFETIME_UNOBSERVED
         return max(0.0, (ctx.as_of - profile.first_seen_at).total_seconds() / 86_400.0)
 
     return compute
@@ -389,6 +420,10 @@ def _membership(spec: ProfileAttribute) -> Compute:
             known, subject = profile.habitual_mccs, tx.merchant_mcc
         else:
             known, subject = profile.known_devices, tx.device_id
+        if profile.depth_capped:
+            # ADR-0046 §8: a member the capped read saw is certain; a non-member may be one it did
+            # not reach, so it is never called unfamiliar.
+            return 1.0 if subject is not None and subject in known else HISTORY_DEPTH_CAPPED
         if not known:
             # An empty set is "we have never seen this account use anything",
             # not "this is unfamiliar". Reporting 0.0 would make every new
@@ -406,6 +441,13 @@ def _membership(spec: ProfileAttribute) -> Compute:
         # customer look like an account takeover in progress.
         if ctx.completeness(spec.horizon.seconds) is not Completeness.COMPLETE:
             return INSUFFICIENT_HISTORY
+        # The same asymmetry runs one step deeper: a negative is a claim about the WHOLE lifetime,
+        # so
+        # the store must also have been watching before that lifetime began (ADR-0046 §3).
+        if profile.first_seen_at is None or not ctx.vouched_lifetime_start(
+            profile.first_seen_at, spec.horizon.seconds
+        ):
+            return LIFETIME_UNOBSERVED
         return 0.0
 
     return compute
@@ -416,10 +458,11 @@ def _distance_from_home(spec: ProfileAttribute) -> Compute:
 
     def compute(tx: CanonicalTransaction, ctx: FeatureContext) -> float | InsufficientHistory:
         profile = _profile(tx, ctx, Entity.ACCOUNT)
-        if profile is None or profile.home_latitude is None or profile.home_longitude is None:
-            return INSUFFICIENT_HISTORY
         if tx.latitude is None or tx.longitude is None:
             return INSUFFICIENT_HISTORY
+        if profile is None or profile.home_latitude is None or profile.home_longitude is None:
+            capped = profile is not None and profile.depth_capped
+            return HISTORY_DEPTH_CAPPED if capped else INSUFFICIENT_HISTORY
         return haversine_km(
             GeoPoint(profile.home_latitude, profile.home_longitude),
             GeoPoint(tx.latitude, tx.longitude),

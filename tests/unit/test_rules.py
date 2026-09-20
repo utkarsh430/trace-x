@@ -128,6 +128,8 @@ FIRING: Final[dict[str, dict[str, float]]] = {
         "mcc_is_habitual_for_account": 0,
         "account_tenure_days": 5,
     },
+    # 513: the exact 24-hour count at which the content read is capped (ADR-0046 §8).
+    "R019_history_depth_capped": {"account_tx_count_24h": 513},
 }
 
 # Inputs just inside the threshold: the rule must NOT fire.
@@ -169,6 +171,7 @@ NOT_FIRING: Final[dict[str, dict[str, float]]] = {
         "mcc_is_habitual_for_account": 1,
         "account_tenure_days": 5,
     },
+    "R019_history_depth_capped": {"account_tx_count_24h": 512},  # read whole at 512
 }
 
 # R018 additionally needs a high-risk MCC on the transaction itself.

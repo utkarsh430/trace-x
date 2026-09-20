@@ -1,0 +1,66 @@
+{
+  "dirty_worktree": false,
+  "env_lock_digest": "sha256:b8c74723800f0505649f050bba317fd575e6e5dfa295bb45ed073ba5cb650e6f",
+  "finished_at": "2026-09-15T09:48:12.691365+00:00",
+  "git_commit_sha": "870f7e941db4303db990971aadaf263a8fcfce1a",
+  "measured": {
+    "results": [
+      {
+        "depth": 1,
+        "redis_usec_per_call": 504.985,
+        "scores": 200,
+        "wall_ms_max": 11.742375,
+        "wall_ms_p50": 3.733875,
+        "wall_ms_p95": 6.562125,
+        "wall_ms_p99": 9.184167
+      },
+      {
+        "depth": 64,
+        "redis_usec_per_call": 978.645,
+        "scores": 200,
+        "wall_ms_max": 12.928833,
+        "wall_ms_p50": 5.402166,
+        "wall_ms_p95": 7.977458,
+        "wall_ms_p99": 8.920584
+      },
+      {
+        "depth": 512,
+        "redis_usec_per_call": 1350.315,
+        "scores": 200,
+        "wall_ms_max": 14.913083,
+        "wall_ms_p50": 9.249167,
+        "wall_ms_p95": 11.371167,
+        "wall_ms_p99": 14.41875
+      },
+      {
+        "depth": 2048,
+        "redis_usec_per_call": 1944.705,
+        "scores": 200,
+        "wall_ms_max": 29.498792,
+        "wall_ms_p50": 10.104416,
+        "wall_ms_p95": 14.610125,
+        "wall_ms_p99": 20.420625
+      },
+      {
+        "depth": 8192,
+        "redis_usec_per_call": 2915.53,
+        "scores": 200,
+        "wall_ms_max": 19.144417,
+        "wall_ms_p50": 12.248583,
+        "wall_ms_p95": 13.424709,
+        "wall_ms_p99": 16.6825
+      }
+    ],
+    "scores_per_depth": 200,
+    "store_image": "redis:7-alpine",
+    "warmup_scores": 20
+  },
+  "python_version": "3.12.9",
+  "record_type": "BENCHMARK",
+  "run_id": "bench-20260915-094759-score-latency-870f7e94",
+  "started_at": "2026-09-15T09:47:59.024994+00:00",
+  "subject": "online-feature-store-score-latency-by-depth",
+  "tool": "redis",
+  "tool_version": "7.4.11",
+  "track": "SYNTHETIC"
+}

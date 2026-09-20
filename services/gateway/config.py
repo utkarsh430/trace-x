@@ -70,6 +70,13 @@ class GatewaySettings:
     pool_min_size: int
     pool_max_size: int
     log_json: bool
+    kafka_bootstrap_servers: str = ""
+    """Where the observation log is published (ADR-0051). Empty: nothing is published, so no writer
+    session ever closes and no completeness can be claimed from history. Scoring is unaffected."""
+    outbox_relay: bool = False
+    """Whether this gateway drains `app.outbox` to Kafka on a thread of its own (ADR-0051 §7,
+    option A). Off by default: the controlled hot-path A/B decides whether the relay may share this
+    process."""
 
     @classmethod
     def from_environment(cls, environ: dict[str, str] | None = None) -> GatewaySettings:
@@ -107,6 +114,9 @@ class GatewaySettings:
             pool_min_size=int(env.get("TRACE_PG_POOL_MIN", "4")),
             pool_max_size=int(env.get("TRACE_PG_POOL_MAX", "32")),
             log_json=env.get("TRACE_LOG_FORMAT", "json").lower() == "json",
+            kafka_bootstrap_servers=env.get("TRACE_GATEWAY_KAFKA_BOOTSTRAP", ""),
+            outbox_relay=env.get("TRACE_GATEWAY_OUTBOX_RELAY", "false").strip().lower()
+            in {"1", "true", "yes"},
         )
 
     @property

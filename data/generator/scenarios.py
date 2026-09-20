@@ -114,6 +114,10 @@ def _distant_city(rng: random.Random, home: GeoPoint) -> GeoPoint:
     )
 
 
+distant_city = _distant_city
+"""Public for eval-v2's legitimate trips, which go where takeovers do (N2)."""
+
+
 def _typical_amount(universe: Universe, account_index: int) -> int:
     profile = universe.profiles[account_index]
     return max(1, int(math.exp(profile.amount_mu)))

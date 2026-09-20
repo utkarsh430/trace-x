@@ -1,0 +1,237 @@
+# ============================================================================
+# TRACE-X Kafka topic declaration
+#
+# The ONLY way a topic reaches a broker. `scripts/kafka_topics.py apply
+# --environment local` creates what is missing, `verify` compares every live
+# setting with this file and exits non-zero on drift, and neither ever changes a
+# partition count: that moves keys to different partitions and silently reorders
+# history (docs/EVENT_CONTRACTS.md §3).
+#
+# Only RELEASED topics are declared (docs/contracts/RELEASED.json). A topic joins
+# this file in the step that releases its schema, never before.
+#
+# Three kinds of setting, kept apart on purpose:
+#
+#   config   THE CONTRACT. Identical in every environment. `retention.ms` is the
+#            conceptual retention from docs/EVENT_CONTRACTS.md §3.
+#   local    LOCAL DEVELOPMENT ONLY (docs/PHASE3_PLAN.md §3 Q8): the partition
+#            count and replication of a single laptop broker, and byte caps that
+#            bound its disk. A key under `config` may never reappear under
+#            `local.overrides` -- the local caps sit beside the contract's
+#            retention, they do not redefine it. Locally a partition is trimmed
+#            when EITHER limit is reached, so the byte cap usually wins.
+#   cloud    Documentation until Phase 12: the cloud partition count.
+#
+# No `<topic>.dlq` topics: Spark rejects go to a Delta quarantine table, and a
+# DLQ topic arrives only with a non-Spark consumer.
+# ============================================================================
+declaration_version: 1
+
+# Broker settings the declarations and the disk bound depend on. `verify` reads
+# each one from the running broker; deploy/compose.yml sets them, and a unit test
+# keeps the two files in step.
+broker:
+  # A missing topic must be an error, never a topic created with broker
+  # defaults (one partition, CreateTime, no byte cap).
+  auto.create.topics.enable: "false"
+  # The retention pass interval I and the delete delay D bound how far a
+  # partition can overshoot its byte cap (the transient term below).
+  log.retention.check.interval.ms: "5000"
+  log.segment.delete.delay.ms: "10000"
+  # Internal topics, budgeted below. The broker defaults (1 GiB metadata segments,
+  # 50 offsets partitions of 100 MiB segments) would make their bound the largest
+  # line in the budget while holding almost nothing.
+  metadata.log.segment.bytes: "16777216"
+  metadata.max.retention.bytes: "67108864"
+  offsets.topic.num.partitions: "4"
+  offsets.topic.segment.bytes: "8388608"
+
+topics:
+  tx.raw.v1:
+    key_field: account_id
+    # Q2: a transaction is identified by its transaction_id. A producer retry
+    # carries a NEW envelope event_id and must still deduplicate.
+    dedup_identity: payload.transaction_id
+    config:
+      cleanup.policy: delete
+      # Q3: the broker stamps arrival time. Lateness is measured against it.
+      message.timestamp.type: LogAppendTime
+      retention.ms: "604800000"          # 7 days
+    local:
+      partitions: 6
+      replication_factor: 1
+      overrides:
+        retention.bytes: "268435456"     # 256 MiB per partition
+        segment.bytes: "16777216"        # 16 MiB
+      # Design inputs to the transient term, not measurements and not ceilings.
+      # The rate is the Q7 outage-recovery target. The record size is an ASSUMED
+      # MEAN of stored bytes with no credit for compression. A test builds the
+      # largest generator-shaped transaction the schema allows in ASCII (every
+      # optional attacker-controlled string at its maximum length) and requires it
+      # to fit. It is not a ceiling -- identifier fields have no maximum length,
+      # and non-ASCII text is escaped to several bytes per character -- so traffic
+      # whose mean exceeds it grows the transient term proportionally.
+      design_ingress:
+        events_per_s: 5000
+        assumed_mean_record_bytes: 2048
+    cloud:
+      partitions: 24
+
+  identity.events.v1:
+    key_field: account_id
+    # Q2: identity events are identified by their envelope event_id.
+    dedup_identity: envelope.event_id
+    config:
+      cleanup.policy: delete
+      message.timestamp.type: LogAppendTime
+      retention.ms: "2592000000"         # 30 days
+    local:
+      partitions: 3
+      replication_factor: 1
+      overrides:
+        retention.bytes: "67108864"      # 64 MiB per partition
+        segment.bytes: "8388608"         # 8 MiB
+      design_ingress:
+        events_per_s: 1000
+        assumed_mean_record_bytes: 1536
+    cloud:
+      partitions: 12
+
+  device.events.v1:
+    key_field: device_id
+    dedup_identity: envelope.event_id
+    config:
+      cleanup.policy: delete
+      message.timestamp.type: LogAppendTime
+      retention.ms: "2592000000"         # 30 days
+    local:
+      partitions: 3
+      replication_factor: 1
+      overrides:
+        retention.bytes: "67108864"      # 64 MiB per partition
+        segment.bytes: "8388608"         # 8 MiB
+      design_ingress:
+        events_per_s: 1000
+        assumed_mean_record_bytes: 1536
+    cloud:
+      partitions: 12
+
+  investigation.requested.v1:
+    key_field: case_id
+    # Q2: the transactional outbox may relay one row more than once; each relay
+    # carries the same idempotency_key.
+    dedup_identity: envelope.idempotency_key
+    config:
+      # MUST NOT be compacted: the key is case_id, and compaction would erase
+      # every request for a reopened case but the last (RELEASED.json).
+      cleanup.policy: delete
+      message.timestamp.type: LogAppendTime
+      retention.ms: "2592000000"         # 30 days
+    local:
+      partitions: 3
+      replication_factor: 1
+      overrides:
+        retention.bytes: "67108864"      # 64 MiB per partition
+        segment.bytes: "8388608"         # 8 MiB
+      design_ingress:
+        events_per_s: 500
+        assumed_mean_record_bytes: 1536
+    cloud:
+      partitions: 6
+
+  tx.authorization.v1:
+    key_field: account_id
+    # ADR-0049 §2: at most one authorization outcome exists per transaction, and a producer retry
+    # carries a NEW envelope event_id, so the transaction id is the identity -- as for tx.raw.v1.
+    dedup_identity: payload.transaction_id
+    config:
+      cleanup.policy: delete
+      message.timestamp.type: LogAppendTime
+      retention.ms: "604800000"          # 7 days, equal to tx.raw.v1
+    local:
+      # Equal to tx.raw.v1, so an account maps to the same partition number on both topics.
+      partitions: 6
+      replication_factor: 1
+      overrides:
+        retention.bytes: "67108864"      # 64 MiB per partition (ADR-0049 §2)
+        segment.bytes: "8388608"         # 8 MiB
+      # Design inputs to the transient term, not measurements (ADR-0049 §2): the ingress rate of
+      # tx.raw.v1 and an ASSUMED mean record of 1024 bytes. A test builds the largest outcome record
+      # the schema allows with generator-shaped identifiers and requires it to fit.
+      design_ingress:
+        events_per_s: 5000
+        assumed_mean_record_bytes: 1024
+    cloud:
+      partitions: 24
+
+  tx.scored.v1:
+    key_field: account_id
+    # ADR-0051 §6: one observation per scored transaction. A retried request carries a new
+    # envelope, so the transaction id is the identity -- as for tx.raw.v1.
+    dedup_identity: payload.transaction_id
+    config:
+      cleanup.policy: delete
+      message.timestamp.type: LogAppendTime
+      retention.ms: "604800000"          # 7 days, equal to tx.raw.v1
+    local:
+      # Equal to tx.raw.v1, so an account maps to the same partition number on both topics.
+      partitions: 6
+      replication_factor: 1
+      overrides:
+        # 192 MiB per partition, below the 256 MiB tx-topic cap, so the measured record size fits
+        # the local disk cap. A run that writes more than this before Bronze reads it stops Bronze
+        # loudly (failOnDataLoss, PHASE3_PLAN §4.1 point 8) rather than skipping data.
+        retention.bytes: "201326592"
+        segment.bytes: "16777216"        # 16 MiB
+      # MEASURED, replacing the reservation's 4096-byte placeholder: records the builder makes from
+      # the real pipeline (26 served features) averaged 6415 bytes for generator-shaped transactions
+      # and 7238 bytes with every attacker-controlled string at its maximum.
+      # test_the_scored_record_size_is_a_measurement_the_builder_still_fits rebuilds both.
+      design_ingress:
+        events_per_s: 5000
+        assumed_mean_record_bytes: 8192
+    cloud:
+      partitions: 24
+
+# ----------------------------------------------------------------------------
+# The declared local disk cap, and how the bound it must cover is derived.
+# `kafka_topics.py budget --environment local` prints the breakdown;
+# tests/unit/test_kafka_topics_declaration.py recomputes it independently and
+# asserts the total never exceeds the cap.
+#
+# Kafka deletes whole segments, only on a retention pass, and only renames them
+# for later removal. So a byte cap R with segment size S is not a bound of R:
+#
+#   after a pass, a partition holds less than  R + S   (the oldest segment that
+#       would take it below R is kept);
+#   between passes it grows by its ingress for one check interval I;
+#   segments deleted within the last delete delay D are still on disk, and they
+#       hold at most S plus the ingress of I + D.
+#
+#   peak(partition) <= R + 2S + ingress x (2I + D)
+#
+# Summed over the declaration:
+#   * every declared or reserved partition contributes R + 2S (exact, given R, S);
+#   * every declared or reserved topic contributes events_per_s x
+#     assumed_mean_record_bytes x (2I + D) -- a term that does not depend on how
+#     keys spread across partitions, and that holds only while the real ingress
+#     stays within the declared rate and assumed mean record size;
+#   * __cluster_metadata contributes metadata.max.retention.bytes (which covers
+#     its log and snapshots) + 2 x metadata.log.segment.bytes;
+#   * __consumer_offsets contributes partitions x 2 x its segment size, assuming
+#     committed offsets stay far below one segment per partition.
+# Preallocated index files are not counted: they are sparse, and allocate only
+# what is written.
+#
+# Beyond the assumptions the transient term grows with the real ingress, and a
+# byte cap that trims unread segments stops Bronze loudly (failOnDataLoss,
+# PHASE3_PLAN §4.1 point 8) rather than skipping data.
+# ----------------------------------------------------------------------------
+local_disk_budget:
+  cap_bytes: 5905580032                  # 5.5 GiB for everything above and below
+  # Retention reserved for a topic that is PLANNED but not yet released, so the
+  # step that releases it inherits a budget rather than discovering it was
+  # overcommitted. It is not a declaration: `apply` never creates it. Step 4
+  # replaced the tx.scored.v1 reservation with that topic's declaration, and its
+  # placeholder record size with a measured one. None is outstanding.
+  reservations: []

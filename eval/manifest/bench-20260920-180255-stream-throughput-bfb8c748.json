@@ -1,0 +1,3892 @@
+{
+  "broker": {
+    "bootstrap": "localhost:9092",
+    "topics": {
+      "identity.events.v1": {
+        "message.timestamp.type": "LogAppendTime",
+        "partitions": 3,
+        "retention.bytes": "67108864"
+      },
+      "tx.authorization.v1": {
+        "message.timestamp.type": "LogAppendTime",
+        "partitions": 6,
+        "retention.bytes": "67108864"
+      },
+      "tx.scored.v1": {
+        "message.timestamp.type": "LogAppendTime",
+        "partitions": 6,
+        "retention.bytes": "201326592"
+      }
+    }
+  },
+  "capability": "P3.stream-throughput",
+  "config": {
+    "account_pool": 100000,
+    "bronze_trigger_s": 2.0,
+    "consumer_stop_timeout_s": 90,
+    "driver_memory": "3g",
+    "gold": true,
+    "gold_driver_memory": "2g",
+    "gold_min_interval_s": 0,
+    "master": "local[8]",
+    "max_bytes_per_trigger": 16777216,
+    "max_files_per_trigger": null,
+    "max_offsets_per_trigger": 30000,
+    "measured_s": 600,
+    "mix": {
+      "identity.events.v1": 1,
+      "tx.authorization.v1": 5,
+      "tx.scored.v1": 14
+    },
+    "poll_interval_s": 2.0,
+    "pre_outage_s": 60,
+    "producer_workers": 4,
+    "rate_events_per_s": 5000,
+    "recovery_bound_s": 900,
+    "recovery_hold_s": 60,
+    "scored_templates": 64,
+    "seed": 20260918,
+    "shuffle_partitions": 8,
+    "silver_trigger_s": 4.0,
+    "warmup_max_s": 600,
+    "warmup_min_s": 120
+  },
+  "dirty_worktree": false,
+  "env_lock_digest": "sha256:b8c74723800f0505649f050bba317fd575e6e5dfa295bb45ed073ba5cb650e6f",
+  "feature_set_version": "6.0.0",
+  "finished_at": "2026-09-20T19:12:08.784444+00:00",
+  "git_commit_sha": "bfb8c748188c22bc5bfa6cfa504606cfa6cca526",
+  "host": {
+    "cpu_count": 12,
+    "machine": "arm64",
+    "physical_memory_bytes": 19327352832,
+    "platform": "macOS-26.6.2-arm64-arm-64bit",
+    "processor": "arm"
+  },
+  "lake_root": "/private/var/folders/j9/wgfy5qqj1sd6b6xwy6brqdkc0000gn/T/trace-x-load-stream/bench-20260920-180255-stream-throughput-bfb8c748",
+  "logs": "/private/var/folders/j9/wgfy5qqj1sd6b6xwy6brqdkc0000gn/T/trace-x-load-stream/bench-20260920-180255-stream-throughput-bfb8c748-logs",
+  "measured": {
+    "broker_end_offsets": {
+      "identity.events.v1[0]": 252254,
+      "identity.events.v1[1]": 250025,
+      "identity.events.v1[2]": 251211,
+      "tx.authorization.v1[0]": 629124,
+      "tx.authorization.v1[1]": 623182,
+      "tx.authorization.v1[2]": 626155,
+      "tx.authorization.v1[3]": 634297,
+      "tx.authorization.v1[4]": 624730,
+      "tx.authorization.v1[5]": 629961,
+      "tx.scored.v1[0]": 1764764,
+      "tx.scored.v1[1]": 1743728,
+      "tx.scored.v1[2]": 1752472,
+      "tx.scored.v1[3]": 1776383,
+      "tx.scored.v1[4]": 1748296,
+      "tx.scored.v1[5]": 1763219
+    },
+    "clock_offset": {
+      "consistent": false,
+      "discarded": 19,
+      "drift_ms": 147.866943359375,
+      "lower_ms": 52.327880859375,
+      "max_upper_ms": 2133.833984375,
+      "midpoint_ms": null,
+      "min_lower_ms": -1368.324951171875,
+      "required": true,
+      "samples": 15069782,
+      "upper_ms": -95.5390625,
+      "workers_final": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "workers_streamed": [
+        0,
+        1,
+        2,
+        3
+      ]
+    },
+    "consumer_events": [
+      {
+        "at_ms": 1789927377520,
+        "event": "start",
+        "generation": 1
+      },
+      {
+        "event": "stop",
+        "exit_code": 0,
+        "exited_ms": 1789928650715,
+        "generation": 1,
+        "killed": false,
+        "signalled_ms": 1789928638087
+      },
+      {
+        "at_ms": 1789928770732,
+        "event": "start",
+        "generation": 2
+      },
+      {
+        "event": "stop",
+        "exit_code": 0,
+        "exited_ms": 1789931528784,
+        "generation": 2,
+        "killed": false,
+        "signalled_ms": 1789931511597
+      }
+    ],
+    "gold_builds": [
+      {
+        "abandoned_ms": null,
+        "build_id": 0,
+        "exit_code": 0,
+        "finished_ms": 1789927909397,
+        "lag_ms": 231533,
+        "started_ms": 1789927602972
+      },
+      {
+        "abandoned_ms": 1789931510926,
+        "build_id": null,
+        "exit_code": null,
+        "finished_ms": null,
+        "lag_ms": null,
+        "started_ms": 1789927909398
+      }
+    ],
+    "lag_series": [
+      [
+        1789927541299,
+        null,
+        null,
+        "silver.identity_events_v1",
+        0
+      ],
+      [
+        1789927557526,
+        null,
+        null,
+        "silver.quarantine",
+        0
+      ],
+      [
+        1789927562835,
+        null,
+        null,
+        "silver.duplicates",
+        0
+      ],
+      [
+        1789927580104,
+        null,
+        null,
+        "silver.tx_authorization_v1",
+        0
+      ],
+      [
+        1789927601260,
+        null,
+        null,
+        "silver.tx_scored_v1",
+        0
+      ],
+      [
+        1789927635878,
+        null,
+        null,
+        "silver.identity_events_v1",
+        1
+      ],
+      [
+        1789927645311,
+        null,
+        null,
+        "silver.tx_authorization_v1",
+        1
+      ],
+      [
+        1789927649681,
+        null,
+        null,
+        "silver.tx_scored_v1",
+        1
+      ],
+      [
+        1789927655395,
+        null,
+        null,
+        "silver.identity_events_v1",
+        2
+      ],
+      [
+        1789927672340,
+        null,
+        null,
+        "silver.tx_authorization_v1",
+        2
+      ],
+      [
+        1789927677941,
+        277141,
+        null,
+        "silver.tx_scored_v1",
+        2
+      ],
+      [
+        1789927682532,
+        281732,
+        281732,
+        "silver.identity_events_v1",
+        3
+      ],
+      [
+        1789927690731,
+        289931,
+        289931,
+        "silver.tx_authorization_v1",
+        3
+      ],
+      [
+        1789927700247,
+        299447,
+        299447,
+        "silver.identity_events_v1",
+        4
+      ],
+      [
+        1789927705676,
+        268228,
+        304876,
+        "silver.tx_scored_v1",
+        3
+      ],
+      [
+        1789927709069,
+        271621,
+        271621,
+        "silver.tx_authorization_v1",
+        4
+      ],
+      [
+        1789927714548,
+        277100,
+        277100,
+        "silver.identity_events_v1",
+        5
+      ],
+      [
+        1789927729133,
+        291685,
+        291685,
+        "silver.tx_authorization_v1",
+        5
+      ],
+      [
+        1789927737808,
+        263898,
+        300360,
+        "silver.tx_scored_v1",
+        4
+      ],
+      [
+        1789927740995,
+        267085,
+        267085,
+        "silver.identity_events_v1",
+        6
+      ],
+      [
+        1789927750009,
+        276099,
+        276099,
+        "silver.tx_authorization_v1",
+        6
+      ],
+      [
+        1789927760252,
+        286342,
+        286342,
+        "silver.identity_events_v1",
+        7
+      ],
+      [
+        1789927770204,
+        252916,
+        296294,
+        "silver.tx_scored_v1",
+        5
+      ],
+      [
+        1789927775304,
+        258016,
+        258016,
+        "silver.tx_authorization_v1",
+        7
+      ],
+      [
+        1789927782226,
+        264938,
+        264938,
+        "silver.identity_events_v1",
+        8
+      ],
+      [
+        1789927791047,
+        273759,
+        273759,
+        "silver.tx_authorization_v1",
+        8
+      ],
+      [
+        1789927795230,
+        222139,
+        277942,
+        "silver.tx_scored_v1",
+        6
+      ],
+      [
+        1789927798020,
+        224929,
+        224929,
+        "silver.identity_events_v1",
+        9
+      ],
+      [
+        1789927805158,
+        232067,
+        232067,
+        "silver.tx_authorization_v1",
+        9
+      ],
+      [
+        1789927814931,
+        241840,
+        241840,
+        "silver.identity_events_v1",
+        10
+      ],
+      [
+        1789927821550,
+        215558,
+        248459,
+        "silver.tx_scored_v1",
+        7
+      ],
+      [
+        1789927826449,
+        220457,
+        220457,
+        "silver.tx_authorization_v1",
+        10
+      ],
+      [
+        1789927835571,
+        229579,
+        229579,
+        "silver.identity_events_v1",
+        11
+      ],
+      [
+        1789927842589,
+        211329,
+        236597,
+        "silver.tx_scored_v1",
+        8
+      ],
+      [
+        1789927852341,
+        221081,
+        221081,
+        "silver.tx_authorization_v1",
+        11
+      ],
+      [
+        1789927852617,
+        221357,
+        221357,
+        "silver.identity_events_v1",
+        12
+      ],
+      [
+        1789927869660,
+        226141,
+        238400,
+        "silver.tx_scored_v1",
+        9
+      ],
+      [
+        1789927875343,
+        231824,
+        231824,
+        "silver.identity_events_v1",
+        13
+      ],
+      [
+        1789927875906,
+        232387,
+        232387,
+        "silver.tx_authorization_v1",
+        12
+      ],
+      [
+        1789927897007,
+        253488,
+        253488,
+        "silver.tx_authorization_v1",
+        13
+      ],
+      [
+        1789927898318,
+        254799,
+        254799,
+        "silver.identity_events_v1",
+        14
+      ],
+      [
+        1789927899367,
+        247111,
+        255848,
+        "silver.tx_scored_v1",
+        10
+      ],
+      [
+        1789927911618,
+        259362,
+        259362,
+        "silver.tx_authorization_v1",
+        14
+      ],
+      [
+        1789927911850,
+        259594,
+        259594,
+        "silver.identity_events_v1",
+        15
+      ],
+      [
+        1789927921629,
+        255731,
+        269373,
+        "silver.tx_scored_v1",
+        11
+      ],
+      [
+        1789927925371,
+        259473,
+        259473,
+        "silver.tx_authorization_v1",
+        15
+      ],
+      [
+        1789927927369,
+        261471,
+        261471,
+        "silver.identity_events_v1",
+        16
+      ],
+      [
+        1789927937751,
+        264314,
+        271853,
+        "silver.tx_scored_v1",
+        12
+      ],
+      [
+        1789927940227,
+        266790,
+        266790,
+        "silver.identity_events_v1",
+        17
+      ],
+      [
+        1789927940956,
+        267519,
+        267519,
+        "silver.tx_authorization_v1",
+        16
+      ],
+      [
+        1789927954120,
+        272376,
+        280683,
+        "silver.tx_scored_v1",
+        13
+      ],
+      [
+        1789927957290,
+        275546,
+        275546,
+        "silver.identity_events_v1",
+        18
+      ],
+      [
+        1789927957988,
+        276244,
+        276244,
+        "silver.tx_authorization_v1",
+        17
+      ],
+      [
+        1789927968420,
+        286676,
+        286676,
+        "silver.tx_authorization_v1",
+        18
+      ],
+      [
+        1789927970636,
+        288892,
+        288892,
+        "silver.identity_events_v1",
+        19
+      ],
+      [
+        1789927971785,
+        276588,
+        290041,
+        "silver.tx_scored_v1",
+        14
+      ],
+      [
+        1789927980359,
+        285162,
+        285162,
+        "silver.tx_authorization_v1",
+        19
+      ],
+      [
+        1789927981190,
+        285993,
+        285993,
+        "silver.identity_events_v1",
+        20
+      ],
+      [
+        1789927990329,
+        285162,
+        295132,
+        "silver.tx_scored_v1",
+        15
+      ],
+      [
+        1789927992893,
+        287726,
+        287726,
+        "silver.tx_authorization_v1",
+        20
+      ],
+      [
+        1789927997646,
+        292479,
+        292479,
+        "silver.identity_events_v1",
+        21
+      ],
+      [
+        1789928007730,
+        293612,
+        302563,
+        "silver.tx_scored_v1",
+        16
+      ],
+      [
+        1789928010123,
+        296005,
+        296005,
+        "silver.identity_events_v1",
+        22
+      ],
+      [
+        1789928010949,
+        296831,
+        296831,
+        "silver.tx_authorization_v1",
+        21
+      ],
+      [
+        1789928025539,
+        311421,
+        311421,
+        "silver.tx_authorization_v1",
+        22
+      ],
+      [
+        1789928026086,
+        296133,
+        311968,
+        "silver.tx_scored_v1",
+        17
+      ],
+      [
+        1789928026252,
+        296299,
+        296299,
+        "silver.identity_events_v1",
+        23
+      ],
+      [
+        1789928038716,
+        308763,
+        308763,
+        "silver.tx_authorization_v1",
+        23
+      ],
+      [
+        1789928039112,
+        309159,
+        309159,
+        "silver.identity_events_v1",
+        24
+      ],
+      [
+        1789928042028,
+        301955,
+        312075,
+        "silver.tx_scored_v1",
+        18
+      ],
+      [
+        1789928051211,
+        311138,
+        311138,
+        "silver.tx_authorization_v1",
+        24
+      ],
+      [
+        1789928051473,
+        311400,
+        311400,
+        "silver.identity_events_v1",
+        25
+      ],
+      [
+        1789928065253,
+        312952,
+        325180,
+        "silver.tx_scored_v1",
+        19
+      ],
+      [
+        1789928070862,
+        318561,
+        318561,
+        "silver.identity_events_v1",
+        26
+      ],
+      [
+        1789928071704,
+        319403,
+        319403,
+        "silver.tx_authorization_v1",
+        25
+      ],
+      [
+        1789928090943,
+        338642,
+        338642,
+        "silver.identity_events_v1",
+        27
+      ],
+      [
+        1789928092133,
+        339832,
+        339832,
+        "silver.tx_authorization_v1",
+        26
+      ],
+      [
+        1789928096793,
+        335349,
+        344492,
+        "silver.tx_scored_v1",
+        20
+      ],
+      [
+        1789928108524,
+        347080,
+        347080,
+        "silver.identity_events_v1",
+        28
+      ],
+      [
+        1789928109147,
+        347703,
+        347703,
+        "silver.tx_authorization_v1",
+        27
+      ],
+      [
+        1789928122743,
+        348508,
+        361299,
+        "silver.tx_scored_v1",
+        21
+      ],
+      [
+        1789928126567,
+        352332,
+        352332,
+        "silver.identity_events_v1",
+        29
+      ],
+      [
+        1789928130977,
+        356742,
+        356742,
+        "silver.tx_authorization_v1",
+        28
+      ],
+      [
+        1789928147172,
+        362394,
+        372937,
+        "silver.tx_scored_v1",
+        22
+      ],
+      [
+        1789928147525,
+        362747,
+        362747,
+        "silver.identity_events_v1",
+        30
+      ],
+      [
+        1789928147793,
+        363015,
+        363015,
+        "silver.tx_authorization_v1",
+        29
+      ],
+      [
+        1789928169712,
+        384934,
+        384934,
+        "silver.tx_authorization_v1",
+        30
+      ],
+      [
+        1789928170856,
+        379901,
+        386078,
+        "silver.tx_scored_v1",
+        23
+      ],
+      [
+        1789928171592,
+        380637,
+        380637,
+        "silver.identity_events_v1",
+        31
+      ],
+      [
+        1789928188237,
+        397282,
+        397282,
+        "silver.identity_events_v1",
+        32
+      ],
+      [
+        1789928189774,
+        398819,
+        398819,
+        "silver.tx_authorization_v1",
+        31
+      ],
+      [
+        1789928193113,
+        389794,
+        402158,
+        "silver.tx_scored_v1",
+        24
+      ],
+      [
+        1789928203981,
+        400662,
+        400662,
+        "silver.tx_authorization_v1",
+        32
+      ],
+      [
+        1789928204430,
+        401111,
+        401111,
+        "silver.identity_events_v1",
+        33
+      ],
+      [
+        1789928218088,
+        405929,
+        414769,
+        "silver.tx_scored_v1",
+        25
+      ],
+      [
+        1789928222954,
+        410795,
+        410795,
+        "silver.tx_authorization_v1",
+        33
+      ],
+      [
+        1789928223232,
+        411073,
+        411073,
+        "silver.identity_events_v1",
+        34
+      ],
+      [
+        1789928245687,
+        433528,
+        433528,
+        "silver.tx_authorization_v1",
+        34
+      ],
+      [
+        1789928246967,
+        426304,
+        434808,
+        "silver.tx_scored_v1",
+        26
+      ],
+      [
+        1789928247291,
+        426628,
+        426628,
+        "silver.identity_events_v1",
+        35
+      ],
+      [
+        1789928265548,
+        444885,
+        444885,
+        "silver.tx_authorization_v1",
+        35
+      ],
+      [
+        1789928267246,
+        446583,
+        446583,
+        "silver.identity_events_v1",
+        36
+      ],
+      [
+        1789928274221,
+        441285,
+        453558,
+        "silver.tx_scored_v1",
+        27
+      ],
+      [
+        1789928287867,
+        454931,
+        454931,
+        "silver.tx_authorization_v1",
+        36
+      ],
+      [
+        1789928288305,
+        455369,
+        455369,
+        "silver.identity_events_v1",
+        37
+      ],
+      [
+        1789928299386,
+        462247,
+        466450,
+        "silver.tx_scored_v1",
+        28
+      ],
+      [
+        1789928304674,
+        467535,
+        467535,
+        "silver.identity_events_v1",
+        38
+      ],
+      [
+        1789928306547,
+        469408,
+        469408,
+        "silver.tx_authorization_v1",
+        37
+      ],
+      [
+        1789928319578,
+        467207,
+        482439,
+        "silver.tx_scored_v1",
+        29
+      ],
+      [
+        1789928323409,
+        471038,
+        471038,
+        "silver.identity_events_v1",
+        39
+      ],
+      [
+        1789928324164,
+        471793,
+        471793,
+        "silver.tx_authorization_v1",
+        38
+      ],
+      [
+        1789928336299,
+        483928,
+        483928,
+        "silver.identity_events_v1",
+        40
+      ],
+      [
+        1789928338183,
+        485812,
+        485812,
+        "silver.tx_authorization_v1",
+        39
+      ],
+      [
+        1789928342105,
+        481768,
+        489734,
+        "silver.tx_scored_v1",
+        30
+      ],
+      [
+        1789928352288,
+        491951,
+        491951,
+        "silver.identity_events_v1",
+        41
+      ],
+      [
+        1789928353068,
+        492731,
+        492731,
+        "silver.tx_authorization_v1",
+        40
+      ],
+      [
+        1789928368889,
+        499854,
+        508552,
+        "silver.tx_scored_v1",
+        31
+      ],
+      [
+        1789928375049,
+        506014,
+        506014,
+        "silver.identity_events_v1",
+        42
+      ],
+      [
+        1789928382253,
+        513218,
+        513218,
+        "silver.tx_authorization_v1",
+        41
+      ],
+      [
+        1789928399180,
+        530145,
+        530145,
+        "silver.identity_events_v1",
+        43
+      ],
+      [
+        1789928399673,
+        518795,
+        530638,
+        "silver.tx_scored_v1",
+        32
+      ],
+      [
+        1789928409261,
+        528383,
+        528383,
+        "silver.tx_authorization_v1",
+        42
+      ],
+      [
+        1789928420252,
+        539374,
+        539374,
+        "silver.identity_events_v1",
+        44
+      ],
+      [
+        1789928430530,
+        543192,
+        549652,
+        "silver.tx_scored_v1",
+        33
+      ],
+      [
+        1789928435305,
+        547967,
+        547967,
+        "silver.identity_events_v1",
+        45
+      ],
+      [
+        1789928435817,
+        548479,
+        548479,
+        "silver.tx_authorization_v1",
+        43
+      ],
+      [
+        1789928454676,
+        567338,
+        567338,
+        "silver.identity_events_v1",
+        46
+      ],
+      [
+        1789928455488,
+        568150,
+        568150,
+        "silver.tx_authorization_v1",
+        44
+      ],
+      [
+        1789928464524,
+        563336,
+        577186,
+        "silver.tx_scored_v1",
+        34
+      ],
+      [
+        1789928475649,
+        574461,
+        574461,
+        "silver.tx_authorization_v1",
+        45
+      ],
+      [
+        1789928476074,
+        574886,
+        574886,
+        "silver.identity_events_v1",
+        47
+      ],
+      [
+        1789928495793,
+        594605,
+        594605,
+        "silver.identity_events_v1",
+        48
+      ],
+      [
+        1789928496616,
+        595428,
+        595428,
+        "silver.tx_authorization_v1",
+        46
+      ],
+      [
+        1789928497553,
+        586876,
+        596365,
+        "silver.tx_scored_v1",
+        35
+      ],
+      [
+        1789928513069,
+        602392,
+        602392,
+        "silver.tx_authorization_v1",
+        47
+      ],
+      [
+        1789928513462,
+        602785,
+        602785,
+        "silver.identity_events_v1",
+        49
+      ],
+      [
+        1789928528665,
+        611576,
+        617988,
+        "silver.tx_scored_v1",
+        36
+      ],
+      [
+        1789928533293,
+        616204,
+        616204,
+        "silver.tx_authorization_v1",
+        48
+      ],
+      [
+        1789928533748,
+        616659,
+        616659,
+        "silver.identity_events_v1",
+        50
+      ],
+      [
+        1789928554711,
+        637622,
+        637622,
+        "silver.tx_authorization_v1",
+        49
+      ],
+      [
+        1789928555698,
+        628342,
+        638609,
+        "silver.tx_scored_v1",
+        37
+      ],
+      [
+        1789928559588,
+        632232,
+        632232,
+        "silver.identity_events_v1",
+        51
+      ],
+      [
+        1789928573923,
+        646567,
+        646567,
+        "silver.tx_authorization_v1",
+        50
+      ],
+      [
+        1789928580430,
+        653074,
+        653074,
+        "silver.identity_events_v1",
+        52
+      ],
+      [
+        1789928581182,
+        646832,
+        653826,
+        "silver.tx_scored_v1",
+        38
+      ],
+      [
+        1789928597971,
+        663621,
+        663621,
+        "silver.tx_authorization_v1",
+        51
+      ],
+      [
+        1789928600459,
+        666109,
+        666109,
+        "silver.identity_events_v1",
+        53
+      ],
+      [
+        1789928610458,
+        667358,
+        676108,
+        "silver.tx_scored_v1",
+        39
+      ],
+      [
+        1789928615514,
+        672414,
+        672414,
+        "silver.tx_authorization_v1",
+        52
+      ],
+      [
+        1789928622184,
+        679084,
+        679084,
+        "silver.identity_events_v1",
+        54
+      ],
+      [
+        1789928639661,
+        696561,
+        696561,
+        "silver.tx_authorization_v1",
+        53
+      ],
+      [
+        1789928640769,
+        691026,
+        697669,
+        "silver.tx_scored_v1",
+        40
+      ],
+      [
+        1789928643933,
+        694190,
+        694190,
+        "silver.identity_events_v1",
+        55
+      ],
+      [
+        1789928812026,
+        862283,
+        862283,
+        "silver.tx_authorization_v1",
+        54
+      ],
+      [
+        1789928842189,
+        892446,
+        892446,
+        "silver.identity_events_v1",
+        56
+      ],
+      [
+        1789928844433,
+        894690,
+        894690,
+        "silver.tx_authorization_v1",
+        55
+      ],
+      [
+        1789928868156,
+        907601,
+        918413,
+        "silver.tx_scored_v1",
+        41
+      ],
+      [
+        1789928889336,
+        928781,
+        928781,
+        "silver.tx_authorization_v1",
+        56
+      ],
+      [
+        1789928889931,
+        929376,
+        929376,
+        "silver.identity_events_v1",
+        57
+      ],
+      [
+        1789928912176,
+        944647,
+        951621,
+        "silver.tx_scored_v1",
+        42
+      ],
+      [
+        1789928929795,
+        962266,
+        962266,
+        "silver.tx_authorization_v1",
+        57
+      ],
+      [
+        1789928930042,
+        962513,
+        962513,
+        "silver.identity_events_v1",
+        58
+      ],
+      [
+        1789928958870,
+        980257,
+        991341,
+        "silver.tx_scored_v1",
+        43
+      ],
+      [
+        1789928973723,
+        995110,
+        995110,
+        "silver.tx_authorization_v1",
+        58
+      ],
+      [
+        1789928974825,
+        996212,
+        996212,
+        "silver.identity_events_v1",
+        59
+      ],
+      [
+        1789929019130,
+        1040517,
+        1040517,
+        "silver.identity_events_v1",
+        60
+      ],
+      [
+        1789929020336,
+        1033330,
+        1041723,
+        "silver.tx_scored_v1",
+        44
+      ],
+      [
+        1789929021359,
+        1034353,
+        1034353,
+        "silver.tx_authorization_v1",
+        59
+      ],
+      [
+        1789929072718,
+        1085712,
+        1085712,
+        "silver.tx_authorization_v1",
+        60
+      ],
+      [
+        1789929074037,
+        1077352,
+        1087031,
+        "silver.tx_scored_v1",
+        45
+      ],
+      [
+        1789929074261,
+        1077576,
+        1077576,
+        "silver.identity_events_v1",
+        61
+      ],
+      [
+        1789929109371,
+        1112686,
+        1112686,
+        "silver.identity_events_v1",
+        62
+      ],
+      [
+        1789929115515,
+        1111823,
+        1118830,
+        "silver.tx_scored_v1",
+        46
+      ],
+      [
+        1789929117697,
+        1114005,
+        1114005,
+        "silver.tx_authorization_v1",
+        61
+      ],
+      [
+        1789929144613,
+        1140921,
+        1140921,
+        "silver.identity_events_v1",
+        63
+      ],
+      [
+        1789929167974,
+        1156324,
+        1164282,
+        "silver.tx_scored_v1",
+        47
+      ],
+      [
+        1789929173179,
+        1161529,
+        1161529,
+        "silver.tx_authorization_v1",
+        62
+      ],
+      [
+        1789929193514,
+        1181864,
+        1181864,
+        "silver.identity_events_v1",
+        64
+      ],
+      [
+        1789929214807,
+        1191908,
+        1203157,
+        "silver.tx_scored_v1",
+        48
+      ],
+      [
+        1789929217473,
+        1194574,
+        1194574,
+        "silver.tx_authorization_v1",
+        63
+      ],
+      [
+        1789929239288,
+        1216389,
+        1216389,
+        "silver.identity_events_v1",
+        65
+      ],
+      [
+        1789929262456,
+        1233538,
+        1239557,
+        "silver.tx_scored_v1",
+        49
+      ],
+      [
+        1789929263780,
+        1234862,
+        1234862,
+        "silver.tx_authorization_v1",
+        64
+      ],
+      [
+        1789929283710,
+        1254792,
+        1254792,
+        "silver.identity_events_v1",
+        66
+      ],
+      [
+        1789929303709,
+        1274791,
+        1274791,
+        "silver.tx_authorization_v1",
+        65
+      ],
+      [
+        1789929305603,
+        1267129,
+        1276685,
+        "silver.tx_scored_v1",
+        50
+      ],
+      [
+        1789929313404,
+        1274930,
+        1274930,
+        "silver.identity_events_v1",
+        67
+      ],
+      [
+        1789929333560,
+        1295086,
+        1295086,
+        "silver.tx_authorization_v1",
+        66
+      ],
+      [
+        1789929345180,
+        1306706,
+        1306706,
+        "silver.identity_events_v1",
+        68
+      ],
+      [
+        1789929359830,
+        1313359,
+        1321356,
+        "silver.tx_scored_v1",
+        51
+      ],
+      [
+        1789929381973,
+        1335502,
+        1335502,
+        "silver.tx_authorization_v1",
+        67
+      ],
+      [
+        1789929382391,
+        1335920,
+        1335920,
+        "silver.identity_events_v1",
+        69
+      ],
+      [
+        1789929400620,
+        1347533,
+        1354149,
+        "silver.tx_scored_v1",
+        52
+      ],
+      [
+        1789929407636,
+        1354549,
+        1354549,
+        "silver.identity_events_v1",
+        70
+      ],
+      [
+        1789929419842,
+        1366755,
+        1366755,
+        "silver.tx_authorization_v1",
+        68
+      ],
+      [
+        1789929447986,
+        1383081,
+        1394899,
+        "silver.tx_scored_v1",
+        53
+      ],
+      [
+        1789929452883,
+        1387978,
+        1387978,
+        "silver.identity_events_v1",
+        71
+      ],
+      [
+        1789929456569,
+        1391664,
+        1391664,
+        "silver.tx_authorization_v1",
+        69
+      ],
+      [
+        1789929487562,
+        1422657,
+        1422657,
+        "silver.identity_events_v1",
+        72
+      ],
+      [
+        1789929489131,
+        1416119,
+        1424226,
+        "silver.tx_scored_v1",
+        54
+      ],
+      [
+        1789929505375,
+        1432363,
+        1432363,
+        "silver.tx_authorization_v1",
+        70
+      ],
+      [
+        1789929518272,
+        1445260,
+        1445260,
+        "silver.identity_events_v1",
+        73
+      ],
+      [
+        1789929531999,
+        1447656,
+        1458987,
+        "silver.tx_scored_v1",
+        55
+      ],
+      [
+        1789929550736,
+        1466393,
+        1466393,
+        "silver.tx_authorization_v1",
+        71
+      ],
+      [
+        1789929551124,
+        1466781,
+        1466781,
+        "silver.identity_events_v1",
+        74
+      ],
+      [
+        1789929570703,
+        1478869,
+        1486360,
+        "silver.tx_scored_v1",
+        56
+      ],
+      [
+        1789929576936,
+        1485102,
+        1485102,
+        "silver.identity_events_v1",
+        75
+      ],
+      [
+        1789929577722,
+        1485888,
+        1485888,
+        "silver.tx_authorization_v1",
+        72
+      ],
+      [
+        1789929600682,
+        1508848,
+        1508848,
+        "silver.identity_events_v1",
+        76
+      ],
+      [
+        1789929601505,
+        1509671,
+        1509671,
+        "silver.tx_authorization_v1",
+        73
+      ],
+      [
+        1789929607944,
+        1505276,
+        1516110,
+        "silver.tx_scored_v1",
+        57
+      ],
+      [
+        1789929627642,
+        1524974,
+        1524974,
+        "silver.tx_authorization_v1",
+        74
+      ],
+      [
+        1789929628725,
+        1526057,
+        1526057,
+        "silver.identity_events_v1",
+        77
+      ],
+      [
+        1789929649164,
+        1538277,
+        1546496,
+        "silver.tx_scored_v1",
+        58
+      ],
+      [
+        1789929652468,
+        1541581,
+        1541581,
+        "silver.tx_authorization_v1",
+        75
+      ],
+      [
+        1789929664247,
+        1553360,
+        1553360,
+        "silver.identity_events_v1",
+        78
+      ],
+      [
+        1789929685450,
+        1563193,
+        1574563,
+        "silver.tx_scored_v1",
+        59
+      ],
+      [
+        1789929692042,
+        1569785,
+        1569785,
+        "silver.tx_authorization_v1",
+        76
+      ],
+      [
+        1789929692963,
+        1570706,
+        1570706,
+        "silver.identity_events_v1",
+        79
+      ],
+      [
+        1789929715741,
+        1593484,
+        1593484,
+        "silver.identity_events_v1",
+        80
+      ],
+      [
+        1789929716439,
+        1581971,
+        1594182,
+        "silver.tx_scored_v1",
+        60
+      ],
+      [
+        1789929717010,
+        1582542,
+        1582542,
+        "silver.tx_authorization_v1",
+        77
+      ],
+      [
+        1789929739722,
+        1605254,
+        1605254,
+        "silver.tx_authorization_v1",
+        78
+      ],
+      [
+        1789929739897,
+        1605429,
+        1605429,
+        "silver.identity_events_v1",
+        81
+      ],
+      [
+        1789929752448,
+        1611324,
+        1617980,
+        "silver.tx_scored_v1",
+        61
+      ],
+      [
+        1789929764186,
+        1623062,
+        1623062,
+        "silver.identity_events_v1",
+        82
+      ],
+      [
+        1789929764979,
+        1623855,
+        1623855,
+        "silver.tx_authorization_v1",
+        79
+      ],
+      [
+        1789929783661,
+        1634247,
+        1642537,
+        "silver.tx_scored_v1",
+        62
+      ],
+      [
+        1789929788495,
+        1639081,
+        1639081,
+        "silver.identity_events_v1",
+        83
+      ],
+      [
+        1789929791585,
+        1642171,
+        1642171,
+        "silver.tx_authorization_v1",
+        80
+      ],
+      [
+        1789929812976,
+        1663562,
+        1663562,
+        "silver.identity_events_v1",
+        84
+      ],
+      [
+        1789929814644,
+        1655960,
+        1665230,
+        "silver.tx_scored_v1",
+        63
+      ],
+      [
+        1789929824051,
+        1665367,
+        1665367,
+        "silver.tx_authorization_v1",
+        81
+      ],
+      [
+        1789929835667,
+        1676983,
+        1676983,
+        "silver.identity_events_v1",
+        85
+      ],
+      [
+        1789929843069,
+        1672409,
+        1684385,
+        "silver.tx_scored_v1",
+        64
+      ],
+      [
+        1789929850674,
+        1680014,
+        1680014,
+        "silver.tx_authorization_v1",
+        82
+      ],
+      [
+        1789929857594,
+        1686934,
+        1686934,
+        "silver.identity_events_v1",
+        86
+      ],
+      [
+        1789929878478,
+        1697260,
+        1707818,
+        "silver.tx_scored_v1",
+        65
+      ],
+      [
+        1789929888797,
+        1707579,
+        1707579,
+        "silver.identity_events_v1",
+        87
+      ],
+      [
+        1789929890949,
+        1709731,
+        1709731,
+        "silver.tx_authorization_v1",
+        83
+      ],
+      [
+        1789929919583,
+        1738365,
+        1738365,
+        "silver.identity_events_v1",
+        88
+      ],
+      [
+        1789929920207,
+        1738989,
+        1738989,
+        "silver.tx_authorization_v1",
+        84
+      ],
+      [
+        1789929925947,
+        1736387,
+        1744729,
+        "silver.tx_scored_v1",
+        66
+      ],
+      [
+        1789929941549,
+        1751989,
+        1751989,
+        "silver.identity_events_v1",
+        89
+      ],
+      [
+        1789929944643,
+        1755083,
+        1755083,
+        "silver.tx_authorization_v1",
+        85
+      ],
+      [
+        1789929956476,
+        1758264,
+        1766916,
+        "silver.tx_scored_v1",
+        67
+      ],
+      [
+        1789929958227,
+        1760015,
+        1760015,
+        "silver.identity_events_v1",
+        90
+      ],
+      [
+        1789929965863,
+        1767651,
+        1767651,
+        "silver.tx_authorization_v1",
+        86
+      ],
+      [
+        1789929981185,
+        1775092,
+        1782973,
+        "silver.tx_scored_v1",
+        68
+      ],
+      [
+        1789929981358,
+        1775265,
+        1775265,
+        "silver.identity_events_v1",
+        91
+      ],
+      [
+        1789929988784,
+        1782691,
+        1782691,
+        "silver.tx_authorization_v1",
+        87
+      ],
+      [
+        1789929998536,
+        1792443,
+        1792443,
+        "silver.identity_events_v1",
+        92
+      ],
+      [
+        1789930004020,
+        1792020,
+        1797927,
+        "silver.tx_scored_v1",
+        69
+      ],
+      [
+        1789930008523,
+        1796523,
+        1796523,
+        "silver.tx_authorization_v1",
+        88
+      ],
+      [
+        1789930015063,
+        1803063,
+        1803063,
+        "silver.identity_events_v1",
+        93
+      ],
+      [
+        1789930027541,
+        1806339,
+        1815541,
+        "silver.tx_scored_v1",
+        70
+      ],
+      [
+        1789930033832,
+        1812630,
+        1812630,
+        "silver.tx_authorization_v1",
+        89
+      ],
+      [
+        1789930034200,
+        1812998,
+        1812998,
+        "silver.identity_events_v1",
+        94
+      ],
+      [
+        1789930053589,
+        1823885,
+        1832387,
+        "silver.tx_scored_v1",
+        71
+      ],
+      [
+        1789930058926,
+        1829222,
+        1829222,
+        "silver.tx_authorization_v1",
+        90
+      ],
+      [
+        1789930059435,
+        1829731,
+        1829731,
+        "silver.identity_events_v1",
+        95
+      ],
+      [
+        1789930078710,
+        1849006,
+        1849006,
+        "silver.identity_events_v1",
+        96
+      ],
+      [
+        1789930079514,
+        1834378,
+        1849810,
+        "silver.tx_scored_v1",
+        72
+      ],
+      [
+        1789930088875,
+        1843739,
+        1843739,
+        "silver.tx_authorization_v1",
+        91
+      ],
+      [
+        1789930098001,
+        1852865,
+        1852865,
+        "silver.identity_events_v1",
+        97
+      ],
+      [
+        1789930102351,
+        1846717,
+        1857215,
+        "silver.tx_scored_v1",
+        73
+      ],
+      [
+        1789930108297,
+        1852663,
+        1852663,
+        "silver.tx_authorization_v1",
+        92
+      ],
+      [
+        1789930113692,
+        1858058,
+        1858058,
+        "silver.identity_events_v1",
+        98
+      ],
+      [
+        1789930125819,
+        1861129,
+        1870185,
+        "silver.tx_scored_v1",
+        74
+      ],
+      [
+        1789930129874,
+        1865184,
+        1865184,
+        "silver.identity_events_v1",
+        99
+      ],
+      [
+        1789930133902,
+        1869212,
+        1869212,
+        "silver.tx_authorization_v1",
+        93
+      ],
+      [
+        1789930148015,
+        1880991,
+        1883325,
+        "silver.tx_scored_v1",
+        75
+      ],
+      [
+        1789930153569,
+        1886545,
+        1886545,
+        "silver.tx_authorization_v1",
+        94
+      ],
+      [
+        1789930153912,
+        1886888,
+        1886888,
+        "silver.identity_events_v1",
+        100
+      ],
+      [
+        1789930174884,
+        1890284,
+        1907860,
+        "silver.tx_scored_v1",
+        76
+      ],
+      [
+        1789930175230,
+        1890630,
+        1890630,
+        "silver.tx_authorization_v1",
+        95
+      ],
+      [
+        1789930179250,
+        1894650,
+        1894650,
+        "silver.identity_events_v1",
+        101
+      ],
+      [
+        1789930196640,
+        1912040,
+        1912040,
+        "silver.tx_authorization_v1",
+        96
+      ],
+      [
+        1789930205816,
+        1911141,
+        1921216,
+        "silver.tx_scored_v1",
+        77
+      ],
+      [
+        1789930207970,
+        1913295,
+        1913295,
+        "silver.identity_events_v1",
+        102
+      ],
+      [
+        1789930218629,
+        1923954,
+        1923954,
+        "silver.tx_authorization_v1",
+        97
+      ],
+      [
+        1789930232123,
+        1937448,
+        1937448,
+        "silver.identity_events_v1",
+        103
+      ],
+      [
+        1789930233962,
+        1930825,
+        1939287,
+        "silver.tx_scored_v1",
+        78
+      ],
+      [
+        1789930241424,
+        1938287,
+        1938287,
+        "silver.tx_authorization_v1",
+        98
+      ],
+      [
+        1789930253447,
+        1950310,
+        1950310,
+        "silver.identity_events_v1",
+        104
+      ],
+      [
+        1789930262692,
+        1953342,
+        1959555,
+        "silver.tx_scored_v1",
+        79
+      ],
+      [
+        1789930268728,
+        1959378,
+        1959378,
+        "silver.identity_events_v1",
+        105
+      ],
+      [
+        1789930276390,
+        1967040,
+        1967040,
+        "silver.tx_authorization_v1",
+        99
+      ],
+      [
+        1789930291307,
+        1972235,
+        1981957,
+        "silver.tx_scored_v1",
+        80
+      ],
+      [
+        1789930296215,
+        1977143,
+        1977143,
+        "silver.tx_authorization_v1",
+        100
+      ],
+      [
+        1789930296480,
+        1977408,
+        1977408,
+        "silver.identity_events_v1",
+        106
+      ],
+      [
+        1789930312140,
+        1993068,
+        1993068,
+        "silver.identity_events_v1",
+        107
+      ],
+      [
+        1789930322925,
+        1994671,
+        2003853,
+        "silver.tx_scored_v1",
+        81
+      ],
+      [
+        1789930324162,
+        1995908,
+        1995908,
+        "silver.tx_authorization_v1",
+        101
+      ],
+      [
+        1789930337378,
+        2009124,
+        2009124,
+        "silver.identity_events_v1",
+        108
+      ],
+      [
+        1789930348185,
+        2019931,
+        2019931,
+        "silver.tx_authorization_v1",
+        102
+      ],
+      [
+        1789930350240,
+        2014029,
+        2021986,
+        "silver.tx_scored_v1",
+        82
+      ],
+      [
+        1789930358542,
+        2022331,
+        2022331,
+        "silver.identity_events_v1",
+        109
+      ],
+      [
+        1789930371207,
+        2034996,
+        2034996,
+        "silver.tx_authorization_v1",
+        103
+      ],
+      [
+        1789930376361,
+        2031346,
+        2040150,
+        "silver.tx_scored_v1",
+        83
+      ],
+      [
+        1789930381835,
+        2036820,
+        2036820,
+        "silver.identity_events_v1",
+        110
+      ],
+      [
+        1789930392704,
+        2047689,
+        2047689,
+        "silver.tx_authorization_v1",
+        104
+      ],
+      [
+        1789930405131,
+        2049911,
+        2060116,
+        "silver.tx_scored_v1",
+        84
+      ],
+      [
+        1789930409427,
+        2054207,
+        2054207,
+        "silver.tx_authorization_v1",
+        105
+      ],
+      [
+        1789930409802,
+        2054582,
+        2054582,
+        "silver.identity_events_v1",
+        111
+      ],
+      [
+        1789930428583,
+        2073363,
+        2073363,
+        "silver.tx_authorization_v1",
+        106
+      ],
+      [
+        1789930432660,
+        2069538,
+        2077440,
+        "silver.tx_scored_v1",
+        85
+      ],
+      [
+        1789930438059,
+        2074937,
+        2074937,
+        "silver.identity_events_v1",
+        112
+      ],
+      [
+        1789930450555,
+        2087433,
+        2087433,
+        "silver.tx_authorization_v1",
+        107
+      ],
+      [
+        1789930462236,
+        2089362,
+        2099114,
+        "silver.tx_scored_v1",
+        86
+      ],
+      [
+        1789930466608,
+        2093734,
+        2093734,
+        "silver.identity_events_v1",
+        113
+      ],
+      [
+        1789930472894,
+        2100020,
+        2100020,
+        "silver.tx_authorization_v1",
+        108
+      ],
+      [
+        1789930487039,
+        2114165,
+        2114165,
+        "silver.identity_events_v1",
+        114
+      ],
+      [
+        1789930492892,
+        2106101,
+        2120018,
+        "silver.tx_scored_v1",
+        87
+      ],
+      [
+        1789930498730,
+        2111939,
+        2111939,
+        "silver.tx_authorization_v1",
+        109
+      ],
+      [
+        1789930506137,
+        2119346,
+        2119346,
+        "silver.identity_events_v1",
+        115
+      ],
+      [
+        1789930521594,
+        2129253,
+        2134803,
+        "silver.tx_scored_v1",
+        88
+      ],
+      [
+        1789930526336,
+        2133995,
+        2133995,
+        "silver.identity_events_v1",
+        116
+      ],
+      [
+        1789930527258,
+        2134917,
+        2134917,
+        "silver.tx_authorization_v1",
+        110
+      ],
+      [
+        1789930548675,
+        2147190,
+        2156334,
+        "silver.tx_scored_v1",
+        89
+      ],
+      [
+        1789930552293,
+        2150808,
+        2150808,
+        "silver.identity_events_v1",
+        117
+      ],
+      [
+        1789930559384,
+        2157899,
+        2157899,
+        "silver.tx_authorization_v1",
+        111
+      ],
+      [
+        1789930571940,
+        2170455,
+        2170455,
+        "silver.identity_events_v1",
+        118
+      ],
+      [
+        1789930583488,
+        2168905,
+        2182003,
+        "silver.tx_scored_v1",
+        90
+      ],
+      [
+        1789930588294,
+        2173711,
+        2173711,
+        "silver.tx_authorization_v1",
+        112
+      ],
+      [
+        1789930588387,
+        2173804,
+        2173804,
+        "silver.identity_events_v1",
+        119
+      ],
+      [
+        1789930609356,
+        2194773,
+        2194773,
+        "silver.tx_authorization_v1",
+        113
+      ],
+      [
+        1789930609548,
+        2194965,
+        2194965,
+        "silver.identity_events_v1",
+        120
+      ],
+      [
+        1789930614652,
+        2191625,
+        2200069,
+        "silver.tx_scored_v1",
+        91
+      ],
+      [
+        1789930633524,
+        2210497,
+        2210497,
+        "silver.tx_authorization_v1",
+        114
+      ],
+      [
+        1789930640308,
+        2217281,
+        2217281,
+        "silver.identity_events_v1",
+        121
+      ],
+      [
+        1789930650339,
+        2220859,
+        2227312,
+        "silver.tx_scored_v1",
+        92
+      ],
+      [
+        1789930661915,
+        2232435,
+        2232435,
+        "silver.tx_authorization_v1",
+        115
+      ],
+      [
+        1789930665637,
+        2236157,
+        2236157,
+        "silver.identity_events_v1",
+        122
+      ],
+      [
+        1789930680114,
+        2236495,
+        2250634,
+        "silver.tx_scored_v1",
+        93
+      ],
+      [
+        1789930692231,
+        2248612,
+        2248612,
+        "silver.identity_events_v1",
+        123
+      ],
+      [
+        1789930693034,
+        2249415,
+        2249415,
+        "silver.tx_authorization_v1",
+        116
+      ],
+      [
+        1789930710418,
+        2263113,
+        2266799,
+        "silver.tx_scored_v1",
+        94
+      ],
+      [
+        1789930715864,
+        2268559,
+        2268559,
+        "silver.identity_events_v1",
+        124
+      ],
+      [
+        1789930717502,
+        2270197,
+        2270197,
+        "silver.tx_authorization_v1",
+        117
+      ],
+      [
+        1789930740648,
+        2293343,
+        2293343,
+        "silver.tx_authorization_v1",
+        118
+      ],
+      [
+        1789930740854,
+        2293549,
+        2293549,
+        "silver.identity_events_v1",
+        125
+      ],
+      [
+        1789930741858,
+        2283518,
+        2294553,
+        "silver.tx_scored_v1",
+        95
+      ],
+      [
+        1789930759224,
+        2300884,
+        2300884,
+        "silver.identity_events_v1",
+        126
+      ],
+      [
+        1789930760686,
+        2302346,
+        2302346,
+        "silver.tx_authorization_v1",
+        119
+      ],
+      [
+        1789930770707,
+        2300259,
+        2312367,
+        "silver.tx_scored_v1",
+        96
+      ],
+      [
+        1789930773184,
+        2302736,
+        2302736,
+        "silver.identity_events_v1",
+        127
+      ],
+      [
+        1789930782026,
+        2311578,
+        2311578,
+        "silver.tx_authorization_v1",
+        120
+      ],
+      [
+        1789930794081,
+        2323633,
+        2323633,
+        "silver.identity_events_v1",
+        128
+      ],
+      [
+        1789930797839,
+        2317297,
+        2327391,
+        "silver.tx_scored_v1",
+        97
+      ],
+      [
+        1789930804024,
+        2323482,
+        2323482,
+        "silver.tx_authorization_v1",
+        121
+      ],
+      [
+        1789930809633,
+        2329091,
+        2329091,
+        "silver.identity_events_v1",
+        129
+      ],
+      [
+        1789930826040,
+        2345498,
+        2345498,
+        "silver.tx_authorization_v1",
+        122
+      ],
+      [
+        1789930826838,
+        2339252,
+        2346296,
+        "silver.tx_scored_v1",
+        98
+      ],
+      [
+        1789930829494,
+        2341908,
+        2341908,
+        "silver.identity_events_v1",
+        130
+      ],
+      [
+        1789930847136,
+        2359550,
+        2359550,
+        "silver.tx_authorization_v1",
+        123
+      ],
+      [
+        1789930851191,
+        2352790,
+        2363605,
+        "silver.tx_scored_v1",
+        99
+      ],
+      [
+        1789930856375,
+        2357974,
+        2357974,
+        "silver.identity_events_v1",
+        131
+      ],
+      [
+        1789930866857,
+        2368456,
+        2368456,
+        "silver.tx_authorization_v1",
+        124
+      ],
+      [
+        1789930879552,
+        2381151,
+        2381151,
+        "silver.identity_events_v1",
+        132
+      ],
+      [
+        1789930880454,
+        2372330,
+        2382053,
+        "silver.tx_scored_v1",
+        100
+      ],
+      [
+        1789930889213,
+        2381089,
+        2381089,
+        "silver.tx_authorization_v1",
+        125
+      ],
+      [
+        1789930895306,
+        2387182,
+        2387182,
+        "silver.identity_events_v1",
+        133
+      ],
+      [
+        1789930909062,
+        2391815,
+        2400938,
+        "silver.tx_scored_v1",
+        101
+      ],
+      [
+        1789930913854,
+        2396607,
+        2396607,
+        "silver.identity_events_v1",
+        134
+      ],
+      [
+        1789930914779,
+        2397532,
+        2397532,
+        "silver.tx_authorization_v1",
+        126
+      ],
+      [
+        1789930938807,
+        2421560,
+        2421560,
+        "silver.tx_authorization_v1",
+        127
+      ],
+      [
+        1789930938929,
+        2421682,
+        2421682,
+        "silver.identity_events_v1",
+        135
+      ],
+      [
+        1789930941093,
+        2413065,
+        2423846,
+        "silver.tx_scored_v1",
+        102
+      ],
+      [
+        1789930957727,
+        2429699,
+        2429699,
+        "silver.identity_events_v1",
+        136
+      ],
+      [
+        1789930958534,
+        2430506,
+        2430506,
+        "silver.tx_authorization_v1",
+        128
+      ],
+      [
+        1789930970376,
+        2430212,
+        2442348,
+        "silver.tx_scored_v1",
+        103
+      ],
+      [
+        1789930981152,
+        2440988,
+        2440988,
+        "silver.tx_authorization_v1",
+        129
+      ],
+      [
+        1789930981460,
+        2441296,
+        2441296,
+        "silver.identity_events_v1",
+        137
+      ],
+      [
+        1789930993584,
+        2444346,
+        2453420,
+        "silver.tx_scored_v1",
+        104
+      ],
+      [
+        1789931000626,
+        2451388,
+        2451388,
+        "silver.identity_events_v1",
+        138
+      ],
+      [
+        1789931003819,
+        2454581,
+        2454581,
+        "silver.tx_authorization_v1",
+        130
+      ],
+      [
+        1789931015143,
+        2455462,
+        2465905,
+        "silver.tx_scored_v1",
+        105
+      ],
+      [
+        1789931019478,
+        2459797,
+        2459797,
+        "silver.identity_events_v1",
+        139
+      ],
+      [
+        1789931028231,
+        2468550,
+        2468550,
+        "silver.tx_authorization_v1",
+        131
+      ],
+      [
+        1789931043041,
+        2483360,
+        2483360,
+        "silver.identity_events_v1",
+        140
+      ],
+      [
+        1789931043749,
+        2474162,
+        2484068,
+        "silver.tx_scored_v1",
+        106
+      ],
+      [
+        1789931047727,
+        2478140,
+        2478140,
+        "silver.tx_authorization_v1",
+        132
+      ],
+      [
+        1789931061879,
+        2492292,
+        2492292,
+        "silver.identity_events_v1",
+        141
+      ],
+      [
+        1789931068054,
+        2492755,
+        2498467,
+        "silver.tx_scored_v1",
+        107
+      ],
+      [
+        1789931073341,
+        2498042,
+        2498042,
+        "silver.tx_authorization_v1",
+        133
+      ],
+      [
+        1789931079553,
+        2504254,
+        2504254,
+        "silver.identity_events_v1",
+        142
+      ],
+      [
+        1789931094011,
+        2506754,
+        2518712,
+        "silver.tx_scored_v1",
+        108
+      ],
+      [
+        1789931098821,
+        2511564,
+        2511564,
+        "silver.identity_events_v1",
+        143
+      ],
+      [
+        1789931099758,
+        2512501,
+        2512501,
+        "silver.tx_authorization_v1",
+        134
+      ],
+      [
+        1789931119973,
+        2532716,
+        2532716,
+        "silver.tx_authorization_v1",
+        135
+      ],
+      [
+        1789931120991,
+        2524944,
+        2533734,
+        "silver.tx_scored_v1",
+        109
+      ],
+      [
+        1789931121291,
+        2525244,
+        2525244,
+        "silver.identity_events_v1",
+        144
+      ],
+      [
+        1789931143054,
+        2547007,
+        2547007,
+        "silver.tx_authorization_v1",
+        136
+      ],
+      [
+        1789931145162,
+        2539164,
+        2549115,
+        "silver.tx_scored_v1",
+        110
+      ],
+      [
+        1789931145455,
+        2539457,
+        2539457,
+        "silver.identity_events_v1",
+        145
+      ],
+      [
+        1789931162214,
+        2556216,
+        2556216,
+        "silver.tx_authorization_v1",
+        137
+      ],
+      [
+        1789931162490,
+        2556492,
+        2556492,
+        "silver.identity_events_v1",
+        146
+      ],
+      [
+        1789931174788,
+        2559761,
+        2568790,
+        "silver.tx_scored_v1",
+        111
+      ],
+      [
+        1789931180373,
+        2565346,
+        2565346,
+        "silver.identity_events_v1",
+        147
+      ],
+      [
+        1789931184824,
+        2569797,
+        2569797,
+        "silver.tx_authorization_v1",
+        138
+      ],
+      [
+        1789931198564,
+        2574068,
+        2583537,
+        "silver.tx_scored_v1",
+        112
+      ],
+      [
+        1789931202818,
+        2578322,
+        2578322,
+        "silver.identity_events_v1",
+        148
+      ],
+      [
+        1789931208777,
+        2584281,
+        2584281,
+        "silver.tx_authorization_v1",
+        139
+      ],
+      [
+        1789931222465,
+        2597969,
+        2597969,
+        "silver.identity_events_v1",
+        149
+      ],
+      [
+        1789931225196,
+        2589873,
+        2600700,
+        "silver.tx_scored_v1",
+        113
+      ],
+      [
+        1789931230678,
+        2595355,
+        2595355,
+        "silver.tx_authorization_v1",
+        140
+      ],
+      [
+        1789931238406,
+        2603083,
+        2603083,
+        "silver.identity_events_v1",
+        150
+      ],
+      [
+        1789931248555,
+        2604951,
+        2613232,
+        "silver.tx_scored_v1",
+        114
+      ],
+      [
+        1789931257753,
+        2614149,
+        2614149,
+        "silver.tx_authorization_v1",
+        141
+      ],
+      [
+        1789931269490,
+        2625886,
+        2625886,
+        "silver.identity_events_v1",
+        151
+      ],
+      [
+        1789931278809,
+        2631412,
+        2635205,
+        "silver.tx_scored_v1",
+        115
+      ],
+      [
+        1789931285844,
+        2638447,
+        2638447,
+        "silver.identity_events_v1",
+        152
+      ],
+      [
+        1789931286493,
+        2639096,
+        2639096,
+        "silver.tx_authorization_v1",
+        142
+      ],
+      [
+        1789931311603,
+        2664206,
+        2664206,
+        "silver.tx_authorization_v1",
+        143
+      ],
+      [
+        1789931311907,
+        2664510,
+        2664510,
+        "silver.identity_events_v1",
+        153
+      ],
+      [
+        1789931313003,
+        2660548,
+        2665606,
+        "silver.tx_scored_v1",
+        116
+      ],
+      [
+        1789931336197,
+        2683742,
+        2683742,
+        "silver.identity_events_v1",
+        154
+      ],
+      [
+        1789931337985,
+        2685530,
+        2685530,
+        "silver.tx_authorization_v1",
+        144
+      ],
+      [
+        1789931340372,
+        2684955,
+        2687917,
+        "silver.tx_scored_v1",
+        117
+      ],
+      [
+        1789931359296,
+        2703879,
+        2703879,
+        "silver.identity_events_v1",
+        155
+      ],
+      [
+        1789931367595,
+        2712178,
+        2712178,
+        "silver.tx_authorization_v1",
+        145
+      ],
+      [
+        1789931375631,
+        2717609,
+        2720214,
+        "silver.tx_scored_v1",
+        118
+      ],
+      [
+        1789931385628,
+        2727606,
+        2727606,
+        "silver.identity_events_v1",
+        156
+      ],
+      [
+        1789931401222,
+        2743200,
+        2743200,
+        "silver.tx_authorization_v1",
+        146
+      ],
+      [
+        1789931412463,
+        2754441,
+        2754441,
+        "silver.identity_events_v1",
+        157
+      ],
+      [
+        1789931420183,
+        2759138,
+        2762161,
+        "silver.tx_scored_v1",
+        119
+      ],
+      [
+        1789931436204,
+        2775159,
+        2775159,
+        "silver.tx_authorization_v1",
+        147
+      ],
+      [
+        1789931436797,
+        2775752,
+        2775752,
+        "silver.identity_events_v1",
+        158
+      ],
+      [
+        1789931456948,
+        2793021,
+        2795903,
+        "silver.tx_scored_v1",
+        120
+      ],
+      [
+        1789931462841,
+        2798914,
+        2798914,
+        "silver.identity_events_v1",
+        159
+      ],
+      [
+        1789931465336,
+        2801409,
+        2801409,
+        "silver.tx_authorization_v1",
+        148
+      ],
+      [
+        1789931490323,
+        2826396,
+        2826396,
+        "silver.identity_events_v1",
+        160
+      ],
+      [
+        1789931496395,
+        2832468,
+        2832468,
+        "silver.tx_authorization_v1",
+        149
+      ],
+      [
+        1789931497873,
+        2833941,
+        2833946,
+        "silver.tx_scored_v1",
+        121
+      ],
+      [
+        1789931517347,
+        2853415,
+        2853415,
+        "silver.identity_events_v1",
+        161
+      ],
+      [
+        1789931518575,
+        2854643,
+        2854643,
+        "silver.tx_authorization_v1",
+        150
+      ],
+      [
+        1789931518885,
+        2852132,
+        2854953,
+        "silver.tx_scored_v1",
+        122
+      ],
+      [
+        1789931525631,
+        2858878,
+        2858878,
+        "silver.identity_events_v1",
+        162
+      ]
+    ],
+    "lake_bytes": 11148449661,
+    "notes": [],
+    "outage": {
+      "consumer_down_s": 120.017,
+      "exited_at_ms": 1789928650715,
+      "restarted_at_ms": 1789928770732,
+      "signalled_at_ms": 1789928638087,
+      "silver_commits_while_down": [],
+      "stop_s": 12.628
+    },
+    "outage_offered": {
+      "buckets": 1092,
+      "max_behind_s": 622.6012518405914,
+      "rate_events_per_s": 4480.90750915751
+    },
+    "phases": {
+      "consumer_exited_ms": 1789928650715,
+      "consumer_started_ms": 1789927377520,
+      "measured_end_ms": 1789928578076,
+      "measured_start_ms": 1789927978073,
+      "observed_until_ms": 1789929731503,
+      "outage_signalled_ms": 1789928638087,
+      "outage_start_ms": 1789928638087,
+      "producers_started_ms": 1789927378512,
+      "restored_ms": 1789928770732,
+      "warmup_reached_steady_state": 0
+    },
+    "preexisting_records": {
+      "identity.events.v1[0]": 0,
+      "identity.events.v1[1]": 0,
+      "identity.events.v1[2]": 0,
+      "tx.authorization.v1[0]": 0,
+      "tx.authorization.v1[1]": 0,
+      "tx.authorization.v1[2]": 0,
+      "tx.authorization.v1[3]": 0,
+      "tx.authorization.v1[4]": 0,
+      "tx.authorization.v1[5]": 0,
+      "tx.scored.v1[0]": 0,
+      "tx.scored.v1[1]": 0,
+      "tx.scored.v1[2]": 0,
+      "tx.scored.v1[3]": 0,
+      "tx.scored.v1[4]": 0,
+      "tx.scored.v1[5]": 0
+    },
+    "producers": [
+      {
+        "clock": {
+          "consistent": false,
+          "discarded": 2,
+          "drift_ms": 147.239990234375,
+          "lower_ms": 52.327880859375,
+          "max_upper_ms": 1880.385009765625,
+          "midpoint_ms": null,
+          "min_lower_ms": -1337.346923828125,
+          "samples": 3761119,
+          "upper_ms": -94.912109375
+        },
+        "delivered": {
+          "identity.events.v1": 188056,
+          "tx.authorization.v1": 940280,
+          "tx.scored.v1": 2632785
+        },
+        "delivered_by_partition": {
+          "identity.events.v1[0]": 63135,
+          "identity.events.v1[1]": 62080,
+          "identity.events.v1[2]": 62841,
+          "tx.authorization.v1[0]": 157438,
+          "tx.authorization.v1[1]": 155365,
+          "tx.authorization.v1[2]": 156227,
+          "tx.authorization.v1[3]": 158118,
+          "tx.authorization.v1[4]": 155922,
+          "tx.authorization.v1[5]": 157210,
+          "tx.scored.v1[0]": 440765,
+          "tx.scored.v1[1]": 435024,
+          "tx.scored.v1[2]": 437247,
+          "tx.scored.v1[3]": 443672,
+          "tx.scored.v1[4]": 436716,
+          "tx.scored.v1[5]": 439361
+        },
+        "delivery_problems": [],
+        "duplicate_values": 0,
+        "failed": {},
+        "max_behind_s": 1123.5657510757446,
+        "max_delivery_ms": 1924.39306640625,
+        "max_log_append_ms": {
+          "identity.events.v1[0]": 1789931510923,
+          "identity.events.v1[1]": 1789931510926,
+          "identity.events.v1[2]": 1789931510784,
+          "tx.authorization.v1[0]": 1789931510927,
+          "tx.authorization.v1[1]": 1789931510925,
+          "tx.authorization.v1[2]": 1789931510918,
+          "tx.authorization.v1[3]": 1789931510927,
+          "tx.authorization.v1[4]": 1789931510924,
+          "tx.authorization.v1[5]": 1789931510924,
+          "tx.scored.v1[0]": 1789931510922,
+          "tx.scored.v1[1]": 1789931510922,
+          "tx.scored.v1[2]": 1789931510928,
+          "tx.scored.v1[3]": 1789931510925,
+          "tx.scored.v1[4]": 1789931510923,
+          "tx.scored.v1[5]": 1789931510926
+        },
+        "max_offset": {
+          "identity.events.v1[0]": 252252,
+          "identity.events.v1[1]": 250023,
+          "identity.events.v1[2]": 251209,
+          "tx.authorization.v1[0]": 629120,
+          "tx.authorization.v1[1]": 623178,
+          "tx.authorization.v1[2]": 626153,
+          "tx.authorization.v1[3]": 634296,
+          "tx.authorization.v1[4]": 624729,
+          "tx.authorization.v1[5]": 629960,
+          "tx.scored.v1[0]": 1764763,
+          "tx.scored.v1[1]": 1743727,
+          "tx.scored.v1[2]": 1752470,
+          "tx.scored.v1[3]": 1776379,
+          "tx.scored.v1[4]": 1748295,
+          "tx.scored.v1[5]": 1763216
+        },
+        "not_log_append_time": 0,
+        "produced": {
+          "identity.events.v1": 188056,
+          "tx.authorization.v1": 940280,
+          "tx.scored.v1": 2632785
+        },
+        "substituted": 0,
+        "unstamped": 0,
+        "worker": 3
+      },
+      {
+        "clock": {
+          "consistent": false,
+          "discarded": 5,
+          "drift_ms": 147.448974609375,
+          "lower_ms": 52.219970703125,
+          "max_upper_ms": 1869.593017578125,
+          "midpoint_ms": null,
+          "min_lower_ms": -1368.324951171875,
+          "samples": 3755641,
+          "upper_ms": -95.22900390625
+        },
+        "delivered": {
+          "identity.events.v1": 187782,
+          "tx.authorization.v1": 938911,
+          "tx.scored.v1": 2628953
+        },
+        "delivered_by_partition": {
+          "identity.events.v1[0]": 62903,
+          "identity.events.v1[1]": 62474,
+          "identity.events.v1[2]": 62405,
+          "tx.authorization.v1[0]": 156794,
+          "tx.authorization.v1[1]": 155400,
+          "tx.authorization.v1[2]": 155787,
+          "tx.authorization.v1[3]": 158758,
+          "tx.authorization.v1[4]": 155377,
+          "tx.authorization.v1[5]": 156795,
+          "tx.scored.v1[0]": 440157,
+          "tx.scored.v1[1]": 434371,
+          "tx.scored.v1[2]": 435621,
+          "tx.scored.v1[3]": 443569,
+          "tx.scored.v1[4]": 435541,
+          "tx.scored.v1[5]": 439694
+        },
+        "delivery_problems": [],
+        "duplicate_values": 0,
+        "failed": {},
+        "max_behind_s": 1127.9063720703125,
+        "max_delivery_ms": 1915.444091796875,
+        "max_log_append_ms": {
+          "identity.events.v1[0]": 1789931510898,
+          "identity.events.v1[1]": 1789931510885,
+          "identity.events.v1[2]": 1789931510893,
+          "tx.authorization.v1[0]": 1789931510892,
+          "tx.authorization.v1[1]": 1789931510900,
+          "tx.authorization.v1[2]": 1789931510897,
+          "tx.authorization.v1[3]": 1789931510894,
+          "tx.authorization.v1[4]": 1789931510895,
+          "tx.authorization.v1[5]": 1789931510898,
+          "tx.scored.v1[0]": 1789931510897,
+          "tx.scored.v1[1]": 1789931510901,
+          "tx.scored.v1[2]": 1789931510896,
+          "tx.scored.v1[3]": 1789931510969,
+          "tx.scored.v1[4]": 1789931510901,
+          "tx.scored.v1[5]": 1789931510897
+        },
+        "max_offset": {
+          "identity.events.v1[0]": 252250,
+          "identity.events.v1[1]": 250020,
+          "identity.events.v1[2]": 251210,
+          "tx.authorization.v1[0]": 629114,
+          "tx.authorization.v1[1]": 623176,
+          "tx.authorization.v1[2]": 626148,
+          "tx.authorization.v1[3]": 634292,
+          "tx.authorization.v1[4]": 624719,
+          "tx.authorization.v1[5]": 629956,
+          "tx.scored.v1[0]": 1764751,
+          "tx.scored.v1[1]": 1743711,
+          "tx.scored.v1[2]": 1752455,
+          "tx.scored.v1[3]": 1776382,
+          "tx.scored.v1[4]": 1748273,
+          "tx.scored.v1[5]": 1763203
+        },
+        "not_log_append_time": 0,
+        "produced": {
+          "identity.events.v1": 187782,
+          "tx.authorization.v1": 938911,
+          "tx.scored.v1": 2628953
+        },
+        "substituted": 0,
+        "unstamped": 0,
+        "worker": 1
+      },
+      {
+        "clock": {
+          "consistent": false,
+          "discarded": 5,
+          "drift_ms": 147.515869140625,
+          "lower_ms": 52.31298828125,
+          "max_upper_ms": 1919.72802734375,
+          "midpoint_ms": null,
+          "min_lower_ms": -1346.85595703125,
+          "samples": 3761004,
+          "upper_ms": -95.202880859375
+        },
+        "delivered": {
+          "identity.events.v1": 188051,
+          "tx.authorization.v1": 940252,
+          "tx.scored.v1": 2632706
+        },
+        "delivered_by_partition": {
+          "identity.events.v1[0]": 62501,
+          "identity.events.v1[1]": 62794,
+          "identity.events.v1[2]": 62756,
+          "tx.authorization.v1[0]": 156743,
+          "tx.authorization.v1[1]": 155357,
+          "tx.authorization.v1[2]": 156273,
+          "tx.authorization.v1[3]": 158412,
+          "tx.authorization.v1[4]": 155887,
+          "tx.authorization.v1[5]": 157580,
+          "tx.scored.v1[0]": 440625,
+          "tx.scored.v1[1]": 434993,
+          "tx.scored.v1[2]": 438581,
+          "tx.scored.v1[3]": 442357,
+          "tx.scored.v1[4]": 435143,
+          "tx.scored.v1[5]": 441007
+        },
+        "delivery_problems": [],
+        "duplicate_values": 0,
+        "failed": {},
+        "max_behind_s": 1123.6094040870667,
+        "max_delivery_ms": 1959.069091796875,
+        "max_log_append_ms": {
+          "identity.events.v1[0]": 1789931510941,
+          "identity.events.v1[1]": 1789931510941,
+          "identity.events.v1[2]": 1789931510664,
+          "tx.authorization.v1[0]": 1789931510942,
+          "tx.authorization.v1[1]": 1789931510942,
+          "tx.authorization.v1[2]": 1789931510943,
+          "tx.authorization.v1[3]": 1789931510847,
+          "tx.authorization.v1[4]": 1789931510907,
+          "tx.authorization.v1[5]": 1789931510659,
+          "tx.scored.v1[0]": 1789931510908,
+          "tx.scored.v1[1]": 1789931510909,
+          "tx.scored.v1[2]": 1789931510940,
+          "tx.scored.v1[3]": 1789931510941,
+          "tx.scored.v1[4]": 1789931510907,
+          "tx.scored.v1[5]": 1789931510908
+        },
+        "max_offset": {
+          "identity.events.v1[0]": 252253,
+          "identity.events.v1[1]": 250024,
+          "identity.events.v1[2]": 251208,
+          "tx.authorization.v1[0]": 629123,
+          "tx.authorization.v1[1]": 623181,
+          "tx.authorization.v1[2]": 626154,
+          "tx.authorization.v1[3]": 634288,
+          "tx.authorization.v1[4]": 624726,
+          "tx.authorization.v1[5]": 629945,
+          "tx.scored.v1[0]": 1764757,
+          "tx.scored.v1[1]": 1743720,
+          "tx.scored.v1[2]": 1752471,
+          "tx.scored.v1[3]": 1776381,
+          "tx.scored.v1[4]": 1748284,
+          "tx.scored.v1[5]": 1763212
+        },
+        "not_log_append_time": 0,
+        "produced": {
+          "identity.events.v1": 188051,
+          "tx.authorization.v1": 940252,
+          "tx.scored.v1": 2632706
+        },
+        "substituted": 0,
+        "unstamped": 0,
+        "worker": 2
+      },
+      {
+        "clock": {
+          "consistent": false,
+          "discarded": 7,
+          "drift_ms": 147.780029296875,
+          "lower_ms": 52.240966796875,
+          "max_upper_ms": 2133.833984375,
+          "midpoint_ms": null,
+          "min_lower_ms": -1350.0390625,
+          "samples": 3792018,
+          "upper_ms": -95.5390625
+        },
+        "delivered": {
+          "identity.events.v1": 189601,
+          "tx.authorization.v1": 948006,
+          "tx.scored.v1": 2654418
+        },
+        "delivered_by_partition": {
+          "identity.events.v1[0]": 63715,
+          "identity.events.v1[1]": 62677,
+          "identity.events.v1[2]": 63209,
+          "tx.authorization.v1[0]": 158149,
+          "tx.authorization.v1[1]": 157060,
+          "tx.authorization.v1[2]": 157868,
+          "tx.authorization.v1[3]": 159009,
+          "tx.authorization.v1[4]": 157544,
+          "tx.authorization.v1[5]": 158376,
+          "tx.scored.v1[0]": 443217,
+          "tx.scored.v1[1]": 439340,
+          "tx.scored.v1[2]": 441023,
+          "tx.scored.v1[3]": 446785,
+          "tx.scored.v1[4]": 440896,
+          "tx.scored.v1[5]": 443157
+        },
+        "delivery_problems": [],
+        "duplicate_values": 0,
+        "failed": {},
+        "max_behind_s": 1098.7952947616577,
+        "max_delivery_ms": 2190.659912109375,
+        "max_log_append_ms": {
+          "identity.events.v1[0]": 1789931510804,
+          "identity.events.v1[1]": 1789931510881,
+          "identity.events.v1[2]": 1789931510603,
+          "tx.authorization.v1[0]": 1789931510927,
+          "tx.authorization.v1[1]": 1789931510921,
+          "tx.authorization.v1[2]": 1789931510792,
+          "tx.authorization.v1[3]": 1789931510918,
+          "tx.authorization.v1[4]": 1789931510810,
+          "tx.authorization.v1[5]": 1789931510805,
+          "tx.scored.v1[0]": 1789931510917,
+          "tx.scored.v1[1]": 1789931510922,
+          "tx.scored.v1[2]": 1789931510862,
+          "tx.scored.v1[3]": 1789931510926,
+          "tx.scored.v1[4]": 1789931510920,
+          "tx.scored.v1[5]": 1789931510927
+        },
+        "max_offset": {
+          "identity.events.v1[0]": 252247,
+          "identity.events.v1[1]": 250019,
+          "identity.events.v1[2]": 251206,
+          "tx.authorization.v1[0]": 629121,
+          "tx.authorization.v1[1]": 623177,
+          "tx.authorization.v1[2]": 626141,
+          "tx.authorization.v1[3]": 634294,
+          "tx.authorization.v1[4]": 624712,
+          "tx.authorization.v1[5]": 629952,
+          "tx.scored.v1[0]": 1764759,
+          "tx.scored.v1[1]": 1743722,
+          "tx.scored.v1[2]": 1752443,
+          "tx.scored.v1[3]": 1776380,
+          "tx.scored.v1[4]": 1748289,
+          "tx.scored.v1[5]": 1763218
+        },
+        "not_log_append_time": 0,
+        "produced": {
+          "identity.events.v1": 189601,
+          "tx.authorization.v1": 948006,
+          "tx.scored.v1": 2654418
+        },
+        "substituted": 0,
+        "unstamped": 0,
+        "worker": 0
+      }
+    ],
+    "recovery": {
+      "observed_until_ms": 1789929731503,
+      "peak_lag_ms": 1593484,
+      "recovered_at_ms": null,
+      "recovery_ms": null,
+      "restored_ms": 1789928770732,
+      "samples_after_restore": 69,
+      "within_bound": false
+    },
+    "resources": {
+      "all": {
+        "max_cpu_percent": 980.7,
+        "mean_cpu_percent": 704.6,
+        "peak_rss_mib": 6011.0
+      },
+      "consumer": {
+        "max_cpu_percent": 936.8,
+        "mean_cpu_percent": 453.1,
+        "peak_rss_mib": 4335.3
+      },
+      "gold": {
+        "max_cpu_percent": 355.9,
+        "mean_cpu_percent": 112.4,
+        "peak_rss_mib": 2131.7
+      },
+      "producers": {
+        "max_cpu_percent": 460.8,
+        "mean_cpu_percent": 157.1,
+        "peak_rss_mib": 320.5
+      }
+    },
+    "silver_commits": 439,
+    "throughput_offered": {
+      "buckets": 599,
+      "max_behind_s": 486.20683884620667,
+      "rate_events_per_s": 3568.447412353923
+    },
+    "throughput_window": {
+      "committed_records": 1157612,
+      "committed_span_ms": 593564,
+      "end_ms": 1789928578076,
+      "lag_max_ms": 646567,
+      "lag_p50_ms": 433528,
+      "lag_p95_ms": 616659,
+      "lag_p99_ms": 646567,
+      "missing_partitions": [],
+      "samples": 87,
+      "start_ms": 1789927978073,
+      "throughput_events_per_s": 1950.2732645510848,
+      "undefined_samples": 0,
+      "widest_gap_ms": 22455
+    }
+  },
+  "publishable": false,
+  "python_version": "3.12.14",
+  "record_type": "BENCHMARK",
+  "run_id": "bench-20260920-180255-stream-throughput-bfb8c748",
+  "started_at": "2026-09-20T18:02:55.539836+00:00",
+  "status": "INVALID",
+  "subject": "stream-kafka-bronze-silver-throughput-outage-and-gold-freshness",
+  "targets": {
+    "clock_offset_tolerance_ms": 500.0,
+    "gold_max_lag_ms": 3600000,
+    "gold_p95_lag_ms": 900000,
+    "gold_stall_ms": 1800000,
+    "lag_target_ms": 10000,
+    "max_discarded_clock_report_fraction": 0.0001,
+    "max_preexisting_records": 5000,
+    "max_schedule_lag_s": 1.0,
+    "max_trigger_share_of_lag_target": 0.5,
+    "min_samples_per_window": 10,
+    "offered_rate_tolerance": 0.01,
+    "outage_s": 120,
+    "rate_events_per_s": 5000,
+    "throughput_quantisation_tolerance": 0.01
+  },
+  "timing_semantics_version": 1,
+  "tool": "trace-x-load-stream",
+  "tool_version": "1.0.0",
+  "toolchain": {
+    "enforced_on_running_jvm": "build_session refuses a JVM whose Spark, Java, Scala or Hadoop contradict the pins (ADR-0045), so the consumer and every Gold build ran on exactly these",
+    "findings": [
+      {
+        "component": "java",
+        "detail": "Java 17 at /Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home/bin/java",
+        "ok": true,
+        "remedy": ""
+      },
+      {
+        "component": "pyspark",
+        "detail": "pyspark 4.0.1",
+        "ok": true,
+        "remedy": ""
+      },
+      {
+        "component": "delta-spark",
+        "detail": "delta-spark 4.0.1",
+        "ok": true,
+        "remedy": ""
+      },
+      {
+        "component": "hadoop",
+        "detail": "hadoop-client-api 3.4.1",
+        "ok": true,
+        "remedy": ""
+      },
+      {
+        "component": "scala",
+        "detail": "scala-library 2.13.16",
+        "ok": true,
+        "remedy": ""
+      },
+      {
+        "component": "jar:delta-spark_2.13",
+        "detail": "io.delta:delta-spark_2.13:4.0.1 verified",
+        "ok": true,
+        "remedy": ""
+      },
+      {
+        "component": "jar:delta-storage",
+        "detail": "io.delta:delta-storage:4.0.1 verified",
+        "ok": true,
+        "remedy": ""
+      },
+      {
+        "component": "jar:spark-sql-kafka-0-10_2.13",
+        "detail": "org.apache.spark:spark-sql-kafka-0-10_2.13:4.0.1 verified",
+        "ok": true,
+        "remedy": ""
+      },
+      {
+        "component": "jar:spark-token-provider-kafka-0-10_2.13",
+        "detail": "org.apache.spark:spark-token-provider-kafka-0-10_2.13:4.0.1 verified",
+        "ok": true,
+        "remedy": ""
+      },
+      {
+        "component": "jar:kafka-clients",
+        "detail": "org.apache.kafka:kafka-clients:3.9.1 verified",
+        "ok": true,
+        "remedy": ""
+      },
+      {
+        "component": "jar:commons-pool2",
+        "detail": "org.apache.commons:commons-pool2:2.12.0 verified",
+        "ok": true,
+        "remedy": ""
+      }
+    ],
+    "installed": {
+      "confluent-kafka": "2.15.1",
+      "delta-spark": "4.0.1",
+      "pyarrow": "25.0.1",
+      "pyspark": "4.0.1"
+    },
+    "jars_lock_digest": "sha256:f09a418fded21af76aba06835a0489e4f522a35fa46be545c83bf9ede5712fa6",
+    "java_home": "/Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home",
+    "kafka_image": "apache/kafka:3.9.1@sha256:4ceccc577f03f51f6af8dbfda55194d0d892f4fa7913ffbded567ce3895622ed",
+    "pins": {
+      "delta": "4.0.1",
+      "hadoop_line": "3.4",
+      "java_major": "17",
+      "scala_line": "2.13",
+      "spark": "4.0.1"
+    }
+  },
+  "track": "SYNTHETIC",
+  "verdicts": [
+    {
+      "detail": "every record's broker-to-host clock offset lies in [-1368.324951171875, 2133.833984375] ms over 15069782 delivery reports (drift between records 147.866943359375 ms); must lie within +-500.0 ms. 19 report(s) were discarded for a host clock that stepped backwards between send and acknowledgement; at most 0.010000% of them may be",
+      "kind": "integrity",
+      "name": "clock_offset_bounded",
+      "passed": false
+    },
+    {
+      "detail": "0 producer worker error(s): []",
+      "kind": "integrity",
+      "name": "producers_healthy",
+      "passed": true
+    },
+    {
+      "detail": "every record delivered",
+      "kind": "integrity",
+      "name": "deliveries_confirmed",
+      "passed": true
+    },
+    {
+      "detail": "0 record(s) stamped with something other than LogAppendTime",
+      "kind": "integrity",
+      "name": "log_append_time",
+      "passed": true
+    },
+    {
+      "detail": "partitions that received no benchmark record: []",
+      "kind": "integrity",
+      "name": "partitions_offered",
+      "passed": true
+    },
+    {
+      "detail": "offered 3568.4 events/s over 599 one-second buckets, against the fixed rate 5000 (at least 4950 required for the run to have offered it)",
+      "kind": "integrity",
+      "name": "throughput_offered_rate",
+      "passed": false
+    },
+    {
+      "detail": "the producers were at most 486.207 s behind schedule (limit 1.0 s)",
+      "kind": "integrity",
+      "name": "throughput_schedule_kept",
+      "passed": false
+    },
+    {
+      "detail": "Kafka -> Silver committed 1950.3 events/s (1157612 records over 593564 ms); target 5000 events/s, at least 4950 after the declared 1% commit-quantisation tolerance",
+      "kind": "target",
+      "name": "throughput_sustained",
+      "passed": false
+    },
+    {
+      "detail": "87 Silver commits sampled; consumer lag max 646567 ms, p99 646567 ms, widest commit gap 22455 ms, 0 undefined sample(s) (missing: []); every sample and every gap must be below 10000 ms for the rate to count as sustained",
+      "kind": "target",
+      "name": "throughput_lag_below_target",
+      "passed": false
+    },
+    {
+      "detail": "offered 4480.9 events/s over 1092 one-second buckets, against the fixed rate 5000 (at least 4950 required for the run to have offered it)",
+      "kind": "integrity",
+      "name": "outage_offered_rate",
+      "passed": false
+    },
+    {
+      "detail": "the producers were at most 622.601 s behind schedule (limit 1.0 s)",
+      "kind": "integrity",
+      "name": "outage_schedule_kept",
+      "passed": false
+    },
+    {
+      "detail": "the consumer exited 12.628 s after the stop was signalled and was restarted 120.017 s after it exited; the outage is 120 s (+-1.0 s), measured from the exit",
+      "kind": "integrity",
+      "name": "outage_duration",
+      "passed": true
+    },
+    {
+      "detail": "no Silver commit between the consumer's exit and its restart",
+      "kind": "integrity",
+      "name": "outage_consumer_down",
+      "passed": true
+    },
+    {
+      "detail": "consumer lag did not recover below 10000 ms within the observed 961 s after the restart (peak 1593484 ms, 69 samples)",
+      "kind": "target",
+      "name": "lag_recovers_after_outage",
+      "passed": false
+    },
+    {
+      "detail": "1 Gold build(s) finished in or spanned the measured window, 0 succeeded, 0 failed (exit codes [])",
+      "kind": "target",
+      "name": "gold_builds_succeeded",
+      "passed": false
+    },
+    {
+      "detail": "p95 Gold build lag None ms over 0 build(s); target 900000 ms; unfinished build(s) at least [3601528] ms",
+      "kind": "target",
+      "name": "gold_p95_lag",
+      "passed": false
+    },
+    {
+      "detail": "worst Gold build lag 3601528 ms; target 3600000 ms",
+      "kind": "target",
+      "name": "gold_max_lag",
+      "passed": false
+    },
+    {
+      "detail": "longest interval without a Gold build committing, around the window: 3629950 ms while Silver advanced; a stall is 1800000 ms",
+      "kind": "target",
+      "name": "gold_no_stall",
+      "passed": false
+    },
+    {
+      "detail": "every sample is anchored to broker records",
+      "kind": "integrity",
+      "name": "samples_authentic",
+      "passed": true
+    }
+  ]
+}

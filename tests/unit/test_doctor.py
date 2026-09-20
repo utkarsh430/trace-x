@@ -171,14 +171,71 @@ def test_ample_disk_passes(doctor, monkeypatch) -> None:
 # ----------------------------------------------------------------- pins ----
 
 
-def test_java_25_is_flagged_against_the_spark_pin(doctor, monkeypatch) -> None:
-    """Phase 0 target: `make doctor` fails loudly on Java 25."""
-    monkeypatch.setenv("JAVA_HOME", "")
-    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/usr/bin/java")
-    monkeypatch.setattr(doctor, "_run_out", lambda _: 'openjdk version "25.0.2" 2026-01-20')
+def _fake_jdk(root: Path, version: str) -> Path:
+    home = root / "jdk"
+    (home / "bin").mkdir(parents=True)
+    java = home / "bin" / "java"
+    java.write_text(f"#!/bin/sh\necho 'openjdk version \"{version}\" 2026-01-20 LTS' 1>&2\n")
+    java.chmod(0o755)
+    return home
+
+
+def test_java_25_fails_doctor_from_phase_3(doctor, monkeypatch, tmp_path) -> None:
+    """From Phase 3 a wrong Java is a required failure, not a warning.
+
+    Phase 3 planning found the warning-level check reporting success while a
+    non-interactive shell ran Java 25; a check that cannot fail cannot be green.
+    """
+    monkeypatch.setenv("JAVA_HOME", str(_fake_jdk(tmp_path, "25.0.2")))
     rep = doctor.Report()
-    doctor.check_java(rep, "17")
+    doctor.check_java(rep, "17", phase=3)
     check = rep.checks[0]
-    assert check.status == doctor.WARN
-    assert "25" in check.detail
-    assert "WILL FAIL" in check.remedy
+    assert check.status == doctor.FAIL
+    assert check.required
+    assert "Java 25" in check.detail
+    assert "JAVA_HOME" in check.remedy
+
+
+def test_java_25_only_warned_before_phase_3(doctor, monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("JAVA_HOME", str(_fake_jdk(tmp_path, "25.0.2")))
+    rep = doctor.Report()
+    doctor.check_java(rep, "17", phase=2)
+    assert rep.checks[0].status == doctor.WARN
+    assert not rep.checks[0].required
+
+
+def test_the_pinned_java_passes(doctor, monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("JAVA_HOME", str(_fake_jdk(tmp_path, "17.0.18")))
+    rep = doctor.Report()
+    doctor.check_java(rep, "17", phase=3)
+    assert rep.checks[0].status == doctor.OK
+
+
+def test_missing_spark_jars_fail_doctor_from_phase_3(doctor, monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("TRACE_SPARK_JARS_DIR", str(tmp_path / "empty"))
+    rep = doctor.Report()
+    doctor.check_stream_toolchain(rep, doctor.pins(), phase=3)
+    jars = next(c for c in rep.checks if c.name == "spark_jars")
+    assert jars.status == doctor.FAIL
+    assert jars.required
+    assert "make stream-jars" in jars.remedy
+
+
+def test_doctor_exits_non_zero_when_run_under_java_25(tmp_path) -> None:
+    """End to end, the way a developer's shell would run it: no `make`, wrong JAVA_HOME."""
+    import json
+    import os
+    import subprocess
+
+    env = {**os.environ, "JAVA_HOME": str(_fake_jdk(tmp_path, "25.0.2"))}
+    result = subprocess.run(  # noqa: S603 -- the running interpreter, a repository script
+        [sys.executable, str(ROOT / "scripts" / "doctor.py"), "--json"],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=120,
+        check=False,
+    )
+    assert result.returncode == 1
+    java = next(c for c in json.loads(result.stdout) if c["name"] == "java")
+    assert java["status"] == "FAIL"

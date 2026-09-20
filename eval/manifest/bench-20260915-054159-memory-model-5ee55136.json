@@ -1,0 +1,773 @@
+{
+  "dirty_worktree": false,
+  "env_lock_digest": "sha256:b8c74723800f0505649f050bba317fd575e6e5dfa295bb45ed073ba5cb650e6f",
+  "finished_at": "2026-09-15T05:42:07.434174+00:00",
+  "git_commit_sha": "5ee55136b02586e336a3cf5f979b2c5f0f8cb6db",
+  "measured": {
+    "configured_feature_maxmemory_mib": 640,
+    "curves": {
+      "ao": {
+        "driver": "members",
+        "family": "ao",
+        "points": [
+          [
+            1.0,
+            112.0
+          ],
+          [
+            16.0,
+            704.0
+          ],
+          [
+            128.0,
+            5184.0
+          ],
+          [
+            129.0,
+            16096.0
+          ]
+        ]
+      },
+      "aod": {
+        "driver": "members",
+        "family": "aod",
+        "points": [
+          [
+            1.0,
+            112.0
+          ],
+          [
+            16.0,
+            704.0
+          ],
+          [
+            128.0,
+            5184.0
+          ],
+          [
+            129.0,
+            15952.0
+          ]
+        ]
+      },
+      "aov": {
+        "driver": "one key",
+        "family": "aov",
+        "points": [
+          [
+            1.0,
+            104.0
+          ]
+        ]
+      },
+      "card": {
+        "driver": "members",
+        "family": "card",
+        "points": [
+          [
+            1.0,
+            128.0
+          ],
+          [
+            16.0,
+            960.0
+          ],
+          [
+            64.0,
+            3648.0
+          ],
+          [
+            128.0,
+            7232.0
+          ],
+          [
+            129.0,
+            18184.0
+          ],
+          [
+            256.0,
+            32968.0
+          ],
+          [
+            1024.0,
+            129152.0
+          ]
+        ]
+      },
+      "dev": {
+        "driver": "members",
+        "family": "dev",
+        "points": [
+          [
+            1.0,
+            144.0
+          ],
+          [
+            16.0,
+            1344.0
+          ],
+          [
+            64.0,
+            5184.0
+          ],
+          [
+            128.0,
+            10304.0
+          ],
+          [
+            129.0,
+            20032.0
+          ],
+          [
+            256.0,
+            37104.0
+          ],
+          [
+            1024.0,
+            145744.0
+          ]
+        ]
+      },
+      "epoch": {
+        "driver": "one key",
+        "family": "epoch",
+        "points": [
+          [
+            1.0,
+            56.0
+          ]
+        ]
+      },
+      "hll": {
+        "driver": "accounts in the bucket",
+        "family": "hll",
+        "points": [
+          [
+            1.0,
+            124.0
+          ],
+          [
+            2.0,
+            124.0
+          ],
+          [
+            4.0,
+            124.0
+          ],
+          [
+            8.0,
+            124.0
+          ],
+          [
+            16.0,
+            172.0
+          ],
+          [
+            32.0,
+            268.0
+          ],
+          [
+            64.0,
+            460.0
+          ],
+          [
+            128.0,
+            460.0
+          ],
+          [
+            256.0,
+            844.0
+          ],
+          [
+            512.0,
+            1612.0
+          ],
+          [
+            1024.0,
+            2636.0
+          ]
+        ]
+      },
+      "hw": {
+        "driver": "one key",
+        "family": "hw",
+        "points": [
+          [
+            1.0,
+            48.0
+          ]
+        ]
+      },
+      "ie": {
+        "driver": "members",
+        "family": "ie",
+        "points": [
+          [
+            1.0,
+            112.0
+          ],
+          [
+            16.0,
+            704.0
+          ],
+          [
+            64.0,
+            2624.0
+          ],
+          [
+            128.0,
+            5184.0
+          ],
+          [
+            129.0,
+            16024.0
+          ],
+          [
+            256.0,
+            28968.0
+          ],
+          [
+            1024.0,
+            113008.0
+          ]
+        ]
+      },
+      "mcv": {
+        "driver": "minutes held",
+        "family": "mcv",
+        "points": [
+          [
+            1.0,
+            120.0
+          ],
+          [
+            16.0,
+            960.0
+          ],
+          [
+            128.0,
+            7232.0
+          ],
+          [
+            512.0,
+            94328.0
+          ],
+          [
+            1440.0,
+            317304.0
+          ]
+        ]
+      },
+      "obs": {
+        "driver": "one key",
+        "family": "obs",
+        "points": [
+          [
+            1.0,
+            416.0
+          ]
+        ]
+      },
+      "obs_identity": {
+        "driver": "one key",
+        "family": "obs_identity",
+        "points": [
+          [
+            1.0,
+            304.0
+          ]
+        ]
+      },
+      "obs_outcome": {
+        "driver": "one outcome",
+        "family": "obs_outcome",
+        "points": [
+          [
+            1.0,
+            360.0
+          ]
+        ]
+      },
+      "pf": {
+        "driver": "folded observations",
+        "family": "pf",
+        "points": [
+          [
+            1.0,
+            192.0
+          ],
+          [
+            20.0,
+            192.0
+          ],
+          [
+            128.0,
+            192.0
+          ],
+          [
+            512.0,
+            192.0
+          ]
+        ]
+      },
+      "pfa": {
+        "driver": "folded observations",
+        "family": "pfa",
+        "points": [
+          [
+            1.0,
+            88.0
+          ],
+          [
+            20.0,
+            152.0
+          ],
+          [
+            128.0,
+            520.0
+          ],
+          [
+            512.0,
+            520.0
+          ]
+        ]
+      },
+      "pfc": {
+        "driver": "folded observations",
+        "family": "pfc",
+        "points": [
+          [
+            1.0,
+            80.0
+          ],
+          [
+            20.0,
+            80.0
+          ],
+          [
+            128.0,
+            80.0
+          ],
+          [
+            512.0,
+            80.0
+          ]
+        ]
+      },
+      "pfh": {
+        "driver": "folded observations",
+        "family": "pfh",
+        "points": [
+          [
+            1.0,
+            120.0
+          ],
+          [
+            20.0,
+            288.0
+          ],
+          [
+            128.0,
+            288.0
+          ],
+          [
+            512.0,
+            320.0
+          ]
+        ]
+      },
+      "pfl": {
+        "driver": "folded observations",
+        "family": "pfl",
+        "points": [
+          [
+            1.0,
+            144.0
+          ],
+          [
+            20.0,
+            1856.0
+          ],
+          [
+            128.0,
+            1856.0
+          ],
+          [
+            512.0,
+            1856.0
+          ]
+        ]
+      },
+      "position": {
+        "driver": "one key",
+        "family": "position",
+        "points": [
+          [
+            1.0,
+            56.0
+          ]
+        ]
+      },
+      "tx": {
+        "driver": "members",
+        "family": "tx",
+        "points": [
+          [
+            1.0,
+            128.0
+          ],
+          [
+            16.0,
+            960.0
+          ],
+          [
+            64.0,
+            3648.0
+          ],
+          [
+            128.0,
+            7232.0
+          ],
+          [
+            129.0,
+            18040.0
+          ],
+          [
+            256.0,
+            32824.0
+          ],
+          [
+            1024.0,
+            129304.0
+          ]
+        ]
+      }
+    },
+    "headroom_factor": 1.25,
+    "population": {
+      "accounts": 669767,
+      "cards": 669767,
+      "devices": 803720,
+      "ips": 334884,
+      "merchants": 50233
+    },
+    "retention_s": {
+      "ao": 7200.0,
+      "card": 3900.0,
+      "cv": 90060.0,
+      "dev": 90000.0,
+      "hll": 7500.0,
+      "hll_bucket": 300.0,
+      "minute": 60.0,
+      "profile": 2595600.0,
+      "raw_ie": 90000.0,
+      "raw_tx": 90000.0
+    },
+    "steady_state_bytes": 39218472920.88996,
+    "steady_state_lines": [
+      {
+        "basis": "one string key per observation, for the raw window",
+        "bytes_per_key": 416.0,
+        "family": "obs",
+        "keys": 45000000.0,
+        "retention_s": 90000.0,
+        "scope": "transaction",
+        "size": 1,
+        "total_bytes": 18720000000.0
+      },
+      {
+        "basis": "measured curve at the active accounts' raw depth",
+        "bytes_per_key": 3826.502482206499,
+        "family": "tx",
+        "keys": 669767.0,
+        "retention_s": 90000.0,
+        "scope": "account",
+        "size": 67.18754432511605,
+        "total_bytes": 2562865088.0
+      },
+      {
+        "basis": "folded profile prefix, measured through the store's own fold",
+        "bytes_per_key": 3081.2084361676025,
+        "family": "pf..pfc",
+        "keys": 669767.0,
+        "retention_s": 2595600.0,
+        "scope": "account",
+        "size": 1870.5012340112307,
+        "total_bytes": 2063691730.6666665
+      },
+      {
+        "basis": "measured curve at the active entities' depth",
+        "bytes_per_key": 243.3120486630915,
+        "family": "card",
+        "keys": 633334.1938493499,
+        "retention_s": 3900.0,
+        "scope": "card",
+        "size": 3.0789431850316977,
+        "total_bytes": 154097840.19387284
+      },
+      {
+        "basis": "measured curve at the active entities' depth",
+        "bytes_per_key": 4543.171850893346,
+        "family": "dev",
+        "keys": 803720.0,
+        "retention_s": 90000.0,
+        "scope": "dev",
+        "size": 55.98964813616682,
+        "total_bytes": 3651438080.0000005
+      },
+      {
+        "basis": "measured sketch at its bucket's cardinality x active buckets",
+        "bytes_per_key": 124.0,
+        "family": "hll",
+        "keys": 3750000.0,
+        "retention_s": 7500.0,
+        "scope": "IP",
+        "size": 1.0,
+        "total_bytes": 465000000.0
+      },
+      {
+        "basis": "measured sketch at its bucket's cardinality x active buckets",
+        "bytes_per_key": 124.0,
+        "family": "hll",
+        "keys": 1255825.0,
+        "retention_s": 7500.0,
+        "scope": "MERCHANT",
+        "size": 2.986084844624052,
+        "total_bytes": 155722300.0
+      },
+      {
+        "basis": "measured curve at the minutes each merchant holds",
+        "bytes_per_key": 186695.4885186754,
+        "family": "mcv",
+        "keys": 50233.0,
+        "retention_s": 90060.0,
+        "scope": "merchant/GBP",
+        "size": 896.4226703561404,
+        "total_bytes": 9378274474.758621
+      },
+      {
+        "basis": "one string key per identity event, for the raw window",
+        "bytes_per_key": 304.0,
+        "family": "obs",
+        "keys": 38925.0,
+        "retention_s": 90000.0,
+        "scope": "identity",
+        "size": 1,
+        "total_bytes": 11833200.0
+      },
+      {
+        "basis": "measured curve at the active accounts' depth",
+        "bytes_per_key": 113.15795455502074,
+        "family": "ie",
+        "keys": 37815.49104462493,
+        "retention_s": 90000.0,
+        "scope": "account",
+        "size": 1.0293400647387012,
+        "total_bytes": 4279123.617103461
+      },
+      {
+        "basis": "ASSUMED one outcome per transaction, the upper bound",
+        "bytes_per_key": 464.0,
+        "family": "obs+aov",
+        "keys": 3600000.0,
+        "retention_s": 7200.0,
+        "scope": "authorization outcome",
+        "size": 1,
+        "total_bytes": 1670400000.0
+      },
+      {
+        "basis": "ASSUMED one outcome per transaction; measured curve at the accounts' depth",
+        "bytes_per_key": 571.3074928592703,
+        "family": "ao+aod",
+        "keys": 666665.3744510101,
+        "retention_s": 7200.0,
+        "scope": "account",
+        "size": 5.400010466967106,
+        "total_bytes": 380870923.6536932
+      },
+      {
+        "basis": "one key",
+        "bytes_per_key": 56.0,
+        "family": "epoch",
+        "keys": 1,
+        "retention_s": 0,
+        "scope": "store",
+        "size": 1,
+        "total_bytes": 56.0
+      },
+      {
+        "basis": "one key",
+        "bytes_per_key": 56.0,
+        "family": "position",
+        "keys": 1,
+        "retention_s": 0,
+        "scope": "store",
+        "size": 1,
+        "total_bytes": 56.0
+      },
+      {
+        "basis": "one key",
+        "bytes_per_key": 48.0,
+        "family": "hw",
+        "keys": 1,
+        "retention_s": 0,
+        "scope": "store",
+        "size": 1,
+        "total_bytes": 48.0
+      }
+    ],
+    "store_image": "redis:7-alpine",
+    "target_tps": 500,
+    "ten_minute_bytes": 500883041.37530416,
+    "ten_minute_lines": [
+      {
+        "basis": "one string key per observation, for the raw window",
+        "bytes_per_key": 416.0,
+        "family": "obs",
+        "keys": 300000,
+        "retention_s": 90000.0,
+        "scope": "transaction",
+        "size": 1,
+        "total_bytes": 124800000.0
+      },
+      {
+        "basis": "measured curve at the active accounts' raw depth",
+        "bytes_per_key": 141.3464988617328,
+        "family": "tx",
+        "keys": 241814.1916917425,
+        "retention_s": 90000.0,
+        "scope": "account",
+        "size": 1.2406219746706637,
+        "total_bytes": 34179589.37070772
+      },
+      {
+        "basis": "measured curve at the active entities' depth",
+        "bytes_per_key": 141.3464988617328,
+        "family": "card",
+        "keys": 241814.1916917425,
+        "retention_s": 3900.0,
+        "scope": "card",
+        "size": 1.2406219746706637,
+        "total_bytes": 34179589.37070772
+      },
+      {
+        "basis": "measured curve at the active entities' depth",
+        "bytes_per_key": 159.8572647876474,
+        "family": "dev",
+        "keys": 250372.2597673447,
+        "retention_s": 90000.0,
+        "scope": "dev",
+        "size": 1.1982158098455926,
+        "total_bytes": 40023824.62511006
+      },
+      {
+        "basis": "measured sketch at its bucket's cardinality x active buckets",
+        "bytes_per_key": 124.0,
+        "family": "hll",
+        "keys": 300000.0,
+        "retention_s": 7500.0,
+        "scope": "IP",
+        "size": 1.0,
+        "total_bytes": 37200000.0
+      },
+      {
+        "basis": "measured sketch at its bucket's cardinality x active buckets",
+        "bytes_per_key": 124.0,
+        "family": "hll",
+        "keys": 100209.94175156778,
+        "retention_s": 7500.0,
+        "scope": "MERCHANT",
+        "size": 2.993714942412952,
+        "total_bytes": 12426032.777194405
+      },
+      {
+        "basis": "measured curve at the minutes each merchant holds",
+        "bytes_per_key": 399.2960735502506,
+        "family": "mcv",
+        "keys": 50104.97087578389,
+        "retention_s": 90060.0,
+        "scope": "merchant/GBP",
+        "size": 5.987429884825904,
+        "total_bytes": 20006718.13605017
+      },
+      {
+        "basis": "one string key per identity event, for the raw window",
+        "bytes_per_key": 304.0,
+        "family": "obs",
+        "keys": 259.5,
+        "retention_s": 90000.0,
+        "scope": "identity",
+        "size": 1,
+        "total_bytes": 78888.0
+      },
+      {
+        "basis": "measured curve at the active accounts' depth",
+        "bytes_per_key": 112.00764613765286,
+        "family": "ie",
+        "keys": 259.4497350915074,
+        "retention_s": 90000.0,
+        "scope": "account",
+        "size": 1.000193736595934,
+        "total_bytes": 29060.354118637337
+      },
+      {
+        "basis": "ASSUMED one outcome per transaction, the upper bound",
+        "bytes_per_key": 464.0,
+        "family": "obs+aov",
+        "keys": 300000,
+        "retention_s": 7200.0,
+        "scope": "authorization outcome",
+        "size": 1,
+        "total_bytes": 139200000.0
+      },
+      {
+        "basis": "ASSUMED one outcome per transaction; measured curve at the accounts' depth",
+        "bytes_per_key": 242.9930945340044,
+        "family": "ao+aod",
+        "keys": 241814.1916917425,
+        "retention_s": 7200.0,
+        "scope": "account",
+        "size": 1.2406219746706637,
+        "total_bytes": 58759178.74141545
+      },
+      {
+        "basis": "one key",
+        "bytes_per_key": 56.0,
+        "family": "epoch",
+        "keys": 1,
+        "retention_s": 0,
+        "scope": "store",
+        "size": 1,
+        "total_bytes": 56.0
+      },
+      {
+        "basis": "one key",
+        "bytes_per_key": 56.0,
+        "family": "position",
+        "keys": 1,
+        "retention_s": 0,
+        "scope": "store",
+        "size": 1,
+        "total_bytes": 56.0
+      },
+      {
+        "basis": "one key",
+        "bytes_per_key": 48.0,
+        "family": "hw",
+        "keys": 1,
+        "retention_s": 0,
+        "scope": "store",
+        "size": 1,
+        "total_bytes": 48.0
+      }
+    ]
+  },
+  "python_version": "3.12.9",
+  "record_type": "BENCHMARK",
+  "run_id": "bench-20260915-054159-memory-model-5ee55136",
+  "started_at": "2026-09-15T05:41:59.634020+00:00",
+  "subject": "online-feature-store-memory-model",
+  "tool": "redis",
+  "tool_version": "7.4.11",
+  "track": "SYNTHETIC"
+}

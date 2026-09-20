@@ -1,0 +1,82 @@
+{
+  "seed_rows": 0,
+  "batches": 6,
+  "batch_rows": 21000,
+  "total_s": 42.82,
+  "phases": {
+    "classify": [
+      0.227,
+      0.15,
+      0.135,
+      0.129,
+      0.131,
+      0.124
+    ],
+    "write_batch": [
+      6.151,
+      5.159,
+      4.871,
+      4.791,
+      4.807,
+      4.791
+    ],
+    "assert_unique": [
+      1.542,
+      1.402,
+      1.412,
+      1.478,
+      1.456,
+      1.443
+    ],
+    "bounds": [],
+    "late_events": [],
+    "ckpt_merge": [
+      1.344,
+      1.153,
+      1.105,
+      1.121,
+      1.101,
+      1.06
+    ],
+    "ckpt_append": []
+  },
+  "progress": [
+    {
+      "batch_id": 0,
+      "rows": 21000,
+      "duration_ms": 8439
+    },
+    {
+      "batch_id": 1,
+      "rows": 21000,
+      "duration_ms": 6959
+    },
+    {
+      "batch_id": 2,
+      "rows": 21000,
+      "duration_ms": 6646
+    },
+    {
+      "batch_id": 3,
+      "rows": 21000,
+      "duration_ms": 6644
+    },
+    {
+      "batch_id": 4,
+      "rows": 21000,
+      "duration_ms": 6612
+    },
+    {
+      "batch_id": 5,
+      "rows": 21000,
+      "duration_ms": 6571
+    }
+  ],
+  "jobs": {
+    "job_count": 0,
+    "stage_count": 0,
+    "task_count": 0,
+    "stage_ms_total": 0,
+    "slowest_stages_ms": []
+  }
+}

@@ -120,7 +120,7 @@ def migrated_db(repo_root, docker_available):
         )
         yield name, env, port
     finally:
-        _docker("rm", "-f", name)
+        _docker("rm", "-f", "-v", name)
 
 
 def _sql(container: str, role: str, statement: str) -> subprocess.CompletedProcess[str]:

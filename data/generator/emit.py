@@ -9,21 +9,26 @@ implementation was not kept.
 **Kafka fails loudly.** Requesting the Kafka sink without the `stream` extra
 raises `MissingDependencyError` naming the extra. It never falls back to a file:
 a seed run that silently wrote somewhere else would be discovered much later, by
-someone wondering why a topic is empty.
+someone wondering why a topic is empty. And closing it raises
+`EventPublishError` unless every message it produced was delivered.
 """
 
 from __future__ import annotations
 
 import gzip
-import json
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, MutableMapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final, Protocol
 
 from data.generator.digest import DatasetDigest, canonical_bytes
-from trace_core.contracts.topics import partition_key
-from trace_core.domain.errors import MissingDependencyError, SchemaValidationError
+from trace_core.contracts.publish import (
+    DEFAULT_MESSAGE_TIMEOUT_MS,
+    DeliveryReport,
+    EventPublisher,
+)
+from trace_core.contracts.topics import TX_AUTHORIZATION_V1
+from trace_core.domain.errors import EventPublishError, SchemaValidationError
 
 TOPIC_SUFFIX: Final = ".jsonl"
 
@@ -55,6 +60,7 @@ def _validator_for(topic: str) -> Any:
         from trace_core.contracts.events import (
             device_events_v1,
             identity_events_v1,
+            tx_authorization_v1,
             tx_raw_v1,
         )
 
@@ -63,6 +69,7 @@ def _validator_for(topic: str) -> Any:
                 "tx.raw.v1": tx_raw_v1.TxRawV1,
                 "identity.events.v1": identity_events_v1.IdentityEventV1,
                 "device.events.v1": device_events_v1.DeviceEventV1,
+                TX_AUTHORIZATION_V1: tx_authorization_v1.TxAuthorizationV1,
             }
         )
     try:
@@ -222,38 +229,58 @@ class ParquetSink:
 
 @dataclass
 class KafkaSink:
-    """Publish to Kafka. Requires the `stream` extra and a running broker.
+    """Publish to Kafka through the one producer factory, `trace_core.contracts.publish`.
+
+    Requires the `stream` extra and a running broker, and inherits everything the
+    factory enforces: the producer contract (idempotent, zstd, the Java-compatible
+    murmur2 partitioner, a finite message timeout), keys from the release ledger,
+    the `trace_id` header, a metadata check that the topic exists, and validation
+    of every value against its released schema -- whatever `ValidationPolicy` the
+    run chose, because an invalid message is never published (EVENT_CONTRACTS §6.1).
 
     **Keyed, always.** An earlier version produced with `value=` alone, which
     round-robins the partitions and silently voids the per-key ordering the
-    release ledger asserts. The key now comes from
-    `trace_core.contracts.topics`, which is diffed against that ledger, and a
-    row whose key cannot be resolved raises instead of being published unkeyed.
+    release ledger asserts. A row whose key cannot be resolved raises instead.
+
+    **Nothing is dropped at close.** The previous sink flushed for thirty seconds
+    and returned; anything still queued was lost when the process exited, and the
+    run was recorded as complete. `close` now raises `EventPublishError` unless
+    every row accepted was delivered and none was refused. The CLI closes the sink
+    before it writes the run record, so an unconfirmed publish leaves no record
+    claiming the dataset reached the topic.
     """
 
     bootstrap_servers: str
-    _producer: Any = None
+    client_id: str = "trace-generator"
+    message_timeout_ms: int = DEFAULT_MESSAGE_TIMEOUT_MS
+    _publisher: EventPublisher | None = None
+    report: DeliveryReport | None = None
 
     def __post_init__(self) -> None:
-        try:
-            from confluent_kafka import Producer
-        except ModuleNotFoundError as exc:
-            raise MissingDependencyError(
-                "confluent_kafka", "stream", "Publishing generated events to Kafka"
-            ) from exc
-        self._producer = Producer({"bootstrap.servers": self.bootstrap_servers})
+        # Raises MissingDependencyError without the `stream` extra. Never a file.
+        self._publisher = EventPublisher.connect(
+            self.bootstrap_servers,
+            client_id=self.client_id,
+            message_timeout_ms=self.message_timeout_ms,
+        )
+
+    def _connected(self) -> EventPublisher:
+        if self._publisher is None:
+            raise EventPublishError(
+                "the Kafka sink was used without ever connecting a producer, so nothing "
+                "written to it can be confirmed as delivered"
+            )
+        return self._publisher
 
     def write(self, topic: str, payload: bytes) -> None:
         # The key is re-read from the encoded bytes rather than threaded through
         # the Sink protocol: `write(topic, payload)` is the contract every sink
         # shares, and widening it for one implementation would push Kafka's
         # concern into the JSONL and Parquet sinks too.
-        key = partition_key(topic, json.loads(payload))
-        self._producer.produce(topic, key=key.encode(), value=payload)
-        self._producer.poll(0)
+        self._connected().publish(topic, payload)
 
     def close(self) -> None:
-        self._producer.flush(30)
+        self.report = self._connected().close()
 
 
 @dataclass
@@ -271,12 +298,24 @@ class NullSink:
 
 
 def write_rows(
-    rows: Iterable[Any], sink: Sink, policy: str, digest: DatasetDigest
+    rows: Iterable[Any],
+    sink: Sink,
+    policy: str,
+    digest: DatasetDigest,
+    *,
+    topic_digests: MutableMapping[str, DatasetDigest] | None = None,
 ) -> Iterator[Any]:
     """Encode, validate, digest and write in one pass, yielding rows as it goes.
 
     Yielded so the caller can collect labels without a second traversal: a 1M-row
     dataset is generated once, not once per consumer.
+
+    `topic_digests`, when given, also receives one digest per topic -- identity and
+    device events included -- over the same encoded bytes in emission order, so a
+    dataset whose transactions are unchanged but whose other streams differ still
+    has a different recorded identity. It is opt-in and additive: `digest` stays
+    the transaction-only digest `eval-v1` was frozen with, computed exactly as
+    before whether or not per-topic digests are requested.
     """
     for position, row in enumerate(rows):
         payload = encode_and_validate(row.topic, row.event, policy, position)
@@ -287,6 +326,11 @@ def write_rows(
         if row.topic == "tx.raw.v1":
             # The bytes encoded just above, not a second encoding of the same row.
             digest.update_bytes(payload)
+        if topic_digests is not None:
+            topic_digest = topic_digests.get(row.topic)
+            if topic_digest is None:
+                topic_digest = topic_digests[row.topic] = DatasetDigest()
+            topic_digest.update_bytes(payload)
         # A columnar sink stores the structured row, not the encoded bytes. The
         # bytes are still produced above because that is what validation and the
         # digest read -- one encoding, several consumers.

@@ -26,7 +26,7 @@
       "key": "account_id",
       "key_reason": "identity changes must order against that account's transactions",
       "released_in_phase": 1,
-      "producer": "data.generator",
+      "producer": "data.generator and trace-gateway POST /v1/events/identity (the observation log, ADR-0051)",
       "cleanup": "delete",
       "retention": "30d"
     },
@@ -52,16 +52,31 @@
       "cleanup": "delete",
       "retention": "30d",
       "cleanup_reason": "MUST NOT be compacted. Compaction retains only the newest record per KEY, and the key is case_id -- so a reopened case (Phase 5 /v1/investigations/{id}/reopen) would silently erase the original request and every historical request but the last. The key is for routing and ordering, not identity: identity is event_id, which is unique per event."
+    },
+    {
+      "topic": "tx.authorization.v1",
+      "schema": "tx.authorization.v1.json",
+      "sha256": "dffd3e19242dbfbcacc4528b6b015da5ac409bcc0868036c7a2d94ecc81b1429",
+      "key": "account_id",
+      "key_reason": "the only reader is a per-account window, so per-account order is the order that matters; equal partitions to tx.raw.v1 put an account on the same partition number on both topics (ADR-0049)",
+      "released_in_phase": 3,
+      "producer": "data.generator (eval-v2 outcome stream) and trace-gateway POST /v1/events/authorization (transactional outbox)",
+      "cleanup": "delete",
+      "retention": "7d"
+    },
+    {
+      "topic": "tx.scored.v1",
+      "schema": "tx.scored.v1.json",
+      "sha256": "afaa1013551ec6b78ad5ff09ef9e3ed60ea2e6c1028e250284e6d3ba99eeecba",
+      "key": "account_id",
+      "key_reason": "the durable observation log of per-account online state: rebuilding an account's windows needs that account's order, and equal partitions to tx.raw.v1 put an account on the same partition number on both topics (ADR-0051 \u00a76)",
+      "released_in_phase": 3,
+      "producer": "trace-gateway POST /v1/transactions (the observation log, ADR-0051)",
+      "cleanup": "delete",
+      "retention": "7d"
     }
   ],
   "planned": [
-    {
-      "topic": "tx.scored.v1",
-      "key": "account_id",
-      "expected_phase": 3,
-      "expected_producer": "trace-gateway",
-      "note": "Deferred from Phase 2 to Phase 3 by approved decision. A topic is released only in the phase that gains a real producer for it (docs/EVENT_CONTRACTS.md \u00a73), and the gateway cannot publish it until Kafka lands: writing a scored row per transaction to the outbox instead would put Postgres on the hot path for the ~97% of traffic that opens no case, against ADR-0002."
-    },
     {
       "topic": "investigation.events.v1",
       "key": "investigation_id",

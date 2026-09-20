@@ -24,8 +24,7 @@ jobs:
 
       - name: Install dev dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev,db,obs,gen,api]"   # must match `make setup` (mypy scope)
+          bash scripts/install_locked.sh python   # the same script as `make setup`
 
       - name: ruff format
         run: ruff format --check .
@@ -39,9 +38,8 @@ jobs:
       - name: bandit
         run: bandit -q -ll -c pyproject.toml -r packages scripts eval migrations
 
-      # Identical to `make secrets`. detect-secrets comes from the `dev` extra
-      # installed above, so CI uses the version requirements.lock pins -- never a
-      # fresh unpinned install, which made CI and local disagree.
+      # Identical to `make secrets`. detect-secrets comes from the hashed lock
+      # installed above, so CI runs exactly the version requirements.lock pins.
       # Identical to `make codegen --check` and to the gate in `make verify`.
       - name: Generated event models match their schemas
         run: python scripts/generate_event_models.py --check
@@ -50,6 +48,6 @@ jobs:
         run: python scripts/secret_scan.py
 
       - name: Dependency audit
-        run: |
-          pip install pip-audit
-          pip-audit --skip-editable || echo "::warning::pip-audit reported findings"
+        # pip-audit comes from the hashed lock installed above; installing it here
+        # again would be the one unpinned install in the pipeline.
+        run: python -m pip_audit --skip-editable || echo "::warning::pip-audit reported findings"

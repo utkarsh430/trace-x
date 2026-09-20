@@ -44,9 +44,18 @@ dataset is missing a pattern. On a dataset small enough that those ten already e
 `row_count × fraud_rate`, the realised rate is set by that floor and `fraud_rate` has no effect. The
 realised rate is measured and recorded, never assumed equal to the target.
 
+**eval-v2 coverage floor (G2).** Under the eval-v2 gate, any pattern with fewer than 20 instances after
+the weighted mix is topped up to 20. The number the mix produced and the number added are recorded
+per pattern, and a topped-up mix is a coverage floor, never natural prevalence (ADR-0050,
+`eval/track_a/criteria/lpc-5.md` §14.4).
+
 ---
 
 ## 3. The ten scenarios
+
+**Causal keys** are eval-v1's recorded keys. Where eval-v2 differs, **Causal keys (eval-v2)** follows:
+the eval-v2 generator changed what that injection creates, and a key stays only while it is causal
+(ADR-0050).
 
 ### 3.1 `ACCOUNT_TAKEOVER`
 
@@ -65,8 +74,14 @@ minutes from one device, a substantial share declined, followed by one larger ch
 
 **Causal keys.** `VELOCITY`, `AMOUNT_ANOMALY`, `MCC_ANOMALY`, `DEVICE_SHARING`
 
+**Causal keys (eval-v2).** `VELOCITY`, `AMOUNT_ANOMALY`, `MCC_ANOMALY`
+
 **Notes.** Probe amounts are deliberately tiny: the point of card testing is to stay under the amount
-at which anyone looks. The payoff charge is what makes the probing worth detecting.
+at which anyone looks. The payoff charge is what makes the probing worth detecting. Under the eval-v2
+gate every probe and the payoff use one device, the account's own payment device, because no device
+novelty is documented (ADR-0050, G4). The injection then creates no device sharing, so eval-v2 does
+not claim it. Probing "from one device" stays part of the signature and is checked per instance
+(`LPC-5` S7a).
 
 ### 3.3 `IMPOSSIBLE_TRAVEL`
 
@@ -89,7 +104,9 @@ innocent explanation.
 
 **Notes.** Amounts stay ordinary on purpose, so velocity is detectable on its own rather than as a
 side effect of an amount anomaly. Otherwise this scenario and `ANOMALOUS_HIGH_VALUE` would not be
-distinguishable, and per-pattern metrics would be measuring the same thing twice.
+distinguishable, and per-pattern metrics would be measuring the same thing twice. Under the eval-v2
+gate each transaction pays from the account's own payment device, because the signature documents a
+burst, not device multiplicity (ADR-0050, G4; `LPC-5` revision 3).
 
 ### 3.5 `DEVICE_FARM`
 
@@ -129,8 +146,13 @@ pool, a minority succeeding and transacting immediately.
 
 **Causal keys.** `IP_REPUTATION`, `DEVICE_SHARING`, `IDENTITY_CHANGE`
 
+**Causal keys (eval-v2).** `AUTHENTICATION_ANOMALY`, `IP_REPUTATION`, `DEVICE_SHARING`
+
 **Notes.** Origins are drawn only from IPs flagged as datacenter ranges, so `IP_REPUTATION` is
-genuinely causal rather than assumed. Failures outnumber successes, as they must.
+genuinely causal rather than assumed. Failures outnumber successes, as they must. No identity change
+is ever emitted: the mechanism is failed and successful logins, which eval-v2 names as its own evidence
+kind. The logins share one device, while each transacting account pays from its own (ADR-0050, G4 and
+G7).
 
 ### 3.9 `ANOMALOUS_HIGH_VALUE`
 
@@ -140,7 +162,9 @@ category it never uses.
 **Causal keys.** `AMOUNT_ANOMALY`, `SPEND_PROFILE`, `MCC_ANOMALY`
 
 **Notes.** Defined against the account's **own** lognormal distribution, not a global threshold — which
-is why the baseline has a long right tail in the first place.
+is why the baseline has a long right tail in the first place. eval-v1 drew only a merchant the account
+does not use. Under the eval-v2 gate the merchant is drawn from categories the account has never used,
+as the signature says.
 
 ### 3.10 `UNUSUAL_LOCATION_DEVICE`
 
@@ -181,3 +205,6 @@ versions are never compared without a manifest-diff note (ADR-0017).
 
 Adding an eleventh scenario means a new `FraudPattern` member, a new entry here, a signature test, and
 a place in the mix. Removing one is a breaking change to every recorded Track A result.
+
+Where eval-v1 and eval-v2 keys differ, both are listed, and `tests/unit/test_scenarios.py` compares each
+set with the code.

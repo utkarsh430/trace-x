@@ -10,6 +10,9 @@ Enforces the five publication rules in docs/EVALUATION.md:
   3. a Track-B (external) run_id may never be cited beside an agent-quality metric
   4. a run recorded with dirty_worktree=true is not publishable
   5. no hardcoded expectations stand in for measured results
+and one the linter adds:
+  6. a run its own record marks publishable!=true, status/verdict INVALID or
+     measured=false cannot be cited. A FAIL verdict or missed target stays citable.
 
 Until Phase 9 lands there are no manifests, so the correct behaviour is:
 assert that NO number is being published yet. That is a real check, not a stub —
@@ -196,11 +199,44 @@ BENCHMARK_REQUIRED = (
     "measured",
 )
 
+# A parity run measures two IMPLEMENTATIONS against each other on one recorded stream, so its
+# provenance is the corpus and the overlay that produced the stream, the semantics both sides were
+# judged by, and the toolchain that ran them. `eval/parity/record.py` owns the full contract and
+# refuses a record missing any of it; these are the fields a published number needs to be
+# attributable (ADR-0056 §6).
+PARITY_REQUIRED = (
+    "run_id",
+    "record_type",
+    "track",
+    "git_commit_sha",
+    "dirty_worktree",
+    "env_lock_digest",
+    "python_version",
+    "started_at",
+    "finished_at",
+    "mode",
+    "publishable",
+    "parity_semantics_version",
+    "feature_set_version",
+    "partition",
+    "dataset",
+    "overlay",
+    "lateness_model",
+    "lateness_model_digest",
+    "toolchain",
+    "gateway",
+    "counts",
+    "results",
+    "guard",
+    "verdict",
+)
+
 REQUIRED_BY_TYPE: dict[str, tuple[str, ...]] = {
     "GENERATOR": GENERATOR_REQUIRED,
     "LOADTEST": LOADTEST_REQUIRED,
     "BENCHMARK": BENCHMARK_REQUIRED,
     "EVAL": EVAL_REQUIRED,
+    "PARITY": PARITY_REQUIRED,
 }
 
 
@@ -221,6 +257,35 @@ def incomplete_fields(manifest: dict[str, object]) -> list[str]:
             f"substantiate a number"
         ]
     return [f for f in required if manifest.get(f) is None or manifest.get(f) == ""]
+
+
+def unpublishable_reasons(manifest: dict[str, object]) -> list[str]:
+    """Why a run's OWN record says it cannot substantiate a number (rule 6).
+
+    Resolving, being complete and having a clean worktree were checked, but the
+    record's verdict on itself was not: a run its harness had declared INVALID
+    (it did not measure what it claims) or not publishable could still be cited
+    as a measurement. The writer knows things the linter cannot re-derive --
+    a harness integrity check, a too-small sample -- so its judgement is honoured.
+
+    Deliberately NOT a reason: a verdict or status of FAIL, or a missed target.
+    An unfavourable result is evidence, and a gate that made it uncitable would
+    enforce concealment (CLAUDE.md §17). Fields a record does not carry are not
+    held against it: manifests that predate them keep the earlier rules.
+    """
+    reasons: list[str] = []
+    # Fail closed on anything but a literal true: a present-but-null or
+    # stringly-typed flag is not a statement that the run is publishable.
+    if "publishable" in manifest and manifest["publishable"] is not True:
+        reasons.append(f"publishable={json.dumps(manifest['publishable'])}")
+    for field in ("status", "verdict"):
+        value = manifest.get(field)
+        if isinstance(value, str) and value.strip().upper() == "INVALID":
+            reasons.append(f"{field}={json.dumps(value)}")
+    # Only the boolean: most records carry `measured` as the dict OF measurements.
+    if manifest.get("measured") is False:
+        reasons.append("measured=false")
+    return reasons
 
 
 def manifests() -> dict[str, dict[str, object]]:
@@ -289,6 +354,12 @@ def scan() -> list[str]:
                 if man.get("dirty_worktree"):
                     violations.append(
                         f"{rel}:{n}: run_id '{rid}' was recorded with a dirty worktree (rule 4)"
+                    )
+                if reasons := unpublishable_reasons(man):
+                    violations.append(
+                        f"{rel}:{n}: run_id '{rid}' is not publishable by its own record "
+                        f"({', '.join(reasons)}); an invalid or unpublishable run cannot "
+                        f"substantiate a number (rule 6)"
                     )
                 # Rule 2 gates QUALITY claims only. Latency, throughput and cost
                 # publish from any tier -- gating them would obstruct legitimate

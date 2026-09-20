@@ -1,0 +1,165 @@
+# DIAGNOSTIC -- not acceptance evidence (eval/track_a/criteria/lpc-5.md §1.3).
+# Stage 2 step 3: the §14.1 eval-v1 negative control, regenerated from eval/track_a/eval-v1.manifest.json.
+# Command: python -m eval.track_a.lpc5_control --manifest eval/track_a/eval-v1.manifest.json --limit 12
+# Worktree base commit: fcc03d0 (runner uncommitted at run time).
+
+diagnostic (not acceptance evidence): control=eval-v1 rows=1000000 manifest=eval/track_a/eval-v1.manifest.json
+manifest digests: verified
+LPC-5 revision 2: INVALID
+  invalid: availability (S6, §4.6) was not computed
+  outcome rows were derived (ADR-0049 §7), not emitted
+  S0                 judged        49  FAIL (34)
+      S0/R2 TX/ANY_IDENTITY_24H: legitimate share 0.000406, need >= 0.05
+      S0/R3 TX/ANY_IDENTITY_24H: precision upper bound 0.5989, need <= 0.25
+      S0/R1 TX/LOGIN_FAILED_1H: legitimate firings 20, need >= 30
+      S0/R2 TX/LOGIN_FAILED_1H: legitimate share 0.000020, need >= 0.0001
+      S0/R2 TX/IDENTITY_CHANGE_24H: legitimate share 0.000040, need >= 0.001
+      S0/R3 TX/IDENTITY_CHANGE_24H: precision upper bound 0.9469, need <= 0.25
+      S0/R2 TX/DEVICE_FIRST_SEEN_24H: legitimate share 0.000040, need >= 0.001
+      S0/R3 TX/DEVICE_FIRST_SEEN_24H: precision upper bound 0.9469, need <= 0.25
+      S0/R2 TX/ANY_DEVICE_EVENT_24H: legitimate share 0.000040, need >= 0.001
+      S0/R3 TX/ANY_DEVICE_EVENT_24H: precision upper bound 0.9469, need <= 0.25
+      S0/R2 TX/ANY_IDENTITY_OR_DEVICE_24H: legitimate share 0.000406, need >= 0.05
+      S0/R3 TX/ANY_IDENTITY_OR_DEVICE_24H: precision upper bound 0.5989, need <= 0.25
+  R7                 judged      2677  FAIL (137)
+      R7 TX/hour/3/ANOMALOUS_HIGH_VALUE: ANOMALOUS_HIGH_VALUE 5/92 (clusters 92, lo 0.0267, hi 0.1075) vs LEGIT 4327/994997 (clusters 40000, lo 0.0038, hi 0.0049)
+      R7 TX/hour/4/IMPOSSIBLE_TRAVEL: IMPOSSIBLE_TRAVEL 8/116 (clusters 58, lo 0.0313, hi 0.1450) vs LEGIT 3705/994997 (clusters 40000, lo 0.0033, hi 0.0043)
+      R7 TX/hour/2/VELOCITY_ATTACK: VELOCITY_ATTACK 111/1605 (clusters 60, lo 0.0319, hi 0.1436) vs LEGIT 5645/994997 (clusters 40000, lo 0.0051, hi 0.0063)
+      R7 TX/hour/3/DEVICE_FARM: DEVICE_FARM 43/598 (clusters 38, lo 0.0279, hi 0.1728) vs LEGIT 4327/994997 (clusters 40000, lo 0.0038, hi 0.0049)
+      R7 TX/hour/5/ANOMALOUS_HIGH_VALUE: ANOMALOUS_HIGH_VALUE 7/92 (clusters 92, lo 0.0418, hi 0.1346) vs LEGIT 5511/994997 (clusters 40000, lo 0.0050, hi 0.0062)
+      R7 TX/hour/5/ACCOUNT_TAKEOVER: ACCOUNT_TAKEOVER 32/422 (clusters 90, lo 0.0413, hi 0.1351) vs LEGIT 5511/994997 (clusters 40000, lo 0.0050, hi 0.0062)
+      R7 TX/hour/1/ACCOUNT_TAKEOVER: ACCOUNT_TAKEOVER 27/422 (clusters 90, lo 0.0330, hi 0.1204) vs LEGIT 8021/994997 (clusters 40000, lo 0.0074, hi 0.0088)
+      R7 TX/hour/6/ANOMALOUS_HIGH_VALUE: ANOMALOUS_HIGH_VALUE 9/92 (clusters 92, lo 0.0578, hi 0.1608) vs LEGIT 11191/994997 (clusters 40000, lo 0.0104, hi 0.0121)
+      R7 TX/hour/1/VELOCITY_ATTACK: VELOCITY_ATTACK 155/1605 (clusters 60, lo 0.0502, hi 0.1778) vs LEGIT 8021/994997 (clusters 40000, lo 0.0074, hi 0.0088)
+      R7 TX/hour/0/DEVICE_FARM: DEVICE_FARM 61/598 (clusters 38, lo 0.0461, hi 0.2109) vs LEGIT 13568/994997 (clusters 40000, lo 0.0127, hi 0.0146)
+      R7 TX/hour/1/DEVICE_FARM: DEVICE_FARM 48/598 (clusters 38, lo 0.0328, hi 0.1836) vs LEGIT 8021/994997 (clusters 40000, lo 0.0074, hi 0.0088)
+      R7 TX/hour/1/CREDENTIAL_STUFFING: CREDENTIAL_STUFFING 8/93 (clusters 28, lo 0.0316, hi 0.2134) vs LEGIT 8021/994997 (clusters 40000, lo 0.0074, hi 0.0088)
+  R8                 judged       339  FAIL (27)
+      R8 TX/hour/3/POOLED: POOLED 196/5003 (clusters 567, lo 0.0278, hi 0.0549) vs LEGIT 4327/994997 (clusters 40000, lo 0.0038, hi 0.0049)
+      R8 TX/hour/5/POOLED: POOLED 192/5003 (clusters 567, lo 0.0271, hi 0.0540) vs LEGIT 5511/994997 (clusters 40000, lo 0.0050, hi 0.0062)
+      R8 TX/hour/1/POOLED: POOLED 338/5003 (clusters 567, lo 0.0522, hi 0.0870) vs LEGIT 8021/994997 (clusters 40000, lo 0.0074, hi 0.0088)
+      R8 TX/hour/2/POOLED: POOLED 229/5003 (clusters 567, lo 0.0334, hi 0.0625) vs LEGIT 5645/994997 (clusters 40000, lo 0.0051, hi 0.0063)
+      R8 TX/hour/4/POOLED: POOLED 219/5003 (clusters 567, lo 0.0317, hi 0.0602) vs LEGIT 3705/994997 (clusters 40000, lo 0.0033, hi 0.0043)
+      R8 TX/daypart/00-05/POOLED: POOLED 1371/5003 (clusters 567, lo 0.2444, hi 0.3059) vs LEGIT 40777/994997 (clusters 40000, lo 0.0394, hi 0.0426)
+      R8 TX/entry_mode/ECOMMERCE/POOLED: POOLED 2707/3476 (clusters 403, lo 0.7430, hi 0.8109) vs LEGIT 146015/437846 (clusters 40000, lo 0.3296, hi 0.3374)
+      R8 TX/outcome_field/DECLINED/POOLED: POOLED 346/5003 (clusters 567, lo 0.0536, hi 0.0888) vs LEGIT 0/994997 (clusters 40000, lo 0.0000, hi 0.0001)
+      R8 TX/outcome_event/DECLINED/POOLED: POOLED 346/5003 (clusters 567, lo 0.0536, hi 0.0888) vs LEGIT 0/994997 (clusters 40000, lo 0.0000, hi 0.0001)
+      R8 TX/distance_home/≥500/POOLED: POOLED 398/5003 (clusters 567, lo 0.0628, hi 0.1003) vs LEGIT 0/994997 (clusters 40000, lo 0.0000, hi 0.0001)
+      R8 TX/distance_home/[100,500)/POOLED: POOLED 181/5003 (clusters 567, lo 0.0253, hi 0.0514) vs LEGIT 0/994997 (clusters 40000, lo 0.0000, hi 0.0001)
+      R8 TX/location_novel/≥500/POOLED: POOLED 161/5003 (clusters 567, lo 0.0220, hi 0.0468) vs LEGIT 3/994997 (clusters 40000, lo 0.0000, hi 0.0001)
+  R9                 judged         5  FAIL (2)
+      R9 ID: legitimate rows 0, clusters 0
+      R9 DEV: legitimate rows 0, clusters 0
+  S1-U               judged      1765  FAIL (405)
+      S1-U(a) TX/outcome_event/DECLINED/CARD_TESTING: CARD_TESTING 346/776 (clusters 50, lo 0.3360, hi 0.5613) vs LEGIT 0/994997 (clusters 40000, lo 0.0000, hi 0.0001)
+      S1-U(b) TX/outcome_event/DECLINED/CARD_TESTING: CARD_TESTING 346/776 (clusters 50, lo 0.3360, hi 0.5613) vs LEGIT 0/994997 (clusters 40000, lo 0.0000, hi 0.0001); precision upper bound 1.0000
+      S1-U(a) TX/outcome_event/DECLINED/POOLED: POOLED 346/5003 (clusters 567, lo 0.0536, hi 0.0888) vs LEGIT 0/994997 (clusters 40000, lo 0.0000, hi 0.0001)
+      S1-U(b) TX/outcome_event/DECLINED/POOLED: POOLED 346/5003 (clusters 567, lo 0.0536, hi 0.0888) vs LEGIT 0/994997 (clusters 40000, lo 0.0000, hi 0.0001); precision upper bound 1.0000
+      S1-U(a) TX/distance_home/≥500/UNUSUAL_LOCATION_DEVICE: UNUSUAL_LOCATION_DEVICE 69/99 (clusters 99, lo 0.6166, hi 0.7669) vs LEGIT 0/994997 (clusters 40000, lo 0.0000, hi 0.0001)
+      S1-U(a) TX/distance_home/≥500/POOLED: POOLED 398/5003 (clusters 567, lo 0.0628, hi 0.1003) vs LEGIT 0/994997 (clusters 40000, lo 0.0000, hi 0.0001)
+      S1-U(b) TX/distance_home/≥500/POOLED: POOLED 398/5003 (clusters 567, lo 0.0628, hi 0.1003) vs LEGIT 0/994997 (clusters 40000, lo 0.0000, hi 0.0001); precision upper bound 1.0000
+      S1-U(a) TX/distance_home/≥500/ACCOUNT_TAKEOVER: ACCOUNT_TAKEOVER 287/422 (clusters 90, lo 0.5950, hi 0.7547) vs LEGIT 0/994997 (clusters 40000, lo 0.0000, hi 0.0001)
+      S1-U(a) TX/distance_home/[100,500)/ACCOUNT_TAKEOVER: ACCOUNT_TAKEOVER 135/422 (clusters 90, lo 0.2453, hi 0.4050) vs LEGIT 0/994997 (clusters 40000, lo 0.0000, hi 0.0001)
+      S1-U(a) TX/distance_home/[100,500)/POOLED: POOLED 181/5003 (clusters 567, lo 0.0253, hi 0.0514) vs LEGIT 0/994997 (clusters 40000, lo 0.0000, hi 0.0001)
+      S1-U(b) TX/distance_home/[100,500)/POOLED: POOLED 181/5003 (clusters 567, lo 0.0253, hi 0.0514) vs LEGIT 0/994997 (clusters 40000, lo 0.0000, hi 0.0001); precision upper bound 1.0000
+      S1-U(a) TX/distance_home/≥500/IMPOSSIBLE_TRAVEL: IMPOSSIBLE_TRAVEL 42/116 (clusters 58, lo 0.2666, hi 0.4699) vs LEGIT 0/994997 (clusters 40000, lo 0.0000, hi 0.0001)
+  S1-B               judged      7423  FAIL (597)
+      S1-B(i) TX/gap_prev/[10,60)min/ACCOUNT_TAKEOVER: ACCOUNT_TAKEOVER 196/422 (clusters 90, lo 0.3803, hi 0.5507) vs LEGIT 0/40 (clusters 31, lo 0.0000, hi 0.0803); within ATO-1 (prior_events_24h in ['identity-change']); reference stratum
+      S1-B(i) TX/tx_count_1h/2/ACCOUNT_TAKEOVER: ACCOUNT_TAKEOVER 96/422 (clusters 90, lo 0.1634, hi 0.3075) vs LEGIT 0/40 (clusters 31, lo 0.0000, hi 0.0803); within ATO-1 (prior_events_24h in ['identity-change']); reference stratum
+      S1-B(i) TX/tx_count_1h/3-4/ACCOUNT_TAKEOVER: ACCOUNT_TAKEOVER 201/422 (clusters 90, lo 0.3917, hi 0.5623) vs LEGIT 1/40 (clusters 31, lo 0.0047, hi 0.1215); within ATO-1 (prior_events_24h in ['identity-change']); reference stratum
+      S1-B(i) TX/distinct_merchants_1h/2/ACCOUNT_TAKEOVER: ACCOUNT_TAKEOVER 96/422 (clusters 90, lo 0.1634, hi 0.3075) vs LEGIT 0/40 (clusters 31, lo 0.0000, hi 0.0803); within ATO-1 (prior_events_24h in ['identity-change']); reference stratum
+      S1-B(i) TX/distinct_merchants_1h/3-4/ACCOUNT_TAKEOVER: ACCOUNT_TAKEOVER 201/422 (clusters 90, lo 0.3917, hi 0.5623) vs LEGIT 1/40 (clusters 31, lo 0.0047, hi 0.1215); within ATO-1 (prior_events_24h in ['identity-change']); reference stratum
+      S1-B(i) TX/prior_decisions_1h/1/ACCOUNT_TAKEOVER: ACCOUNT_TAKEOVER 96/422 (clusters 90, lo 0.1634, hi 0.3075) vs LEGIT 0/40 (clusters 31, lo 0.0000, hi 0.0803); within ATO-1 (prior_events_24h in ['identity-change']); reference stratum
+      S1-B(i) TX/prior_decisions_1h/2-4/ACCOUNT_TAKEOVER: ACCOUNT_TAKEOVER 232/422 (clusters 90, lo 0.4633, hi 0.6333) vs LEGIT 1/40 (clusters 31, lo 0.0047, hi 0.1215); within ATO-1 (prior_events_24h in ['identity-change']); reference stratum
+      S1-B(i) TX/prior_declined_share_1h/0/ACCOUNT_TAKEOVER: ACCOUNT_TAKEOVER 331/422 (clusters 90, lo 0.7053, hi 0.8468) vs LEGIT 1/40 (clusters 31, lo 0.0047, hi 0.1215); within ATO-1 (prior_events_24h in ['identity-change']); reference stratum
+      S1-B(i) TX/hour/5/ACCOUNT_TAKEOVER: ACCOUNT_TAKEOVER 32/422 (clusters 90, lo 0.0413, hi 0.1351) vs LEGIT 5511/994997 (clusters 40000, lo 0.0050, hi 0.0062); within ATO-2 (hours_since_identity_change in ['<1h', '[1h,6h)']); reference all legitimate rows
+      S1-B(i) TX/hour/1/ACCOUNT_TAKEOVER: ACCOUNT_TAKEOVER 27/422 (clusters 90, lo 0.0330, hi 0.1204) vs LEGIT 8021/994997 (clusters 40000, lo 0.0074, hi 0.0088); within ATO-2 (hours_since_identity_change in ['<1h', '[1h,6h)']); reference all legitimate rows
+      S1-B(i) TX/daypart/00-05/ACCOUNT_TAKEOVER: ACCOUNT_TAKEOVER 126/422 (clusters 90, lo 0.2261, hi 0.3829) vs LEGIT 40777/994997 (clusters 40000, lo 0.0394, hi 0.0426); within ATO-2 (hours_since_identity_change in ['<1h', '[1h,6h)']); reference all legitimate rows
+      S1-B(i) TX/channel/CARD_NOT_PRESENT/ACCOUNT_TAKEOVER: ACCOUNT_TAKEOVER 422/422 (clusters 90, lo 0.9708, hi 1.0000) vs LEGIT 437846/994997 (clusters 40000, lo 0.4360, hi 0.4441); within ATO-2 (hours_since_identity_change in ['<1h', '[1h,6h)']); reference all legitimate rows
+  S2                 judged       922  FAIL (146)
+      S2b TX/amount_last_digit/8/ANOMALOUS_HIGH_VALUE: ANOMALOUS_HIGH_VALUE 16/92 (clusters 92, lo 0.1185, hi 0.2480) vs LEGIT 99279/994997 (clusters 40000, lo 0.0973, hi 0.1023)
+      S2b TX/outcome_field/APPROVED/CARD_TESTING: CARD_TESTING 430/776 (clusters 50, lo 0.4387, hi 0.6640) vs LEGIT 994997/994997 (clusters 40000, lo 0.9999, hi 1.0000)
+      S2a TX/outcome_field/DECLINED/CARD_TESTING: CARD_TESTING 346/776 (clusters 50, lo 0.3360, hi 0.5613) vs LEGIT 0/994997 (clusters 40000, lo 0.0000, hi 0.0001)
+      S2b TX/outcome_field/APPROVED/POOLED: POOLED 4657/5003 (clusters 567, lo 0.9112, hi 0.9464) vs LEGIT 994997/994997 (clusters 40000, lo 0.9999, hi 1.0000)
+      S2a TX/outcome_field/DECLINED/POOLED: POOLED 346/5003 (clusters 567, lo 0.0536, hi 0.0888) vs LEGIT 0/994997 (clusters 40000, lo 0.0000, hi 0.0001)
+      S2b TX/coordinate_repeat/new/ACCOUNT_TAKEOVER: ACCOUNT_TAKEOVER 90/422 (clusters 90, lo 0.1512, hi 0.2921) vs LEGIT 994997/994997 (clusters 40000, lo 0.9999, hi 1.0000)
+      S2a TX/coordinate_repeat/repeat/ACCOUNT_TAKEOVER: ACCOUNT_TAKEOVER 332/422 (clusters 90, lo 0.7079, hi 0.8488) vs LEGIT 0/994997 (clusters 40000, lo 0.0000, hi 0.0001)
+      S2b TX/coordinate_repeat/new/POOLED: POOLED 4671/5003 (clusters 567, lo 0.9143, hi 0.9489) vs LEGIT 994997/994997 (clusters 40000, lo 0.9999, hi 1.0000)
+      S2a TX/coordinate_repeat/repeat/POOLED: POOLED 332/5003 (clusters 567, lo 0.0511, hi 0.0857) vs LEGIT 0/994997 (clusters 40000, lo 0.0000, hi 0.0001)
+      S2a TX/coordinate_home/exact/IMPOSSIBLE_TRAVEL: IMPOSSIBLE_TRAVEL 58/116 (clusters 58, lo 0.3944, hi 0.6056) vs LEGIT 0/994997 (clusters 40000, lo 0.0000, hi 0.0001)
+      S2b TX/coordinate_home/not/IMPOSSIBLE_TRAVEL: IMPOSSIBLE_TRAVEL 58/116 (clusters 58, lo 0.3944, hi 0.6056) vs LEGIT 994997/994997 (clusters 40000, lo 0.9999, hi 1.0000)
+      S2a TX/coordinate_home/exact/POOLED: POOLED 58/5003 (clusters 567, lo 0.0062, hi 0.0216) vs LEGIT 0/994997 (clusters 40000, lo 0.0000, hi 0.0001)
+  S2c                judged   2000955  FAIL (5)
+      S2c/1 : 1000000 violation(s); first: authorization-outcome stream (unreleased) row 1000955: authorization-outcome stream (unreleased) has no released schema
+      S2c/3 : 1000000 violation(s); first: tx_000000000000: authorization_outcome 'APPROVED'
+      S2c/5 : 2036 violation(s); first: tx_000000002387: correlation_id is not exactly its business flow's
+      S2c/6 : 361 violation(s); first: row 31286: idempotency_key is not unique
+      S2c/7 : 1000955 violation(s); first: row 0: '2026-01-01T00:00:10.140000Z' / '2026-01-01T00:00:10.195000Z'
+  S3/pooled          judged        20  FAIL (1)
+      S3/pooled TX/slice 20/POOLED: 0/567 starts (lo 0.0000, hi 0.0047); legitimate share 0.0557
+  S3/thirds          judged        30  pass
+  S4                 judged     10466  FAIL (6)
+      S4/K1 59s/DEVICE_FARM: 19 of 189 pairs in bins 58..60
+      S4/K1 60s/DEVICE_FARM: 19 of 189 pairs in bins 59..61
+      S4/K1 61s/DEVICE_FARM: 19 of 189 pairs in bins 60..62
+      S4/K2 119s/ACCOUNT_TAKEOVER: 90 of 90 pairs in bins 118..120
+      S4/K2 120s/ACCOUNT_TAKEOVER: 90 of 90 pairs in bins 119..121
+      S4/K2 121s/ACCOUNT_TAKEOVER: 90 of 90 pairs in bins 120..122
+  S5a                judged      5003  FAIL (1)
+      S5a TX: 5001 violation(s); first: tx_000000000492 (ANOMALOUS_HIGH_VALUE): amount 57784, G1 gives 47798
+  S5b                judged        49  FAIL (10)
+      S5b TX/amount_z/[1,2)/ACCOUNT_TAKEOVER: 273/422 (lo 0.5609, hi 0.7244) vs legitimate 99708/126720 in the same region (lo 0.7833, hi 0.7903)
+      S5b TX/amount_z/≥2/ACCOUNT_TAKEOVER: 143/422 (lo 0.2626, hi 0.4246) vs legitimate 22665/126720 in the same region (lo 0.1756, hi 0.1821)
+      S5b TX/amount_z/[1,2)/CARD_TESTING:payoff: 27/50 (lo 0.4250, hi 0.6509) vs legitimate 99708/126720 in the same region (lo 0.7833, hi 0.7903)
+      S5b TX/amount_z/≥2/CARD_TESTING:payoff: 23/50 (lo 0.3491, hi 0.5750) vs legitimate 22665/126720 in the same region (lo 0.1756, hi 0.1821)
+      S5b TX/amount_z/[-1,-0.5)/UNUSUAL_LOCATION_DEVICE: 0/99 (lo 0.0000, hi 0.0266) vs legitimate 74398/528764 in the same region (lo 0.1379, hi 0.1436)
+      S5b TX/amount_z/[0,0.5)/UNUSUAL_LOCATION_DEVICE: 64/99 (lo 0.5645, hi 0.7206) vs legitimate 190204/528764 in the same region (lo 0.3558, hi 0.3637)
+      S5b TX/amount_z/[0.5,1)/UNUSUAL_LOCATION_DEVICE: 1/99 (lo 0.0023, hi 0.0440) vs legitimate 73527/528764 in the same region (lo 0.1362, hi 0.1419)
+      S5b TX/amount_z/[-1,-0.5)/VELOCITY_ATTACK: 40/1605 (lo 0.0071, hi 0.0838) vs legitimate 149706/868277 in the same region (lo 0.1693, hi 0.1755)
+      S5b TX/amount_z/[-2,-1)/VELOCITY_ATTACK: 0/1605 (lo 0.0000, hi 0.0432) vs legitimate 134960/868277 in the same region (lo 0.1525, hi 0.1584)
+      S5b TX/amount_z/[0,0.5)/VELOCITY_ATTACK: 839/1605 (lo 0.4180, hi 0.6255) vs legitimate 190204/868277 in the same region (lo 0.2157, hi 0.2225)
+  G3                 judged       521  FAIL (1)
+      G3 TX: 9 violation(s); first: tx_000000316463 (UNUSUAL_LOCATION_DEVICE): 854 km in 1546266 ms from tx_000000316007
+  S6a                judged         0  FAIL (1)
+      S6a TX: availability was not computed for 26 features
+  S7a                judged       567  FAIL (2)
+      S7a/11a : 78 violation(s); first: fi_00000000 (CREDENTIAL_STUFFING): causal keys ['DEVICE_SHARING', 'IDENTITY_CHANGE', 'IP_REPUTATION']
+      S7a/7 : 442 violation(s); first: fi_00000066 (MERCHANT_COLLUSION): tx_000000371773 not ordinary for its payer
+  S7b                judged        57  FAIL (11)
+      S7b/ATO-3 ID/event_type/ADDRESS_CHANGE,EMAIL_CHANGE,MFA_RESET,PASSWORD_CHANGE,PHONE_CHANGE/ACCOUNT_TAKEOVER: lo 0.9708 (90/90, clusters 90); need >= E_min 0.8 and >= 1.2500 (legitimate hi 1.0000)
+      S7b/ATO-4 ID/device_home/not/ACCOUNT_TAKEOVER: lo 0.9708 (90/90, clusters 90); need >= E_min 0.8 and >= 1.2500 (legitimate hi 1.0000)
+      S7b/ATO-5 ID/device_age/<1h,[1h,24h),first-reference,first-use/ACCOUNT_TAKEOVER: lo 0.9708 (90/90, clusters 90); need >= E_min 0.8 and >= 1.2500 (legitimate hi 1.0000)
+      S7b/DF-5 TX/device_age/<1h,first-use/DEVICE_FARM: lo 0.7351 (510/598, clusters 38); need >= E_min 0.8 and >= 0.1400 (legitimate hi 0.0700)
+      S7b/MC-1 TX/merchant_same_amount_accounts_24h/5+/MERCHANT_COLLUSION: lo 0.4750 (298/442, clusters 17); need >= E_min 0.5 and >= 0.0988 (legitimate hi 0.0494)
+      S7b/MC-5 TX/mcc_habitual/unhabitual/MERCHANT_COLLUSION: lo 0.2763 (201/442, clusters 17); need >= E_min 0.5 and >= 0.2715 (legitimate hi 0.1357)
+      S7b/CS-1 ID/event_type/LOGIN_FAILED/CREDENTIAL_STUFFING: lo 0.7460 (683/775, clusters 28); need >= E_min 0.6 and >= 1.2500 (legitimate hi 1.0000)
+      S7b/CS-2 ID/ip_datacenter/datacenter/CREDENTIAL_STUFFING: lo 0.9119 (775/775, clusters 28); need >= E_min 0.8 and >= 1.2500 (legitimate hi 1.0000)
+      S7b/CS-3 ID/ip_login_accounts/6+/CREDENTIAL_STUFFING: lo 0.8754 (758/775, clusters 28); need >= E_min 0.8 and >= 1.2500 (legitimate hi 1.0000)
+      S7b/CS-4 ID/device_login_accounts/3-5,6+/CREDENTIAL_STUFFING: lo 0.9119 (775/775, clusters 28); need >= E_min 0.5 and >= 1.2500 (legitimate hi 1.0000)
+      S7b/AHV-4 TX/mcc_habitual/unhabitual/ANOMALOUS_HIGH_VALUE: lo 0.4580 (50/92, clusters 92); need >= E_min 0.8 and >= 0.2715 (legitimate hi 0.1357)
+  S8/min-instances   judged        10  FAIL (1)
+      S8/min-instances TX/MERCHANT_COLLUSION: 17 instances with a transaction
+  S8/disclosure      judged         1  FAIL (1)
+      S8/disclosure : the natural and G2-added instance counts are missing
+  S8/non-vacuity     judged         5  pass
+instances per scenario: {'ACCOUNT_TAKEOVER': 90, 'ANOMALOUS_HIGH_VALUE': 92, 'CARD_TESTING': 50, 'CREDENTIAL_STUFFING': 28, 'DEVICE_FARM': 38, 'FRAUD_RING': 35, 'IMPOSSIBLE_TRAVEL': 58, 'MERCHANT_COLLUSION': 17, 'UNUSUAL_LOCATION_DEVICE': 99, 'VELOCITY_ATTACK': 60}
+§14.1 negative control: MET
+wall 565 s, peak rss 3380 MiB (macOS reports bytes)
+      565.42 real       549.26 user        11.07 sys
+          3544039424  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+             4102737  page reclaims
+                 180  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+                 269  voluntary context switches
+              185318  involuntary context switches
+      10447114786502  instructions retired
+       2256920659255  cycles elapsed
+          4371599248  peak memory footprint

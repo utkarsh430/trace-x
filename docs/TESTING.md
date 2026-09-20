@@ -41,7 +41,14 @@ unimplemented regardless of how much code exists.
 4. **No test asserts a specific benchmark number.** Tests assert *relationships* (calibrated beats
    uncalibrated; ML beats rules-only) and *properties* (termination, idempotency), never magic values.
 5. **A skipped test must say so loudly.** Resource-gated tests (`external`, `cloud`, `integration`)
-   print an explicit reason. A silent skip is a false pass.
+   print an explicit reason. A silent skip is a false pass. In CI a loud skip is still not evidence:
+   - `tests/conftest.py` fails every Docker-backed test at setup when Docker is missing.
+   - `-m stream` fails when no stream test executed.
+   - A session whose marker expression selects `integration`, `chaos` or `stream` fails if any test
+     skipped (`ci_skip_failure`).
+   - So CI provisions what those suites find for themselves. `test-integration` starts the compose
+     core services (PostgreSQL, migrated; both Redis instances; the gateway) and installs the pinned
+     JVM toolchain.
 6. **Coverage gates:** ≥85% on `domain/`, `policy/`, `actions/`, `rules/`; ≥70% overall.
 
 ---
@@ -58,6 +65,7 @@ unimplemented regardless of how much code exists.
 | **Integration** | `integration` | testcontainers (PG, Redis, Kafka, Neo4j) | Repositories, streaming, tools — **real services, no mocks** | PR |
 | **Streaming recovery** | `integration`, `chaos` | testcontainers + kill | Checkpoint resume, no loss, no double-count | PR |
 | **Feature parity** | `parity` | pytest + Spark | Online (Redis) vs offline (Spark) on the same stream, tolerance-bounded | PR |
+| **Stream toolchain** | `stream` | pytest + a real Spark JVM | The pinned toolchain on a live session, Delta and the Kafka connector from verified jars, and refusal of a wrong JDK before a JVM starts. `tests/stream/test_delta_capabilities.py` asserts every Delta 4.0.1 behaviour the lake depends on -- idempotent commits, silent-loss states, protocol features, retention, layout and scan measurement -- and the checkpoint and declaration conventions built on them (ADR-0048). Skipped loudly without Temurin 17, pyspark or the jars — and a `-m stream` session that executes none of them **fails** | PR (`test-stream`) |
 | **Transport parity** | `transport_parity` | MCP client + in-process | Identical envelope, authz denial, rate limit, timeout, truncation, audit | PR |
 | **Agent (replay)** | `unit` | cassette adapter | Full LangGraph runs, deterministic, zero API cost | PR |
 | **Agent (live)** | `slow` | real provider | 20-investigation smoke against the real LLM | nightly + release |
@@ -89,9 +97,17 @@ Phase 2 added three more:
   week, and then nothing is checked at all.
 - **online-store correctness** — `tests/integration/test_online_store_capacity.py` starts a real
   Redis with a 2 MB limit and `noeviction`, fills it, and asserts the store refuses rather than evicts
-  (`evicted_keys` stays 0), the refusal is typed, and the breaker stays closed;
+  (`evicted_keys` stays 0), the refusal is typed and all or nothing (the refused observation leaves no
+  trace and the observation counter does not move), reads still answer, and the breaker stays closed;
+  `tests/integration/test_redis_feature_store.py` holds the store to the reference on seeded,
+  months-long histories -- folding, lifetime gaps, redeliveries naming other accounts, reads behind
+  retention -- and replays eight concurrent writers in receipt order;
   `tests/chaos/test_redis_down.py` pauses the **cache** instance and asserts no decision changes, and
-  `FLUSHALL`s the feature store and asserts `history_incomplete`; the conformance suite carries
+  `FLUSHALL`s the feature store and asserts `history_incomplete`;
+  `tests/chaos/test_feature_store_holes.py` pauses the feature store under one gateway, stops that
+  gateway, and asserts the next one inherits the hole from PostgreSQL, moves the epoch past it and
+  serves `history_incomplete` -- and that a restart with no hole leaves a warm store's epoch
+  untouched, with the database pool opened by start-up exactly as `build_state` leaves it; the conformance suite carries
   `complete_since` explicitly, so "an unseen device is not known" is asserted on a store that has
   watched for its horizon and "cannot tell" on one that has not (ADR-0044).
 - **feature-semantics conformance** — `tests/conformance/feature_semantics_suite.py`, run unmodified
@@ -99,7 +115,7 @@ Phase 2 added three more:
   how online/offline parity is proven without anyone redefining a feature (ADR-0032).
 
 ```bash
-make test-fast   # unit + property + contract + conformance + transport_parity  (< 5 min, no services)
+make test-fast   # unit + property + contract + conformance + transport_parity  (< 5 min, no services, no JVM)
 make test        # everything except cloud
 make verify      # ★ canonical: doctor + acceptance + claims + codegen + openapi + lint + types +
                  #   test-fast + bandit + secret-scan
@@ -111,6 +127,13 @@ pause` rather than `stop`, because pausing reproduces a network partition — co
 out — while stopping gives an immediate refusal, and the timeout path is the one with a latency budget
 attached. That distinction is not academic: the first run of that suite found a degraded request
 taking **21.8 s** against a configured 20 ms timeout (ADR-0035).
+
+`tests/chaos/test_observation_log.py` produces process death rather than a paused dependency. A
+child process composes the production writer, pipeline, Redis store and observation log, and is
+killed with SIGKILL at each point of plan §4.1's loss table, or sheds against a paused broker. The
+test then applies the coverage rule to what the broker, the session ledger and the store recorded.
+The kill points live in the harness, between the calls the gateway makes, never in production
+code.
 
 ---
 
@@ -172,7 +195,8 @@ These exist because a specific failure would be severe and silent.
 | `lint` | every push | ruff format + lint, mypy strict, bandit, secret scan, pip-audit |
 | `test-fast` | every push | unit, property, contract, conformance, transport parity |
 | `claims` | every push | `make check-claims` |
-| `test-integration` | PR | testcontainers, feature parity, agent replay, adversarial |
+| `test-integration` | PR | Compose core services (PostgreSQL migrated, both Redis, the gateway), Temurin 17 and verified jars; `pytest -m "integration or chaos"`, failing if any test skipped. Later phases add feature parity, agent replay and adversarial suites |
+| `test-stream` | PR | Temurin 17 and SHA-256-verified Spark jars; `pytest -m "stream and not integration"`, failing if no stream test executed or any skipped (ADR-0045) |
 | `contracts` | PR | OpenAPI + event-schema breaking-change diff vs `main` |
 | `e2e` | nightly + release | full compose, real services, **no-mock grep assertion** |
 | `eval` | nightly + manual | Track A arms A–G, Track B E1–E5, manifest + tier gates, regression gate |

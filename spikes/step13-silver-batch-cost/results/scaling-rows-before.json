@@ -1,0 +1,57 @@
+[
+  {
+    "seed_rows": 0,
+    "seed_files": 128,
+    "batch_rows": 7000,
+    "batch_s": 7.46,
+    "classify_s": 0.25,
+    "write_batch_s": 4.99,
+    "assert_unique_s": 0.78,
+    "heap_used_mb": 602,
+    "heap_max_mb": 2048
+  },
+  {
+    "seed_rows": 250000,
+    "seed_files": 128,
+    "batch_rows": 7000,
+    "batch_s": 7.48,
+    "classify_s": 0.13,
+    "write_batch_s": 5.11,
+    "assert_unique_s": 0.84,
+    "heap_used_mb": 1129,
+    "heap_max_mb": 2048
+  },
+  {
+    "seed_rows": 1000000,
+    "seed_files": 128,
+    "batch_rows": 7000,
+    "batch_s": 7.87,
+    "classify_s": 0.13,
+    "write_batch_s": 5.45,
+    "assert_unique_s": 0.92,
+    "heap_used_mb": 689,
+    "heap_max_mb": 2048
+  },
+  {
+    "seed_rows": 2000000,
+    "seed_files": 128,
+    "batch_rows": 7000,
+    "batch_s": 7.41,
+    "classify_s": 0.12,
+    "write_batch_s": 5.12,
+    "assert_unique_s": 0.84,
+    "heap_used_mb": 653,
+    "heap_max_mb": 2048
+  },
+  {
+    "seed_rows": 3000000,
+    "seed_files": 128,
+    "batch_rows": 7000,
+    "batch_s": 8.53,
+    "classify_s": 0.12,
+    "write_batch_s": 6.24,
+    "assert_unique_s": 0.88,
+    "heap_used_mb": 1622,
+    "heap_max_mb": 2048
+  }
+]

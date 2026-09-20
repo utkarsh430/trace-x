@@ -23,6 +23,7 @@ build/
 data/external/
 data/generated/
 data/lake/
+data/bench/
 *.parquet
 *.csv
 !tests/**/*.csv
@@ -52,3 +53,5 @@ out/
 .idea/
 *.swp
 .claude/settings.local.json
+# Parallel agents' isolated git worktrees: other branches' checkouts, never this tree's content.
+.claude/worktrees/

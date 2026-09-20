@@ -1,0 +1,2914 @@
+{
+  "builds": [
+    {
+      "clustering_columns": [],
+      "content_digest": "10000000:-10864223966181580214263",
+      "file_bytes_max": 104694850,
+      "file_bytes_median": 87054028,
+      "file_bytes_min": 47595754,
+      "min_reader_version": 1,
+      "min_writer_version": 2,
+      "num_files": 8,
+      "optimize_metrics": {},
+      "optimize_s": null,
+      "partition_columns": [],
+      "partitions": 1,
+      "path": "/Users/bistboiiiii/Downloads/trace-x/data/bench/delta_layout/bench-20260918-135350-delta-layout-36816cc7/control",
+      "rows": 10000000,
+      "size_bytes": 674611410,
+      "table_features": [
+        "appendOnly",
+        "invariants"
+      ],
+      "variant": "control",
+      "version": 1,
+      "write_s": 13.721995542000514
+    },
+    {
+      "clustering_columns": [],
+      "content_digest": "10000000:-10864223966181580214263",
+      "file_bytes_max": 104694850,
+      "file_bytes_median": 87054028,
+      "file_bytes_min": 47595754,
+      "min_reader_version": 1,
+      "min_writer_version": 2,
+      "num_files": 8,
+      "optimize_metrics": {
+        "autoCompactParallelismStats": null,
+        "clusteringStats": null,
+        "deletionVectorStats": null,
+        "endTimeMs": 0,
+        "filesAdded": {
+          "avg": 0.0,
+          "max": null,
+          "min": null,
+          "totalFiles": 0,
+          "totalSize": 0
+        },
+        "filesRemoved": {
+          "avg": 0.0,
+          "max": null,
+          "min": null,
+          "totalFiles": 0,
+          "totalSize": 0
+        },
+        "numBatches": 1,
+        "numBins": 0,
+        "numBytesSkippedToReduceWriteAmplification": 0,
+        "numFilesAdded": 0,
+        "numFilesRemoved": 0,
+        "numFilesSkippedToReduceWriteAmplification": 0,
+        "numTableColumns": 22,
+        "numTableColumnsWithStats": 22,
+        "partitionsOptimized": 0,
+        "preserveInsertionOrder": false,
+        "startTimeMs": 1789739728233,
+        "totalClusterParallelism": 4,
+        "totalConsideredFiles": 8,
+        "totalFilesSkipped": 8,
+        "totalScheduledTasks": 0,
+        "zOrderStats": null
+      },
+      "optimize_s": 0.6025505829893518,
+      "partition_columns": [],
+      "partitions": 1,
+      "path": "/Users/bistboiiiii/Downloads/trace-x/data/bench/delta_layout/bench-20260918-135350-delta-layout-36816cc7/control_compacted",
+      "rows": 10000000,
+      "size_bytes": 674611410,
+      "table_features": [
+        "appendOnly",
+        "invariants"
+      ],
+      "variant": "control_compacted",
+      "version": 1,
+      "write_s": 13.88116291697952
+    },
+    {
+      "clustering_columns": [],
+      "content_digest": "10000000:-10864223966181580214263",
+      "file_bytes_max": 11451561,
+      "file_bytes_median": 11397778,
+      "file_bytes_min": 7024,
+      "min_reader_version": 1,
+      "min_writer_version": 7,
+      "num_files": 61,
+      "optimize_metrics": {},
+      "optimize_s": null,
+      "partition_columns": [
+        "event_date"
+      ],
+      "partitions": 61,
+      "path": "/Users/bistboiiiii/Downloads/trace-x/data/bench/delta_layout/bench-20260918-135350-delta-layout-36816cc7/partitioned_date",
+      "rows": 10000000,
+      "size_bytes": 683545623,
+      "table_features": [
+        "appendOnly",
+        "generatedColumns",
+        "invariants"
+      ],
+      "variant": "partitioned_date",
+      "version": 1,
+      "write_s": 22.531791374989552
+    },
+    {
+      "clustering_columns": [],
+      "content_digest": "10000000:-10864223966181580214263",
+      "file_bytes_max": 11451561,
+      "file_bytes_median": 11397778,
+      "file_bytes_min": 7024,
+      "min_reader_version": 1,
+      "min_writer_version": 7,
+      "num_files": 61,
+      "optimize_metrics": {
+        "autoCompactParallelismStats": null,
+        "clusteringStats": null,
+        "deletionVectorStats": null,
+        "endTimeMs": 0,
+        "filesAdded": {
+          "avg": 11205665.950819673,
+          "max": 11451561,
+          "min": 7024,
+          "totalFiles": 61,
+          "totalSize": 683545623
+        },
+        "filesRemoved": {
+          "avg": 11205665.950819673,
+          "max": 11451561,
+          "min": 7024,
+          "totalFiles": 61,
+          "totalSize": 683545623
+        },
+        "numBatches": 1,
+        "numBins": 61,
+        "numBytesSkippedToReduceWriteAmplification": 0,
+        "numFilesAdded": 61,
+        "numFilesRemoved": 61,
+        "numFilesSkippedToReduceWriteAmplification": 0,
+        "numTableColumns": 23,
+        "numTableColumnsWithStats": 23,
+        "partitionsOptimized": 61,
+        "preserveInsertionOrder": false,
+        "startTimeMs": 1789739801558,
+        "totalClusterParallelism": 4,
+        "totalConsideredFiles": 61,
+        "totalFilesSkipped": 0,
+        "totalScheduledTasks": 0,
+        "zOrderStats": {
+          "inputCubeFiles": {
+            "num": 0,
+            "size": 0
+          },
+          "inputNumCubes": 0,
+          "inputOtherFiles": {
+            "num": 61,
+            "size": 683545623
+          },
+          "mergedFiles": {
+            "num": 61,
+            "size": 683545623
+          },
+          "mergedNumCubes": null,
+          "numOutputCubes": 61,
+          "strategyName": "all"
+        }
+      },
+      "optimize_s": 22.064862041006563,
+      "partition_columns": [
+        "event_date"
+      ],
+      "partitions": 61,
+      "path": "/Users/bistboiiiii/Downloads/trace-x/data/bench/delta_layout/bench-20260918-135350-delta-layout-36816cc7/partitioned_date_zorder",
+      "rows": 10000000,
+      "size_bytes": 683545623,
+      "table_features": [
+        "appendOnly",
+        "generatedColumns",
+        "invariants"
+      ],
+      "variant": "partitioned_date_zorder",
+      "version": 2,
+      "write_s": 22.809188042010646
+    },
+    {
+      "clustering_columns": [],
+      "content_digest": "10000000:-10864223966181580214263",
+      "file_bytes_max": 462188184,
+      "file_bytes_median": 283479748,
+      "file_bytes_min": 15679326,
+      "min_reader_version": 1,
+      "min_writer_version": 2,
+      "num_files": 4,
+      "optimize_metrics": {},
+      "optimize_s": null,
+      "partition_columns": [
+        "stream"
+      ],
+      "partitions": 4,
+      "path": "/Users/bistboiiiii/Downloads/trace-x/data/bench/delta_layout/bench-20260918-135350-delta-layout-36816cc7/partitioned_stream",
+      "rows": 10000000,
+      "size_bytes": 823605867,
+      "table_features": [
+        "appendOnly",
+        "invariants"
+      ],
+      "variant": "partitioned_stream",
+      "version": 1,
+      "write_s": 50.10697720799362
+    },
+    {
+      "clustering_columns": [
+        "account_id",
+        "occurred_at"
+      ],
+      "content_digest": "10000000:-10864223966181580214263",
+      "file_bytes_max": 154007074,
+      "file_bytes_median": 131813367,
+      "file_bytes_min": 130193094,
+      "min_reader_version": 1,
+      "min_writer_version": 7,
+      "num_files": 5,
+      "optimize_metrics": {
+        "autoCompactParallelismStats": null,
+        "clusteringStats": {
+          "inputNumZCubes": 0,
+          "inputOtherFiles": {
+            "numFiles": 8,
+            "size": 674611410
+          },
+          "inputZCubeFiles": {
+            "numFiles": 0,
+            "size": 0
+          },
+          "mergedFiles": {
+            "numFiles": 8,
+            "size": 674611410
+          },
+          "numOutputZCubes": 1
+        },
+        "deletionVectorStats": null,
+        "endTimeMs": 0,
+        "filesAdded": {
+          "avg": 138591656.2,
+          "max": 154007074,
+          "min": 130193094,
+          "totalFiles": 5,
+          "totalSize": 692958281
+        },
+        "filesRemoved": {
+          "avg": 84326426.25,
+          "max": 104694850,
+          "min": 47595754,
+          "totalFiles": 8,
+          "totalSize": 674611410
+        },
+        "numBatches": 1,
+        "numBins": 1,
+        "numBytesSkippedToReduceWriteAmplification": 0,
+        "numFilesAdded": 5,
+        "numFilesRemoved": 8,
+        "numFilesSkippedToReduceWriteAmplification": 0,
+        "numTableColumns": 22,
+        "numTableColumnsWithStats": 22,
+        "partitionsOptimized": 1,
+        "preserveInsertionOrder": false,
+        "startTimeMs": 1789739898624,
+        "totalClusterParallelism": 4,
+        "totalConsideredFiles": 8,
+        "totalFilesSkipped": 0,
+        "totalScheduledTasks": 0,
+        "zOrderStats": null
+      },
+      "optimize_s": 27.031650167016778,
+      "partition_columns": [],
+      "partitions": 1,
+      "path": "/Users/bistboiiiii/Downloads/trace-x/data/bench/delta_layout/bench-20260918-135350-delta-layout-36816cc7/liquid",
+      "rows": 10000000,
+      "size_bytes": 692958281,
+      "table_features": [
+        "appendOnly",
+        "clustering",
+        "domainMetadata",
+        "invariants"
+      ],
+      "variant": "liquid",
+      "version": 2,
+      "write_s": 12.797105582983932
+    }
+  ],
+  "checks": [
+    {
+      "digest": "1:-9193479924110042393",
+      "rep": 0,
+      "rows": 1,
+      "shape": "context_lookup",
+      "variant": "control"
+    },
+    {
+      "digest": "1:-9193479924110042393",
+      "rep": 0,
+      "rows": 1,
+      "shape": "context_lookup",
+      "variant": "control_compacted"
+    },
+    {
+      "digest": "1:-9193479924110042393",
+      "rep": 0,
+      "rows": 1,
+      "shape": "context_lookup",
+      "variant": "partitioned_date"
+    },
+    {
+      "digest": "1:-9193479924110042393",
+      "rep": 0,
+      "rows": 1,
+      "shape": "context_lookup",
+      "variant": "partitioned_date_zorder"
+    },
+    {
+      "digest": "1:-9193479924110042393",
+      "rep": 0,
+      "rows": 1,
+      "shape": "context_lookup",
+      "variant": "partitioned_stream"
+    },
+    {
+      "digest": "1:-9193479924110042393",
+      "rep": 0,
+      "rows": 1,
+      "shape": "context_lookup",
+      "variant": "liquid"
+    },
+    {
+      "digest": "4700000:13337809483811228781711",
+      "rep": 0,
+      "rows": 4700000,
+      "shape": "context_extract",
+      "variant": "control"
+    },
+    {
+      "digest": "4700000:13337809483811228781711",
+      "rep": 0,
+      "rows": 4700000,
+      "shape": "context_extract",
+      "variant": "control_compacted"
+    },
+    {
+      "digest": "4700000:13337809483811228781711",
+      "rep": 0,
+      "rows": 4700000,
+      "shape": "context_extract",
+      "variant": "partitioned_date"
+    },
+    {
+      "digest": "4700000:13337809483811228781711",
+      "rep": 0,
+      "rows": 4700000,
+      "shape": "context_extract",
+      "variant": "partitioned_date_zorder"
+    },
+    {
+      "digest": "4700000:13337809483811228781711",
+      "rep": 0,
+      "rows": 4700000,
+      "shape": "context_extract",
+      "variant": "partitioned_stream"
+    },
+    {
+      "digest": "4700000:13337809483811228781711",
+      "rep": 0,
+      "rows": 4700000,
+      "shape": "context_extract",
+      "variant": "liquid"
+    },
+    {
+      "digest": "67:69489562435178485613",
+      "rep": 0,
+      "rows": 67,
+      "shape": "account_history",
+      "variant": "control"
+    },
+    {
+      "digest": "67:69489562435178485613",
+      "rep": 0,
+      "rows": 67,
+      "shape": "account_history",
+      "variant": "control_compacted"
+    },
+    {
+      "digest": "67:69489562435178485613",
+      "rep": 0,
+      "rows": 67,
+      "shape": "account_history",
+      "variant": "partitioned_date"
+    },
+    {
+      "digest": "67:69489562435178485613",
+      "rep": 0,
+      "rows": 67,
+      "shape": "account_history",
+      "variant": "partitioned_date_zorder"
+    },
+    {
+      "digest": "67:69489562435178485613",
+      "rep": 0,
+      "rows": 67,
+      "shape": "account_history",
+      "variant": "partitioned_stream"
+    },
+    {
+      "digest": "67:69489562435178485613",
+      "rep": 0,
+      "rows": 67,
+      "shape": "account_history",
+      "variant": "liquid"
+    },
+    {
+      "digest": "166669:3256835568659673951218",
+      "rep": 0,
+      "rows": 166669,
+      "shape": "time_range",
+      "variant": "control"
+    },
+    {
+      "digest": "166669:3256835568659673951218",
+      "rep": 0,
+      "rows": 166669,
+      "shape": "time_range",
+      "variant": "control_compacted"
+    },
+    {
+      "digest": "166669:3256835568659673951218",
+      "rep": 0,
+      "rows": 166669,
+      "shape": "time_range",
+      "variant": "partitioned_date"
+    },
+    {
+      "digest": "166669:3256835568659673951218",
+      "rep": 0,
+      "rows": 166669,
+      "shape": "time_range",
+      "variant": "partitioned_date_zorder"
+    },
+    {
+      "digest": "166669:3256835568659673951218",
+      "rep": 0,
+      "rows": 166669,
+      "shape": "time_range",
+      "variant": "partitioned_stream"
+    },
+    {
+      "digest": "166669:3256835568659673951218",
+      "rep": 0,
+      "rows": 166669,
+      "shape": "time_range",
+      "variant": "liquid"
+    },
+    {
+      "digest": "1:-5548308860193038918",
+      "rep": 1,
+      "rows": 1,
+      "shape": "context_lookup",
+      "variant": "control"
+    },
+    {
+      "digest": "1:-5548308860193038918",
+      "rep": 1,
+      "rows": 1,
+      "shape": "context_lookup",
+      "variant": "control_compacted"
+    },
+    {
+      "digest": "1:-5548308860193038918",
+      "rep": 1,
+      "rows": 1,
+      "shape": "context_lookup",
+      "variant": "partitioned_date"
+    },
+    {
+      "digest": "1:-5548308860193038918",
+      "rep": 1,
+      "rows": 1,
+      "shape": "context_lookup",
+      "variant": "partitioned_date_zorder"
+    },
+    {
+      "digest": "1:-5548308860193038918",
+      "rep": 1,
+      "rows": 1,
+      "shape": "context_lookup",
+      "variant": "partitioned_stream"
+    },
+    {
+      "digest": "1:-5548308860193038918",
+      "rep": 1,
+      "rows": 1,
+      "shape": "context_lookup",
+      "variant": "liquid"
+    },
+    {
+      "digest": "4700000:13337809483811228781711",
+      "rep": 1,
+      "rows": 4700000,
+      "shape": "context_extract",
+      "variant": "control"
+    },
+    {
+      "digest": "4700000:13337809483811228781711",
+      "rep": 1,
+      "rows": 4700000,
+      "shape": "context_extract",
+      "variant": "control_compacted"
+    },
+    {
+      "digest": "4700000:13337809483811228781711",
+      "rep": 1,
+      "rows": 4700000,
+      "shape": "context_extract",
+      "variant": "partitioned_date"
+    },
+    {
+      "digest": "4700000:13337809483811228781711",
+      "rep": 1,
+      "rows": 4700000,
+      "shape": "context_extract",
+      "variant": "partitioned_date_zorder"
+    },
+    {
+      "digest": "4700000:13337809483811228781711",
+      "rep": 1,
+      "rows": 4700000,
+      "shape": "context_extract",
+      "variant": "partitioned_stream"
+    },
+    {
+      "digest": "4700000:13337809483811228781711",
+      "rep": 1,
+      "rows": 4700000,
+      "shape": "context_extract",
+      "variant": "liquid"
+    },
+    {
+      "digest": "85:13793922694096904599",
+      "rep": 1,
+      "rows": 85,
+      "shape": "account_history",
+      "variant": "control"
+    },
+    {
+      "digest": "85:13793922694096904599",
+      "rep": 1,
+      "rows": 85,
+      "shape": "account_history",
+      "variant": "control_compacted"
+    },
+    {
+      "digest": "85:13793922694096904599",
+      "rep": 1,
+      "rows": 85,
+      "shape": "account_history",
+      "variant": "partitioned_date"
+    },
+    {
+      "digest": "85:13793922694096904599",
+      "rep": 1,
+      "rows": 85,
+      "shape": "account_history",
+      "variant": "partitioned_date_zorder"
+    },
+    {
+      "digest": "85:13793922694096904599",
+      "rep": 1,
+      "rows": 85,
+      "shape": "account_history",
+      "variant": "partitioned_stream"
+    },
+    {
+      "digest": "85:13793922694096904599",
+      "rep": 1,
+      "rows": 85,
+      "shape": "account_history",
+      "variant": "liquid"
+    },
+    {
+      "digest": "166668:-580273893148657986260",
+      "rep": 1,
+      "rows": 166668,
+      "shape": "time_range",
+      "variant": "control"
+    },
+    {
+      "digest": "166668:-580273893148657986260",
+      "rep": 1,
+      "rows": 166668,
+      "shape": "time_range",
+      "variant": "control_compacted"
+    },
+    {
+      "digest": "166668:-580273893148657986260",
+      "rep": 1,
+      "rows": 166668,
+      "shape": "time_range",
+      "variant": "partitioned_date"
+    },
+    {
+      "digest": "166668:-580273893148657986260",
+      "rep": 1,
+      "rows": 166668,
+      "shape": "time_range",
+      "variant": "partitioned_date_zorder"
+    },
+    {
+      "digest": "166668:-580273893148657986260",
+      "rep": 1,
+      "rows": 166668,
+      "shape": "time_range",
+      "variant": "partitioned_stream"
+    },
+    {
+      "digest": "166668:-580273893148657986260",
+      "rep": 1,
+      "rows": 166668,
+      "shape": "time_range",
+      "variant": "liquid"
+    },
+    {
+      "digest": "1:2041158230268761924",
+      "rep": 2,
+      "rows": 1,
+      "shape": "context_lookup",
+      "variant": "control"
+    },
+    {
+      "digest": "1:2041158230268761924",
+      "rep": 2,
+      "rows": 1,
+      "shape": "context_lookup",
+      "variant": "control_compacted"
+    },
+    {
+      "digest": "1:2041158230268761924",
+      "rep": 2,
+      "rows": 1,
+      "shape": "context_lookup",
+      "variant": "partitioned_date"
+    },
+    {
+      "digest": "1:2041158230268761924",
+      "rep": 2,
+      "rows": 1,
+      "shape": "context_lookup",
+      "variant": "partitioned_date_zorder"
+    },
+    {
+      "digest": "1:2041158230268761924",
+      "rep": 2,
+      "rows": 1,
+      "shape": "context_lookup",
+      "variant": "partitioned_stream"
+    },
+    {
+      "digest": "1:2041158230268761924",
+      "rep": 2,
+      "rows": 1,
+      "shape": "context_lookup",
+      "variant": "liquid"
+    },
+    {
+      "digest": "4700000:13337809483811228781711",
+      "rep": 2,
+      "rows": 4700000,
+      "shape": "context_extract",
+      "variant": "control"
+    },
+    {
+      "digest": "4700000:13337809483811228781711",
+      "rep": 2,
+      "rows": 4700000,
+      "shape": "context_extract",
+      "variant": "control_compacted"
+    },
+    {
+      "digest": "4700000:13337809483811228781711",
+      "rep": 2,
+      "rows": 4700000,
+      "shape": "context_extract",
+      "variant": "partitioned_date"
+    },
+    {
+      "digest": "4700000:13337809483811228781711",
+      "rep": 2,
+      "rows": 4700000,
+      "shape": "context_extract",
+      "variant": "partitioned_date_zorder"
+    },
+    {
+      "digest": "4700000:13337809483811228781711",
+      "rep": 2,
+      "rows": 4700000,
+      "shape": "context_extract",
+      "variant": "partitioned_stream"
+    },
+    {
+      "digest": "4700000:13337809483811228781711",
+      "rep": 2,
+      "rows": 4700000,
+      "shape": "context_extract",
+      "variant": "liquid"
+    },
+    {
+      "digest": "92:7421351050998540204",
+      "rep": 2,
+      "rows": 92,
+      "shape": "account_history",
+      "variant": "control"
+    },
+    {
+      "digest": "92:7421351050998540204",
+      "rep": 2,
+      "rows": 92,
+      "shape": "account_history",
+      "variant": "control_compacted"
+    },
+    {
+      "digest": "92:7421351050998540204",
+      "rep": 2,
+      "rows": 92,
+      "shape": "account_history",
+      "variant": "partitioned_date"
+    },
+    {
+      "digest": "92:7421351050998540204",
+      "rep": 2,
+      "rows": 92,
+      "shape": "account_history",
+      "variant": "partitioned_date_zorder"
+    },
+    {
+      "digest": "92:7421351050998540204",
+      "rep": 2,
+      "rows": 92,
+      "shape": "account_history",
+      "variant": "partitioned_stream"
+    },
+    {
+      "digest": "92:7421351050998540204",
+      "rep": 2,
+      "rows": 92,
+      "shape": "account_history",
+      "variant": "liquid"
+    },
+    {
+      "digest": "166666:-1860533003279761614623",
+      "rep": 2,
+      "rows": 166666,
+      "shape": "time_range",
+      "variant": "control"
+    },
+    {
+      "digest": "166666:-1860533003279761614623",
+      "rep": 2,
+      "rows": 166666,
+      "shape": "time_range",
+      "variant": "control_compacted"
+    },
+    {
+      "digest": "166666:-1860533003279761614623",
+      "rep": 2,
+      "rows": 166666,
+      "shape": "time_range",
+      "variant": "partitioned_date"
+    },
+    {
+      "digest": "166666:-1860533003279761614623",
+      "rep": 2,
+      "rows": 166666,
+      "shape": "time_range",
+      "variant": "partitioned_date_zorder"
+    },
+    {
+      "digest": "166666:-1860533003279761614623",
+      "rep": 2,
+      "rows": 166666,
+      "shape": "time_range",
+      "variant": "partitioned_stream"
+    },
+    {
+      "digest": "166666:-1860533003279761614623",
+      "rep": 2,
+      "rows": 166666,
+      "shape": "time_range",
+      "variant": "liquid"
+    },
+    {
+      "digest": "1:6162000638524863886",
+      "rep": 3,
+      "rows": 1,
+      "shape": "context_lookup",
+      "variant": "control"
+    },
+    {
+      "digest": "1:6162000638524863886",
+      "rep": 3,
+      "rows": 1,
+      "shape": "context_lookup",
+      "variant": "control_compacted"
+    },
+    {
+      "digest": "1:6162000638524863886",
+      "rep": 3,
+      "rows": 1,
+      "shape": "context_lookup",
+      "variant": "partitioned_date"
+    },
+    {
+      "digest": "1:6162000638524863886",
+      "rep": 3,
+      "rows": 1,
+      "shape": "context_lookup",
+      "variant": "partitioned_date_zorder"
+    },
+    {
+      "digest": "1:6162000638524863886",
+      "rep": 3,
+      "rows": 1,
+      "shape": "context_lookup",
+      "variant": "partitioned_stream"
+    },
+    {
+      "digest": "1:6162000638524863886",
+      "rep": 3,
+      "rows": 1,
+      "shape": "context_lookup",
+      "variant": "liquid"
+    },
+    {
+      "digest": "4700000:13337809483811228781711",
+      "rep": 3,
+      "rows": 4700000,
+      "shape": "context_extract",
+      "variant": "control"
+    },
+    {
+      "digest": "4700000:13337809483811228781711",
+      "rep": 3,
+      "rows": 4700000,
+      "shape": "context_extract",
+      "variant": "control_compacted"
+    },
+    {
+      "digest": "4700000:13337809483811228781711",
+      "rep": 3,
+      "rows": 4700000,
+      "shape": "context_extract",
+      "variant": "partitioned_date"
+    },
+    {
+      "digest": "4700000:13337809483811228781711",
+      "rep": 3,
+      "rows": 4700000,
+      "shape": "context_extract",
+      "variant": "partitioned_date_zorder"
+    },
+    {
+      "digest": "4700000:13337809483811228781711",
+      "rep": 3,
+      "rows": 4700000,
+      "shape": "context_extract",
+      "variant": "partitioned_stream"
+    },
+    {
+      "digest": "4700000:13337809483811228781711",
+      "rep": 3,
+      "rows": 4700000,
+      "shape": "context_extract",
+      "variant": "liquid"
+    },
+    {
+      "digest": "33:29127860026635548916",
+      "rep": 3,
+      "rows": 33,
+      "shape": "account_history",
+      "variant": "control"
+    },
+    {
+      "digest": "33:29127860026635548916",
+      "rep": 3,
+      "rows": 33,
+      "shape": "account_history",
+      "variant": "control_compacted"
+    },
+    {
+      "digest": "33:29127860026635548916",
+      "rep": 3,
+      "rows": 33,
+      "shape": "account_history",
+      "variant": "partitioned_date"
+    },
+    {
+      "digest": "33:29127860026635548916",
+      "rep": 3,
+      "rows": 33,
+      "shape": "account_history",
+      "variant": "partitioned_date_zorder"
+    },
+    {
+      "digest": "33:29127860026635548916",
+      "rep": 3,
+      "rows": 33,
+      "shape": "account_history",
+      "variant": "partitioned_stream"
+    },
+    {
+      "digest": "33:29127860026635548916",
+      "rep": 3,
+      "rows": 33,
+      "shape": "account_history",
+      "variant": "liquid"
+    },
+    {
+      "digest": "166667:-1207198311741606370822",
+      "rep": 3,
+      "rows": 166667,
+      "shape": "time_range",
+      "variant": "control"
+    },
+    {
+      "digest": "166667:-1207198311741606370822",
+      "rep": 3,
+      "rows": 166667,
+      "shape": "time_range",
+      "variant": "control_compacted"
+    },
+    {
+      "digest": "166667:-1207198311741606370822",
+      "rep": 3,
+      "rows": 166667,
+      "shape": "time_range",
+      "variant": "partitioned_date"
+    },
+    {
+      "digest": "166667:-1207198311741606370822",
+      "rep": 3,
+      "rows": 166667,
+      "shape": "time_range",
+      "variant": "partitioned_date_zorder"
+    },
+    {
+      "digest": "166667:-1207198311741606370822",
+      "rep": 3,
+      "rows": 166667,
+      "shape": "time_range",
+      "variant": "partitioned_stream"
+    },
+    {
+      "digest": "166667:-1207198311741606370822",
+      "rep": 3,
+      "rows": 166667,
+      "shape": "time_range",
+      "variant": "liquid"
+    },
+    {
+      "digest": "1:2896343593077967206",
+      "rep": 4,
+      "rows": 1,
+      "shape": "context_lookup",
+      "variant": "control"
+    },
+    {
+      "digest": "1:2896343593077967206",
+      "rep": 4,
+      "rows": 1,
+      "shape": "context_lookup",
+      "variant": "control_compacted"
+    },
+    {
+      "digest": "1:2896343593077967206",
+      "rep": 4,
+      "rows": 1,
+      "shape": "context_lookup",
+      "variant": "partitioned_date"
+    },
+    {
+      "digest": "1:2896343593077967206",
+      "rep": 4,
+      "rows": 1,
+      "shape": "context_lookup",
+      "variant": "partitioned_date_zorder"
+    },
+    {
+      "digest": "1:2896343593077967206",
+      "rep": 4,
+      "rows": 1,
+      "shape": "context_lookup",
+      "variant": "partitioned_stream"
+    },
+    {
+      "digest": "1:2896343593077967206",
+      "rep": 4,
+      "rows": 1,
+      "shape": "context_lookup",
+      "variant": "liquid"
+    },
+    {
+      "digest": "4700000:13337809483811228781711",
+      "rep": 4,
+      "rows": 4700000,
+      "shape": "context_extract",
+      "variant": "control"
+    },
+    {
+      "digest": "4700000:13337809483811228781711",
+      "rep": 4,
+      "rows": 4700000,
+      "shape": "context_extract",
+      "variant": "control_compacted"
+    },
+    {
+      "digest": "4700000:13337809483811228781711",
+      "rep": 4,
+      "rows": 4700000,
+      "shape": "context_extract",
+      "variant": "partitioned_date"
+    },
+    {
+      "digest": "4700000:13337809483811228781711",
+      "rep": 4,
+      "rows": 4700000,
+      "shape": "context_extract",
+      "variant": "partitioned_date_zorder"
+    },
+    {
+      "digest": "4700000:13337809483811228781711",
+      "rep": 4,
+      "rows": 4700000,
+      "shape": "context_extract",
+      "variant": "partitioned_stream"
+    },
+    {
+      "digest": "4700000:13337809483811228781711",
+      "rep": 4,
+      "rows": 4700000,
+      "shape": "context_extract",
+      "variant": "liquid"
+    },
+    {
+      "digest": "29:-70663493299010573122",
+      "rep": 4,
+      "rows": 29,
+      "shape": "account_history",
+      "variant": "control"
+    },
+    {
+      "digest": "29:-70663493299010573122",
+      "rep": 4,
+      "rows": 29,
+      "shape": "account_history",
+      "variant": "control_compacted"
+    },
+    {
+      "digest": "29:-70663493299010573122",
+      "rep": 4,
+      "rows": 29,
+      "shape": "account_history",
+      "variant": "partitioned_date"
+    },
+    {
+      "digest": "29:-70663493299010573122",
+      "rep": 4,
+      "rows": 29,
+      "shape": "account_history",
+      "variant": "partitioned_date_zorder"
+    },
+    {
+      "digest": "29:-70663493299010573122",
+      "rep": 4,
+      "rows": 29,
+      "shape": "account_history",
+      "variant": "partitioned_stream"
+    },
+    {
+      "digest": "29:-70663493299010573122",
+      "rep": 4,
+      "rows": 29,
+      "shape": "account_history",
+      "variant": "liquid"
+    },
+    {
+      "digest": "166666:251110976298274134251",
+      "rep": 4,
+      "rows": 166666,
+      "shape": "time_range",
+      "variant": "control"
+    },
+    {
+      "digest": "166666:251110976298274134251",
+      "rep": 4,
+      "rows": 166666,
+      "shape": "time_range",
+      "variant": "control_compacted"
+    },
+    {
+      "digest": "166666:251110976298274134251",
+      "rep": 4,
+      "rows": 166666,
+      "shape": "time_range",
+      "variant": "partitioned_date"
+    },
+    {
+      "digest": "166666:251110976298274134251",
+      "rep": 4,
+      "rows": 166666,
+      "shape": "time_range",
+      "variant": "partitioned_date_zorder"
+    },
+    {
+      "digest": "166666:251110976298274134251",
+      "rep": 4,
+      "rows": 166666,
+      "shape": "time_range",
+      "variant": "partitioned_stream"
+    },
+    {
+      "digest": "166666:251110976298274134251",
+      "rep": 4,
+      "rows": 166666,
+      "shape": "time_range",
+      "variant": "liquid"
+    }
+  ],
+  "params": [
+    {
+      "account_id": "",
+      "event_ids": [
+        "tx_000001470137"
+      ],
+      "hi_ms": 0,
+      "lo_ms": 0,
+      "rep": 0,
+      "shape": "context_lookup"
+    },
+    {
+      "account_id": "",
+      "event_ids": [],
+      "hi_ms": 0,
+      "lo_ms": 0,
+      "rep": 0,
+      "shape": "context_extract"
+    },
+    {
+      "account_id": "acct_019235",
+      "event_ids": [],
+      "hi_ms": 0,
+      "lo_ms": 0,
+      "rep": 0,
+      "shape": "account_history"
+    },
+    {
+      "account_id": "",
+      "event_ids": [],
+      "hi_ms": 1767357762374,
+      "lo_ms": 1767271362374,
+      "rep": 0,
+      "shape": "time_range"
+    },
+    {
+      "account_id": "",
+      "event_ids": [
+        "tx_000002704838"
+      ],
+      "hi_ms": 0,
+      "lo_ms": 0,
+      "rep": 1,
+      "shape": "context_lookup"
+    },
+    {
+      "account_id": "",
+      "event_ids": [],
+      "hi_ms": 0,
+      "lo_ms": 0,
+      "rep": 1,
+      "shape": "context_extract"
+    },
+    {
+      "account_id": "acct_012003",
+      "event_ids": [],
+      "hi_ms": 0,
+      "lo_ms": 0,
+      "rep": 1,
+      "shape": "account_history"
+    },
+    {
+      "account_id": "",
+      "event_ids": [],
+      "hi_ms": 1770382178628,
+      "lo_ms": 1770295778628,
+      "rep": 1,
+      "shape": "time_range"
+    },
+    {
+      "account_id": "",
+      "event_ids": [
+        "tx_000000377933"
+      ],
+      "hi_ms": 0,
+      "lo_ms": 0,
+      "rep": 2,
+      "shape": "context_lookup"
+    },
+    {
+      "account_id": "",
+      "event_ids": [],
+      "hi_ms": 0,
+      "lo_ms": 0,
+      "rep": 2,
+      "shape": "context_extract"
+    },
+    {
+      "account_id": "acct_016662",
+      "event_ids": [],
+      "hi_ms": 0,
+      "lo_ms": 0,
+      "rep": 2,
+      "shape": "account_history"
+    },
+    {
+      "account_id": "",
+      "event_ids": [],
+      "hi_ms": 1769319347541,
+      "lo_ms": 1769232947541,
+      "rep": 2,
+      "shape": "time_range"
+    },
+    {
+      "account_id": "",
+      "event_ids": [
+        "tx_000004271769"
+      ],
+      "hi_ms": 0,
+      "lo_ms": 0,
+      "rep": 3,
+      "shape": "context_lookup"
+    },
+    {
+      "account_id": "",
+      "event_ids": [],
+      "hi_ms": 0,
+      "lo_ms": 0,
+      "rep": 3,
+      "shape": "context_extract"
+    },
+    {
+      "account_id": "acct_175762",
+      "event_ids": [],
+      "hi_ms": 0,
+      "lo_ms": 0,
+      "rep": 3,
+      "shape": "account_history"
+    },
+    {
+      "account_id": "",
+      "event_ids": [],
+      "hi_ms": 1768556578067,
+      "lo_ms": 1768470178067,
+      "rep": 3,
+      "shape": "time_range"
+    },
+    {
+      "account_id": "",
+      "event_ids": [
+        "tx_000003777766"
+      ],
+      "hi_ms": 0,
+      "lo_ms": 0,
+      "rep": 4,
+      "shape": "context_lookup"
+    },
+    {
+      "account_id": "",
+      "event_ids": [],
+      "hi_ms": 0,
+      "lo_ms": 0,
+      "rep": 4,
+      "shape": "context_extract"
+    },
+    {
+      "account_id": "acct_109094",
+      "event_ids": [],
+      "hi_ms": 0,
+      "lo_ms": 0,
+      "rep": 4,
+      "shape": "account_history"
+    },
+    {
+      "account_id": "",
+      "event_ids": [],
+      "hi_ms": 1767401629290,
+      "lo_ms": 1767315229290,
+      "rep": 4,
+      "shape": "time_range"
+    }
+  ],
+  "plans": {
+    "control": {
+      "account_history": "*(1) Filter (account_id#74068 = acct_019235)\n+- *(1) ColumnarToRow\n   +- FileScan parquet [stream#74062,identity_namespace#74063,event_id#74064,observation_identity#74065,occurred_at#74066,occurred_ms#74067L,account_id#74068,currency#74069,amount_minor#74070L,card_id#74071,device_id#74072,merchant_id#74073,ip_id#74074,merchant_mcc#74075,merchant_country#74076,latitude#74077,longitude#74078,channel#74079,authorization_outcome#74080,verification#74081,correlation_id#74082,source_table#74083] Batched: true, DataFilters: [(account_id#74068 = acct_019235)], Format: Parquet, Location: PreparedDeltaFileIndex(1 paths)[file:/Users/bistboiiiii/Downloads/trace-x/data/bench/delta_layout..., PartitionFilters: [], PushedFilters: [EqualTo(account_id,acct_019235)], ReadSchema: struct<stream:string,identity_namespace:string,event_id:string,observation_identity:string,occurr...\n",
+      "context_extract": "*(1) Project [event_id#73525, occurred_ms#73528L]\n+- *(1) Filter (stream#73523 = TRANSACTION)\n   +- *(1) ColumnarToRow\n      +- FileScan parquet [stream#73523,event_id#73525,occurred_ms#73528L] Batched: true, DataFilters: [(stream#73523 = TRANSACTION)], Format: Parquet, Location: PreparedDeltaFileIndex(1 paths)[file:/Users/bistboiiiii/Downloads/trace-x/data/bench/delta_layout..., PartitionFilters: [], PushedFilters: [EqualTo(stream,TRANSACTION)], ReadSchema: struct<stream:string,event_id:string,occurred_ms:bigint>\n",
+      "context_lookup": "*(1) Project [event_id#72988, occurred_ms#72991L]\n+- *(1) Filter ((stream#72986 = TRANSACTION) AND (event_id#72988 = tx_000001470137))\n   +- *(1) ColumnarToRow\n      +- FileScan parquet [stream#72986,event_id#72988,occurred_ms#72991L] Batched: true, DataFilters: [(stream#72986 = TRANSACTION), (event_id#72988 = tx_000001470137)], Format: Parquet, Location: PreparedDeltaFileIndex(1 paths)[file:/Users/bistboiiiii/Downloads/trace-x/data/bench/delta_layout..., PartitionFilters: [], PushedFilters: [EqualTo(stream,TRANSACTION), EqualTo(event_id,tx_000001470137)], ReadSchema: struct<stream:string,event_id:string,occurred_ms:bigint>\n",
+      "time_range": "*(1) Filter ((occurred_at#74602 >= 2026-01-01 12:42:42.374) AND (occurred_at#74602 < 2026-01-02 12:42:42.374))\n+- *(1) ColumnarToRow\n   +- FileScan parquet [stream#74598,identity_namespace#74599,event_id#74600,observation_identity#74601,occurred_at#74602,occurred_ms#74603L,account_id#74604,currency#74605,amount_minor#74606L,card_id#74607,device_id#74608,merchant_id#74609,ip_id#74610,merchant_mcc#74611,merchant_country#74612,latitude#74613,longitude#74614,channel#74615,authorization_outcome#74616,verification#74617,correlation_id#74618,source_table#74619] Batched: true, DataFilters: [(occurred_at#74602 >= 2026-01-01 12:42:42.374), (occurred_at#74602 < 2026-01-02 12:42:42.374)], Format: Parquet, Location: PreparedDeltaFileIndex(1 paths)[file:/Users/bistboiiiii/Downloads/trace-x/data/bench/delta_layout..., PartitionFilters: [], PushedFilters: [GreaterThanOrEqual(occurred_at,2026-01-01 12:42:42.374), LessThan(occurred_at,2026-01-02 12:42:4..., ReadSchema: struct<stream:string,identity_namespace:string,event_id:string,observation_identity:string,occurr...\n"
+    },
+    "control_compacted": {
+      "account_history": "*(1) Filter (account_id#74157 = acct_019235)\n+- *(1) ColumnarToRow\n   +- FileScan parquet [stream#74151,identity_namespace#74152,event_id#74153,observation_identity#74154,occurred_at#74155,occurred_ms#74156L,account_id#74157,currency#74158,amount_minor#74159L,card_id#74160,device_id#74161,merchant_id#74162,ip_id#74163,merchant_mcc#74164,merchant_country#74165,latitude#74166,longitude#74167,channel#74168,authorization_outcome#74169,verification#74170,correlation_id#74171,source_table#74172] Batched: true, DataFilters: [(account_id#74157 = acct_019235)], Format: Parquet, Location: PreparedDeltaFileIndex(1 paths)[file:/Users/bistboiiiii/Downloads/trace-x/data/bench/delta_layout..., PartitionFilters: [], PushedFilters: [EqualTo(account_id,acct_019235)], ReadSchema: struct<stream:string,identity_namespace:string,event_id:string,observation_identity:string,occurr...\n",
+      "context_extract": "*(1) Project [event_id#73614, occurred_ms#73617L]\n+- *(1) Filter (stream#73612 = TRANSACTION)\n   +- *(1) ColumnarToRow\n      +- FileScan parquet [stream#73612,event_id#73614,occurred_ms#73617L] Batched: true, DataFilters: [(stream#73612 = TRANSACTION)], Format: Parquet, Location: PreparedDeltaFileIndex(1 paths)[file:/Users/bistboiiiii/Downloads/trace-x/data/bench/delta_layout..., PartitionFilters: [], PushedFilters: [EqualTo(stream,TRANSACTION)], ReadSchema: struct<stream:string,event_id:string,occurred_ms:bigint>\n",
+      "context_lookup": "*(1) Project [event_id#73077, occurred_ms#73080L]\n+- *(1) Filter ((stream#73075 = TRANSACTION) AND (event_id#73077 = tx_000001470137))\n   +- *(1) ColumnarToRow\n      +- FileScan parquet [stream#73075,event_id#73077,occurred_ms#73080L] Batched: true, DataFilters: [(stream#73075 = TRANSACTION), (event_id#73077 = tx_000001470137)], Format: Parquet, Location: PreparedDeltaFileIndex(1 paths)[file:/Users/bistboiiiii/Downloads/trace-x/data/bench/delta_layout..., PartitionFilters: [], PushedFilters: [EqualTo(stream,TRANSACTION), EqualTo(event_id,tx_000001470137)], ReadSchema: struct<stream:string,event_id:string,occurred_ms:bigint>\n",
+      "time_range": "*(1) Filter ((occurred_at#74691 >= 2026-01-01 12:42:42.374) AND (occurred_at#74691 < 2026-01-02 12:42:42.374))\n+- *(1) ColumnarToRow\n   +- FileScan parquet [stream#74687,identity_namespace#74688,event_id#74689,observation_identity#74690,occurred_at#74691,occurred_ms#74692L,account_id#74693,currency#74694,amount_minor#74695L,card_id#74696,device_id#74697,merchant_id#74698,ip_id#74699,merchant_mcc#74700,merchant_country#74701,latitude#74702,longitude#74703,channel#74704,authorization_outcome#74705,verification#74706,correlation_id#74707,source_table#74708] Batched: true, DataFilters: [(occurred_at#74691 >= 2026-01-01 12:42:42.374), (occurred_at#74691 < 2026-01-02 12:42:42.374)], Format: Parquet, Location: PreparedDeltaFileIndex(1 paths)[file:/Users/bistboiiiii/Downloads/trace-x/data/bench/delta_layout..., PartitionFilters: [], PushedFilters: [GreaterThanOrEqual(occurred_at,2026-01-01 12:42:42.374), LessThan(occurred_at,2026-01-02 12:42:4..., ReadSchema: struct<stream:string,identity_namespace:string,event_id:string,observation_identity:string,occurr...\n"
+    },
+    "liquid": {
+      "account_history": "*(1) Filter (account_id#74515 = acct_019235)\n+- *(1) ColumnarToRow\n   +- FileScan parquet [stream#74509,identity_namespace#74510,event_id#74511,observation_identity#74512,occurred_at#74513,occurred_ms#74514L,account_id#74515,currency#74516,amount_minor#74517L,card_id#74518,device_id#74519,merchant_id#74520,ip_id#74521,merchant_mcc#74522,merchant_country#74523,latitude#74524,longitude#74525,channel#74526,authorization_outcome#74527,verification#74528,correlation_id#74529,source_table#74530] Batched: true, DataFilters: [(account_id#74515 = acct_019235)], Format: Parquet, Location: PreparedDeltaFileIndex(1 paths)[file:/Users/bistboiiiii/Downloads/trace-x/data/bench/delta_layout..., PartitionFilters: [], PushedFilters: [EqualTo(account_id,acct_019235)], ReadSchema: struct<stream:string,identity_namespace:string,event_id:string,observation_identity:string,occurr...\n",
+      "context_extract": "*(1) Project [event_id#73975, occurred_ms#73978L]\n+- *(1) Filter (stream#73973 = TRANSACTION)\n   +- *(1) ColumnarToRow\n      +- FileScan parquet [stream#73973,event_id#73975,occurred_ms#73978L] Batched: true, DataFilters: [(stream#73973 = TRANSACTION)], Format: Parquet, Location: PreparedDeltaFileIndex(1 paths)[file:/Users/bistboiiiii/Downloads/trace-x/data/bench/delta_layout..., PartitionFilters: [], PushedFilters: [EqualTo(stream,TRANSACTION)], ReadSchema: struct<stream:string,event_id:string,occurred_ms:bigint>\n",
+      "context_lookup": "*(1) Project [event_id#73436, occurred_ms#73439L]\n+- *(1) Filter ((stream#73434 = TRANSACTION) AND (event_id#73436 = tx_000001470137))\n   +- *(1) ColumnarToRow\n      +- FileScan parquet [stream#73434,event_id#73436,occurred_ms#73439L] Batched: true, DataFilters: [(stream#73434 = TRANSACTION), (event_id#73436 = tx_000001470137)], Format: Parquet, Location: PreparedDeltaFileIndex(1 paths)[file:/Users/bistboiiiii/Downloads/trace-x/data/bench/delta_layout..., PartitionFilters: [], PushedFilters: [EqualTo(stream,TRANSACTION), EqualTo(event_id,tx_000001470137)], ReadSchema: struct<stream:string,event_id:string,occurred_ms:bigint>\n",
+      "time_range": "*(1) Filter ((occurred_at#75199 >= 2026-01-01 12:42:42.374) AND (occurred_at#75199 < 2026-01-02 12:42:42.374))\n+- *(1) ColumnarToRow\n   +- FileScan parquet [stream#75195,identity_namespace#75196,event_id#75197,observation_identity#75198,occurred_at#75199,occurred_ms#75200L,account_id#75201,currency#75202,amount_minor#75203L,card_id#75204,device_id#75205,merchant_id#75206,ip_id#75207,merchant_mcc#75208,merchant_country#75209,latitude#75210,longitude#75211,channel#75212,authorization_outcome#75213,verification#75214,correlation_id#75215,source_table#75216] Batched: true, DataFilters: [(occurred_at#75199 >= 2026-01-01 12:42:42.374), (occurred_at#75199 < 2026-01-02 12:42:42.374)], Format: Parquet, Location: PreparedDeltaFileIndex(1 paths)[file:/Users/bistboiiiii/Downloads/trace-x/data/bench/delta_layout..., PartitionFilters: [], PushedFilters: [GreaterThanOrEqual(occurred_at,2026-01-01 12:42:42.374), LessThan(occurred_at,2026-01-02 12:42:4..., ReadSchema: struct<stream:string,identity_namespace:string,event_id:string,observation_identity:string,occurr...\n"
+    },
+    "partitioned_date": {
+      "account_history": "*(1) Project [stream#74240, identity_namespace#74241, event_id#74242, observation_identity#74243, occurred_at#74244, occurred_ms#74245L, account_id#74246, currency#74247, amount_minor#74248L, card_id#74249, device_id#74250, merchant_id#74251, ip_id#74252, merchant_mcc#74253, merchant_country#74254, latitude#74255, longitude#74256, channel#74257, authorization_outcome#74258, verification#74259, correlation_id#74260, source_table#74261]\n+- *(1) Filter (account_id#74246 = acct_019235)\n   +- *(1) ColumnarToRow\n      +- FileScan parquet [stream#74240,identity_namespace#74241,event_id#74242,observation_identity#74243,occurred_at#74244,occurred_ms#74245L,account_id#74246,currency#74247,amount_minor#74248L,card_id#74249,device_id#74250,merchant_id#74251,ip_id#74252,merchant_mcc#74253,merchant_country#74254,latitude#74255,longitude#74256,channel#74257,authorization_outcome#74258,verification#74259,correlation_id#74260,source_table#74261,event_date#74262] Batched: true, DataFilters: [(account_id#74246 = acct_019235)], Format: Parquet, Location: PreparedDeltaFileIndex(1 paths)[file:/Users/bistboiiiii/Downloads/trace-x/data/bench/delta_layout..., PartitionFilters: [], PushedFilters: [EqualTo(account_id,acct_019235)], ReadSchema: struct<stream:string,identity_namespace:string,event_id:string,observation_identity:string,occurr...\n",
+      "context_extract": "*(1) Project [event_id#73703, occurred_ms#73706L]\n+- *(1) Filter (stream#73701 = TRANSACTION)\n   +- *(1) ColumnarToRow\n      +- FileScan parquet [stream#73701,event_id#73703,occurred_ms#73706L,event_date#73723] Batched: true, DataFilters: [(stream#73701 = TRANSACTION)], Format: Parquet, Location: PreparedDeltaFileIndex(1 paths)[file:/Users/bistboiiiii/Downloads/trace-x/data/bench/delta_layout..., PartitionFilters: [], PushedFilters: [EqualTo(stream,TRANSACTION)], ReadSchema: struct<stream:string,event_id:string,occurred_ms:bigint>\n",
+      "context_lookup": "*(1) Project [event_id#73166, occurred_ms#73169L]\n+- *(1) Filter ((stream#73164 = TRANSACTION) AND (event_id#73166 = tx_000001470137))\n   +- *(1) ColumnarToRow\n      +- FileScan parquet [stream#73164,event_id#73166,occurred_ms#73169L,event_date#73186] Batched: true, DataFilters: [(stream#73164 = TRANSACTION), (event_id#73166 = tx_000001470137)], Format: Parquet, Location: PreparedDeltaFileIndex(1 paths)[file:/Users/bistboiiiii/Downloads/trace-x/data/bench/delta_layout..., PartitionFilters: [], PushedFilters: [EqualTo(stream,TRANSACTION), EqualTo(event_id,tx_000001470137)], ReadSchema: struct<stream:string,event_id:string,occurred_ms:bigint>\n",
+      "time_range": "*(1) Project [stream#74776, identity_namespace#74777, event_id#74778, observation_identity#74779, occurred_at#74780, occurred_ms#74781L, account_id#74782, currency#74783, amount_minor#74784L, card_id#74785, device_id#74786, merchant_id#74787, ip_id#74788, merchant_mcc#74789, merchant_country#74790, latitude#74791, longitude#74792, channel#74793, authorization_outcome#74794, verification#74795, correlation_id#74796, source_table#74797]\n+- *(1) Filter ((occurred_at#74780 >= 2026-01-01 12:42:42.374) AND (occurred_at#74780 < 2026-01-02 12:42:42.374))\n   +- *(1) ColumnarToRow\n      +- FileScan parquet [stream#74776,identity_namespace#74777,event_id#74778,observation_identity#74779,occurred_at#74780,occurred_ms#74781L,account_id#74782,currency#74783,amount_minor#74784L,card_id#74785,device_id#74786,merchant_id#74787,ip_id#74788,merchant_mcc#74789,merchant_country#74790,latitude#74791,longitude#74792,channel#74793,authorization_outcome#74794,verification#74795,correlation_id#74796,source_table#74797,event_date#74798] Batched: true, DataFilters: [(occurred_at#74780 >= 2026-01-01 12:42:42.374), (occurred_at#74780 < 2026-01-02 12:42:42.374)], Format: Parquet, Location: PreparedDeltaFileIndex(1 paths)[file:/Users/bistboiiiii/Downloads/trace-x/data/bench/delta_layout..., PartitionFilters: [((event_date#74798 >= 2026-01-01) OR isnull((event_date#74798 >= 2026-01-01))), ((event_date#747..., PushedFilters: [GreaterThanOrEqual(occurred_at,2026-01-01 12:42:42.374), LessThan(occurred_at,2026-01-02 12:42:4..., ReadSchema: struct<stream:string,identity_namespace:string,event_id:string,observation_identity:string,occurr...\n"
+    },
+    "partitioned_date_zorder": {
+      "account_history": "*(1) Project [stream#74330, identity_namespace#74331, event_id#74332, observation_identity#74333, occurred_at#74334, occurred_ms#74335L, account_id#74336, currency#74337, amount_minor#74338L, card_id#74339, device_id#74340, merchant_id#74341, ip_id#74342, merchant_mcc#74343, merchant_country#74344, latitude#74345, longitude#74346, channel#74347, authorization_outcome#74348, verification#74349, correlation_id#74350, source_table#74351]\n+- *(1) Filter (account_id#74336 = acct_019235)\n   +- *(1) ColumnarToRow\n      +- FileScan parquet [stream#74330,identity_namespace#74331,event_id#74332,observation_identity#74333,occurred_at#74334,occurred_ms#74335L,account_id#74336,currency#74337,amount_minor#74338L,card_id#74339,device_id#74340,merchant_id#74341,ip_id#74342,merchant_mcc#74343,merchant_country#74344,latitude#74345,longitude#74346,channel#74347,authorization_outcome#74348,verification#74349,correlation_id#74350,source_table#74351,event_date#74352] Batched: true, DataFilters: [(account_id#74336 = acct_019235)], Format: Parquet, Location: PreparedDeltaFileIndex(1 paths)[file:/Users/bistboiiiii/Downloads/trace-x/data/bench/delta_layout..., PartitionFilters: [], PushedFilters: [EqualTo(account_id,acct_019235)], ReadSchema: struct<stream:string,identity_namespace:string,event_id:string,observation_identity:string,occurr...\n",
+      "context_extract": "*(1) Project [event_id#73793, occurred_ms#73796L]\n+- *(1) Filter (stream#73791 = TRANSACTION)\n   +- *(1) ColumnarToRow\n      +- FileScan parquet [stream#73791,event_id#73793,occurred_ms#73796L,event_date#73813] Batched: true, DataFilters: [(stream#73791 = TRANSACTION)], Format: Parquet, Location: PreparedDeltaFileIndex(1 paths)[file:/Users/bistboiiiii/Downloads/trace-x/data/bench/delta_layout..., PartitionFilters: [], PushedFilters: [EqualTo(stream,TRANSACTION)], ReadSchema: struct<stream:string,event_id:string,occurred_ms:bigint>\n",
+      "context_lookup": "*(1) Project [event_id#73256, occurred_ms#73259L]\n+- *(1) Filter ((stream#73254 = TRANSACTION) AND (event_id#73256 = tx_000001470137))\n   +- *(1) ColumnarToRow\n      +- FileScan parquet [stream#73254,event_id#73256,occurred_ms#73259L,event_date#73276] Batched: true, DataFilters: [(stream#73254 = TRANSACTION), (event_id#73256 = tx_000001470137)], Format: Parquet, Location: PreparedDeltaFileIndex(1 paths)[file:/Users/bistboiiiii/Downloads/trace-x/data/bench/delta_layout..., PartitionFilters: [], PushedFilters: [EqualTo(stream,TRANSACTION), EqualTo(event_id,tx_000001470137)], ReadSchema: struct<stream:string,event_id:string,occurred_ms:bigint>\n",
+      "time_range": "*(1) Project [stream#74941, identity_namespace#74942, event_id#74943, observation_identity#74944, occurred_at#74945, occurred_ms#74946L, account_id#74947, currency#74948, amount_minor#74949L, card_id#74950, device_id#74951, merchant_id#74952, ip_id#74953, merchant_mcc#74954, merchant_country#74955, latitude#74956, longitude#74957, channel#74958, authorization_outcome#74959, verification#74960, correlation_id#74961, source_table#74962]\n+- *(1) Filter ((occurred_at#74945 >= 2026-01-01 12:42:42.374) AND (occurred_at#74945 < 2026-01-02 12:42:42.374))\n   +- *(1) ColumnarToRow\n      +- FileScan parquet [stream#74941,identity_namespace#74942,event_id#74943,observation_identity#74944,occurred_at#74945,occurred_ms#74946L,account_id#74947,currency#74948,amount_minor#74949L,card_id#74950,device_id#74951,merchant_id#74952,ip_id#74953,merchant_mcc#74954,merchant_country#74955,latitude#74956,longitude#74957,channel#74958,authorization_outcome#74959,verification#74960,correlation_id#74961,source_table#74962,event_date#74963] Batched: true, DataFilters: [(occurred_at#74945 >= 2026-01-01 12:42:42.374), (occurred_at#74945 < 2026-01-02 12:42:42.374)], Format: Parquet, Location: PreparedDeltaFileIndex(1 paths)[file:/Users/bistboiiiii/Downloads/trace-x/data/bench/delta_layout..., PartitionFilters: [((event_date#74963 >= 2026-01-01) OR isnull((event_date#74963 >= 2026-01-01))), ((event_date#749..., PushedFilters: [GreaterThanOrEqual(occurred_at,2026-01-01 12:42:42.374), LessThan(occurred_at,2026-01-02 12:42:4..., ReadSchema: struct<stream:string,identity_namespace:string,event_id:string,observation_identity:string,occurr...\n"
+    },
+    "partitioned_stream": {
+      "account_history": "*(1) Project [stream#74420, identity_namespace#74421, event_id#74422, observation_identity#74423, occurred_at#74424, occurred_ms#74425L, account_id#74426, currency#74427, amount_minor#74428L, card_id#74429, device_id#74430, merchant_id#74431, ip_id#74432, merchant_mcc#74433, merchant_country#74434, latitude#74435, longitude#74436, channel#74437, authorization_outcome#74438, verification#74439, correlation_id#74440, source_table#74441]\n+- *(1) Filter (account_id#74426 = acct_019235)\n   +- *(1) ColumnarToRow\n      +- FileScan parquet [identity_namespace#74421,event_id#74422,observation_identity#74423,occurred_at#74424,occurred_ms#74425L,account_id#74426,currency#74427,amount_minor#74428L,card_id#74429,device_id#74430,merchant_id#74431,ip_id#74432,merchant_mcc#74433,merchant_country#74434,latitude#74435,longitude#74436,channel#74437,authorization_outcome#74438,verification#74439,correlation_id#74440,source_table#74441,stream#74420] Batched: true, DataFilters: [(account_id#74426 = acct_019235)], Format: Parquet, Location: PreparedDeltaFileIndex(1 paths)[file:/Users/bistboiiiii/Downloads/trace-x/data/bench/delta_layout..., PartitionFilters: [], PushedFilters: [EqualTo(account_id,acct_019235)], ReadSchema: struct<identity_namespace:string,event_id:string,observation_identity:string,occurred_at:timestam...\n",
+      "context_extract": "*(1) Project [event_id#73883, occurred_ms#73886L]\n+- *(1) ColumnarToRow\n   +- FileScan parquet [event_id#73883,occurred_ms#73886L,stream#73881] Batched: true, DataFilters: [], Format: Parquet, Location: PreparedDeltaFileIndex(1 paths)[file:/Users/bistboiiiii/Downloads/trace-x/data/bench/delta_layout..., PartitionFilters: [(stream#73881 = TRANSACTION)], PushedFilters: [], ReadSchema: struct<event_id:string,occurred_ms:bigint>\n",
+      "context_lookup": "*(1) Project [event_id#73346, occurred_ms#73349L]\n+- *(1) Filter (event_id#73346 = tx_000001470137)\n   +- *(1) ColumnarToRow\n      +- FileScan parquet [event_id#73346,occurred_ms#73349L,stream#73344] Batched: true, DataFilters: [(event_id#73346 = tx_000001470137)], Format: Parquet, Location: PreparedDeltaFileIndex(1 paths)[file:/Users/bistboiiiii/Downloads/trace-x/data/bench/delta_layout..., PartitionFilters: [(stream#73344 = TRANSACTION)], PushedFilters: [EqualTo(event_id,tx_000001470137)], ReadSchema: struct<event_id:string,occurred_ms:bigint>\n",
+      "time_range": "*(1) Project [stream#75106, identity_namespace#75107, event_id#75108, observation_identity#75109, occurred_at#75110, occurred_ms#75111L, account_id#75112, currency#75113, amount_minor#75114L, card_id#75115, device_id#75116, merchant_id#75117, ip_id#75118, merchant_mcc#75119, merchant_country#75120, latitude#75121, longitude#75122, channel#75123, authorization_outcome#75124, verification#75125, correlation_id#75126, source_table#75127]\n+- *(1) Filter ((occurred_at#75110 >= 2026-01-01 12:42:42.374) AND (occurred_at#75110 < 2026-01-02 12:42:42.374))\n   +- *(1) ColumnarToRow\n      +- FileScan parquet [identity_namespace#75107,event_id#75108,observation_identity#75109,occurred_at#75110,occurred_ms#75111L,account_id#75112,currency#75113,amount_minor#75114L,card_id#75115,device_id#75116,merchant_id#75117,ip_id#75118,merchant_mcc#75119,merchant_country#75120,latitude#75121,longitude#75122,channel#75123,authorization_outcome#75124,verification#75125,correlation_id#75126,source_table#75127,stream#75106] Batched: true, DataFilters: [(occurred_at#75110 >= 2026-01-01 12:42:42.374), (occurred_at#75110 < 2026-01-02 12:42:42.374)], Format: Parquet, Location: PreparedDeltaFileIndex(1 paths)[file:/Users/bistboiiiii/Downloads/trace-x/data/bench/delta_layout..., PartitionFilters: [], PushedFilters: [GreaterThanOrEqual(occurred_at,2026-01-01 12:42:42.374), LessThan(occurred_at,2026-01-02 12:42:4..., ReadSchema: struct<identity_namespace:string,event_id:string,observation_identity:string,occurred_at:timestam...\n"
+    }
+  },
+  "publishable": true,
+  "run_id": "bench-20260918-135350-delta-layout-36816cc7",
+  "runs": [
+    {
+      "input_bytes": 9915090,
+      "input_records": 540000,
+      "rep": 0,
+      "rows": 1,
+      "scan_output_rows": 540000,
+      "scans": 1,
+      "selected_bytes": 674611410,
+      "selected_files": 8,
+      "shape": "context_lookup",
+      "variant": "control",
+      "wall_s": 0.33173520799027756
+    },
+    {
+      "input_bytes": 9915090,
+      "input_records": 540000,
+      "rep": 0,
+      "rows": 1,
+      "scan_output_rows": 540000,
+      "scans": 1,
+      "selected_bytes": 674611410,
+      "selected_files": 8,
+      "shape": "context_lookup",
+      "variant": "control_compacted",
+      "wall_s": 0.24684891701326706
+    },
+    {
+      "input_bytes": 32267068,
+      "input_records": 840000,
+      "rep": 0,
+      "rows": 1,
+      "scan_output_rows": 840000,
+      "scans": 1,
+      "selected_bytes": 478269869,
+      "selected_files": 42,
+      "shape": "context_lookup",
+      "variant": "partitioned_date",
+      "wall_s": 0.28502033301629126
+    },
+    {
+      "input_bytes": 32267068,
+      "input_records": 840000,
+      "rep": 0,
+      "rows": 1,
+      "scan_output_rows": 840000,
+      "scans": 1,
+      "selected_bytes": 478269869,
+      "selected_files": 42,
+      "shape": "context_lookup",
+      "variant": "partitioned_date_zorder",
+      "wall_s": 0.30821458299760707
+    },
+    {
+      "input_bytes": 23467788,
+      "input_records": 2240000,
+      "rep": 0,
+      "rows": 1,
+      "scan_output_rows": 2240000,
+      "scans": 1,
+      "selected_bytes": 462188184,
+      "selected_files": 1,
+      "shape": "context_lookup",
+      "variant": "partitioned_stream",
+      "wall_s": 0.30226862500421703
+    },
+    {
+      "input_bytes": 21697075,
+      "input_records": 1460000,
+      "rep": 0,
+      "rows": 1,
+      "scan_output_rows": 1460000,
+      "scans": 1,
+      "selected_bytes": 692958281,
+      "selected_files": 5,
+      "shape": "context_lookup",
+      "variant": "liquid",
+      "wall_s": 0.24844608298735693
+    },
+    {
+      "input_bytes": 79661778,
+      "input_records": 9420000,
+      "rep": 0,
+      "rows": 4700000,
+      "scan_output_rows": 9420000,
+      "scans": 1,
+      "selected_bytes": 674611410,
+      "selected_files": 8,
+      "shape": "context_extract",
+      "variant": "control",
+      "wall_s": 0.4530472500191536
+    },
+    {
+      "input_bytes": 79661778,
+      "input_records": 9420000,
+      "rep": 0,
+      "rows": 4700000,
+      "scan_output_rows": 9420000,
+      "scans": 1,
+      "selected_bytes": 674611410,
+      "selected_files": 8,
+      "shape": "context_extract",
+      "variant": "control_compacted",
+      "wall_s": 0.4630687909957487
+    },
+    {
+      "input_bytes": 113430144,
+      "input_records": 9999999,
+      "rep": 0,
+      "rows": 4700000,
+      "scan_output_rows": 9999999,
+      "scans": 1,
+      "selected_bytes": 683538599,
+      "selected_files": 60,
+      "shape": "context_extract",
+      "variant": "partitioned_date",
+      "wall_s": 0.48959362498135306
+    },
+    {
+      "input_bytes": 113430144,
+      "input_records": 9999999,
+      "rep": 0,
+      "rows": 4700000,
+      "scan_output_rows": 9999999,
+      "scans": 1,
+      "selected_bytes": 683538599,
+      "selected_files": 60,
+      "shape": "context_extract",
+      "variant": "partitioned_date_zorder",
+      "wall_s": 0.43007508301525377
+    },
+    {
+      "input_bytes": 46124688,
+      "input_records": 4700000,
+      "rep": 0,
+      "rows": 4700000,
+      "scan_output_rows": 4700000,
+      "scans": 1,
+      "selected_bytes": 462188184,
+      "selected_files": 1,
+      "shape": "context_extract",
+      "variant": "partitioned_stream",
+      "wall_s": 0.3390224580070935
+    },
+    {
+      "input_bytes": 83545523,
+      "input_records": 9460000,
+      "rep": 0,
+      "rows": 4700000,
+      "scan_output_rows": 9460000,
+      "scans": 1,
+      "selected_bytes": 692958281,
+      "selected_files": 5,
+      "shape": "context_extract",
+      "variant": "liquid",
+      "wall_s": 0.45260200000484474
+    },
+    {
+      "input_bytes": 680452258,
+      "input_records": 10000000,
+      "rep": 0,
+      "rows": 67,
+      "scan_output_rows": 10000000,
+      "scans": 1,
+      "selected_bytes": 674611410,
+      "selected_files": 8,
+      "shape": "account_history",
+      "variant": "control",
+      "wall_s": 1.313368333998369
+    },
+    {
+      "input_bytes": 680452258,
+      "input_records": 10000000,
+      "rep": 0,
+      "rows": 67,
+      "scan_output_rows": 10000000,
+      "scans": 1,
+      "selected_bytes": 674611410,
+      "selected_files": 8,
+      "shape": "account_history",
+      "variant": "control_compacted",
+      "wall_s": 1.353645333001623
+    },
+    {
+      "input_bytes": 335263865,
+      "input_records": 4500005,
+      "rep": 0,
+      "rows": 67,
+      "scan_output_rows": 4500005,
+      "scans": 1,
+      "selected_bytes": 683538599,
+      "selected_files": 60,
+      "shape": "account_history",
+      "variant": "partitioned_date",
+      "wall_s": 0.9442749999871012
+    },
+    {
+      "input_bytes": 335263865,
+      "input_records": 4500005,
+      "rep": 0,
+      "rows": 67,
+      "scan_output_rows": 4500005,
+      "scans": 1,
+      "selected_bytes": 683538599,
+      "selected_files": 60,
+      "shape": "account_history",
+      "variant": "partitioned_date_zorder",
+      "wall_s": 0.8778560420032591
+    },
+    {
+      "input_bytes": 830756731,
+      "input_records": 10000000,
+      "rep": 0,
+      "rows": 67,
+      "scan_output_rows": 10000000,
+      "scans": 1,
+      "selected_bytes": 823605867,
+      "selected_files": 4,
+      "shape": "account_history",
+      "variant": "partitioned_stream",
+      "wall_s": 1.2671077080012765
+    },
+    {
+      "input_bytes": 309723093,
+      "input_records": 4308290,
+      "rep": 0,
+      "rows": 67,
+      "scan_output_rows": 4308290,
+      "scans": 1,
+      "selected_bytes": 392384113,
+      "selected_files": 3,
+      "shape": "account_history",
+      "variant": "liquid",
+      "wall_s": 0.9991653750184923
+    },
+    {
+      "input_bytes": 280974872,
+      "input_records": 3750000,
+      "rep": 0,
+      "rows": 166669,
+      "scan_output_rows": 3750000,
+      "scans": 1,
+      "selected_bytes": 278808181,
+      "selected_files": 3,
+      "shape": "time_range",
+      "variant": "control",
+      "wall_s": 0.7951544579991605
+    },
+    {
+      "input_bytes": 280974872,
+      "input_records": 3750000,
+      "rep": 0,
+      "rows": 166669,
+      "scan_output_rows": 3750000,
+      "scans": 1,
+      "selected_bytes": 278808181,
+      "selected_files": 3,
+      "shape": "time_range",
+      "variant": "control_compacted",
+      "wall_s": 0.6871808329888154
+    },
+    {
+      "input_bytes": 22990708,
+      "input_records": 333332,
+      "rep": 0,
+      "rows": 166669,
+      "scan_output_rows": 333332,
+      "scans": 1,
+      "selected_bytes": 22764744,
+      "selected_files": 2,
+      "shape": "time_range",
+      "variant": "partitioned_date",
+      "wall_s": 0.4957741250109393
+    },
+    {
+      "input_bytes": 22990708,
+      "input_records": 333332,
+      "rep": 0,
+      "rows": 166669,
+      "scan_output_rows": 333332,
+      "scans": 1,
+      "selected_bytes": 22764744,
+      "selected_files": 2,
+      "shape": "time_range",
+      "variant": "partitioned_date_zorder",
+      "wall_s": 0.5314950829779264
+    },
+    {
+      "input_bytes": 829879973,
+      "input_records": 10000000,
+      "rep": 0,
+      "rows": 166669,
+      "scan_output_rows": 10000000,
+      "scans": 1,
+      "selected_bytes": 823605867,
+      "selected_files": 4,
+      "shape": "time_range",
+      "variant": "partitioned_stream",
+      "wall_s": 1.255429874989204
+    },
+    {
+      "input_bytes": 287979396,
+      "input_records": 4129709,
+      "rep": 0,
+      "rows": 166669,
+      "scan_output_rows": 4129709,
+      "scans": 1,
+      "selected_bytes": 285820441,
+      "selected_files": 2,
+      "shape": "time_range",
+      "variant": "liquid",
+      "wall_s": 0.9367665839963593
+    },
+    {
+      "input_bytes": 9521874,
+      "input_records": 520000,
+      "rep": 1,
+      "rows": 1,
+      "scan_output_rows": 520000,
+      "scans": 1,
+      "selected_bytes": 674611410,
+      "selected_files": 8,
+      "shape": "context_lookup",
+      "variant": "control_compacted",
+      "wall_s": 0.2406714999815449
+    },
+    {
+      "input_bytes": 19975840,
+      "input_records": 520000,
+      "rep": 1,
+      "rows": 1,
+      "scan_output_rows": 520000,
+      "scans": 1,
+      "selected_bytes": 295991648,
+      "selected_files": 26,
+      "shape": "context_lookup",
+      "variant": "partitioned_date",
+      "wall_s": 0.3051811670011375
+    },
+    {
+      "input_bytes": 19975840,
+      "input_records": 520000,
+      "rep": 1,
+      "rows": 1,
+      "scan_output_rows": 520000,
+      "scans": 1,
+      "selected_bytes": 295991648,
+      "selected_files": 26,
+      "shape": "context_lookup",
+      "variant": "partitioned_date_zorder",
+      "wall_s": 0.268411874974845
+    },
+    {
+      "input_bytes": 27096844,
+      "input_records": 2592917,
+      "rep": 1,
+      "rows": 1,
+      "scan_output_rows": 2592917,
+      "scans": 1,
+      "selected_bytes": 462188184,
+      "selected_files": 1,
+      "shape": "context_lookup",
+      "variant": "partitioned_stream",
+      "wall_s": 0.28434074998949654
+    },
+    {
+      "input_bytes": 16132244,
+      "input_records": 1100000,
+      "rep": 1,
+      "rows": 1,
+      "scan_output_rows": 1100000,
+      "scans": 1,
+      "selected_bytes": 407137840,
+      "selected_files": 3,
+      "shape": "context_lookup",
+      "variant": "liquid",
+      "wall_s": 0.26553862501168624
+    },
+    {
+      "input_bytes": 9521874,
+      "input_records": 520000,
+      "rep": 1,
+      "rows": 1,
+      "scan_output_rows": 520000,
+      "scans": 1,
+      "selected_bytes": 674611410,
+      "selected_files": 8,
+      "shape": "context_lookup",
+      "variant": "control",
+      "wall_s": 0.2687500419851858
+    },
+    {
+      "input_bytes": 79661778,
+      "input_records": 9420000,
+      "rep": 1,
+      "rows": 4700000,
+      "scan_output_rows": 9420000,
+      "scans": 1,
+      "selected_bytes": 674611410,
+      "selected_files": 8,
+      "shape": "context_extract",
+      "variant": "control_compacted",
+      "wall_s": 0.4426608329813462
+    },
+    {
+      "input_bytes": 113430144,
+      "input_records": 9999999,
+      "rep": 1,
+      "rows": 4700000,
+      "scan_output_rows": 9999999,
+      "scans": 1,
+      "selected_bytes": 683538599,
+      "selected_files": 60,
+      "shape": "context_extract",
+      "variant": "partitioned_date",
+      "wall_s": 0.4686946250149049
+    },
+    {
+      "input_bytes": 113430144,
+      "input_records": 9999999,
+      "rep": 1,
+      "rows": 4700000,
+      "scan_output_rows": 9999999,
+      "scans": 1,
+      "selected_bytes": 683538599,
+      "selected_files": 60,
+      "shape": "context_extract",
+      "variant": "partitioned_date_zorder",
+      "wall_s": 0.49459158300305717
+    },
+    {
+      "input_bytes": 46124688,
+      "input_records": 4700000,
+      "rep": 1,
+      "rows": 4700000,
+      "scan_output_rows": 4700000,
+      "scans": 1,
+      "selected_bytes": 462188184,
+      "selected_files": 1,
+      "shape": "context_extract",
+      "variant": "partitioned_stream",
+      "wall_s": 0.32543679198715836
+    },
+    {
+      "input_bytes": 83545523,
+      "input_records": 9460000,
+      "rep": 1,
+      "rows": 4700000,
+      "scan_output_rows": 9460000,
+      "scans": 1,
+      "selected_bytes": 692958281,
+      "selected_files": 5,
+      "shape": "context_extract",
+      "variant": "liquid",
+      "wall_s": 0.4759385420184117
+    },
+    {
+      "input_bytes": 79661778,
+      "input_records": 9420000,
+      "rep": 1,
+      "rows": 4700000,
+      "scan_output_rows": 9420000,
+      "scans": 1,
+      "selected_bytes": 674611410,
+      "selected_files": 8,
+      "shape": "context_extract",
+      "variant": "control",
+      "wall_s": 0.45752233400708064
+    },
+    {
+      "input_bytes": 680452258,
+      "input_records": 10000000,
+      "rep": 1,
+      "rows": 85,
+      "scan_output_rows": 10000000,
+      "scans": 1,
+      "selected_bytes": 674611410,
+      "selected_files": 8,
+      "shape": "account_history",
+      "variant": "control_compacted",
+      "wall_s": 1.2100046669947915
+    },
+    {
+      "input_bytes": 404397565,
+      "input_records": 5500006,
+      "rep": 1,
+      "rows": 85,
+      "scan_output_rows": 5500006,
+      "scans": 1,
+      "selected_bytes": 683538599,
+      "selected_files": 60,
+      "shape": "account_history",
+      "variant": "partitioned_date",
+      "wall_s": 0.9325792499876115
+    },
+    {
+      "input_bytes": 404397565,
+      "input_records": 5500006,
+      "rep": 1,
+      "rows": 85,
+      "scan_output_rows": 5500006,
+      "scans": 1,
+      "selected_bytes": 683538599,
+      "selected_files": 60,
+      "shape": "account_history",
+      "variant": "partitioned_date_zorder",
+      "wall_s": 0.9371552499942482
+    },
+    {
+      "input_bytes": 830756731,
+      "input_records": 10000000,
+      "rep": 1,
+      "rows": 85,
+      "scan_output_rows": 10000000,
+      "scans": 1,
+      "selected_bytes": 823605867,
+      "selected_files": 4,
+      "shape": "account_history",
+      "variant": "partitioned_stream",
+      "wall_s": 1.2302290410152636
+    },
+    {
+      "input_bytes": 246107423,
+      "input_records": 3558689,
+      "rep": 1,
+      "rows": 85,
+      "scan_output_rows": 3558689,
+      "scans": 1,
+      "selected_bytes": 262191019,
+      "selected_files": 2,
+      "shape": "account_history",
+      "variant": "liquid",
+      "wall_s": 0.9098516670055687
+    },
+    {
+      "input_bytes": 680452258,
+      "input_records": 10000000,
+      "rep": 1,
+      "rows": 85,
+      "scan_output_rows": 10000000,
+      "scans": 1,
+      "selected_bytes": 674611410,
+      "selected_files": 8,
+      "shape": "account_history",
+      "variant": "control",
+      "wall_s": 1.1797889169829432
+    },
+    {
+      "input_bytes": 679715024,
+      "input_records": 10000000,
+      "rep": 1,
+      "rows": 166668,
+      "scan_output_rows": 10000000,
+      "scans": 1,
+      "selected_bytes": 674611410,
+      "selected_files": 8,
+      "shape": "time_range",
+      "variant": "control_compacted",
+      "wall_s": 1.2653047500061803
+    },
+    {
+      "input_bytes": 23054989,
+      "input_records": 333332,
+      "rep": 1,
+      "rows": 166668,
+      "scan_output_rows": 333332,
+      "scans": 1,
+      "selected_bytes": 22828081,
+      "selected_files": 2,
+      "shape": "time_range",
+      "variant": "partitioned_date",
+      "wall_s": 0.5573473749973346
+    },
+    {
+      "input_bytes": 23054989,
+      "input_records": 333332,
+      "rep": 1,
+      "rows": 166668,
+      "scan_output_rows": 333332,
+      "scans": 1,
+      "selected_bytes": 22828081,
+      "selected_files": 2,
+      "shape": "time_range",
+      "variant": "partitioned_date_zorder",
+      "wall_s": 0.506647083995631
+    },
+    {
+      "input_bytes": 829879973,
+      "input_records": 10000000,
+      "rep": 1,
+      "rows": 166668,
+      "scan_output_rows": 10000000,
+      "scans": 1,
+      "selected_bytes": 823605867,
+      "selected_files": 4,
+      "shape": "time_range",
+      "variant": "partitioned_stream",
+      "wall_s": 1.070218874985585
+    },
+    {
+      "input_bytes": 410173984,
+      "input_records": 5870291,
+      "rep": 1,
+      "rows": 166668,
+      "scan_output_rows": 5870291,
+      "scans": 1,
+      "selected_bytes": 407137840,
+      "selected_files": 3,
+      "shape": "time_range",
+      "variant": "liquid",
+      "wall_s": 1.0420643749821465
+    },
+    {
+      "input_bytes": 679715024,
+      "input_records": 10000000,
+      "rep": 1,
+      "rows": 166668,
+      "scan_output_rows": 10000000,
+      "scans": 1,
+      "selected_bytes": 674611410,
+      "selected_files": 8,
+      "shape": "time_range",
+      "variant": "control",
+      "wall_s": 1.3681272919930052
+    },
+    {
+      "input_bytes": 43223672,
+      "input_records": 1140000,
+      "rep": 2,
+      "rows": 1,
+      "scan_output_rows": 1140000,
+      "scans": 1,
+      "selected_bytes": 637875353,
+      "selected_files": 56,
+      "shape": "context_lookup",
+      "variant": "partitioned_date",
+      "wall_s": 0.34521199998562224
+    },
+    {
+      "input_bytes": 43223672,
+      "input_records": 1140000,
+      "rep": 2,
+      "rows": 1,
+      "scan_output_rows": 1140000,
+      "scans": 1,
+      "selected_bytes": 637875353,
+      "selected_files": 56,
+      "shape": "context_lookup",
+      "variant": "partitioned_date_zorder",
+      "wall_s": 0.42307587500545196
+    },
+    {
+      "input_bytes": 9359916,
+      "input_records": 880000,
+      "rep": 2,
+      "rows": 1,
+      "scan_output_rows": 880000,
+      "scans": 1,
+      "selected_bytes": 462188184,
+      "selected_files": 1,
+      "shape": "context_lookup",
+      "variant": "partitioned_stream",
+      "wall_s": 0.26731241701054387
+    },
+    {
+      "input_bytes": 10940979,
+      "input_records": 580000,
+      "rep": 2,
+      "rows": 1,
+      "scan_output_rows": 580000,
+      "scans": 1,
+      "selected_bytes": 692958281,
+      "selected_files": 5,
+      "shape": "context_lookup",
+      "variant": "liquid",
+      "wall_s": 0.27959374999045394
+    },
+    {
+      "input_bytes": 6244528,
+      "input_records": 280000,
+      "rep": 2,
+      "rows": 1,
+      "scan_output_rows": 280000,
+      "scans": 1,
+      "selected_bytes": 500504380,
+      "selected_files": 6,
+      "shape": "context_lookup",
+      "variant": "control",
+      "wall_s": 0.25151924998499453
+    },
+    {
+      "input_bytes": 6244528,
+      "input_records": 280000,
+      "rep": 2,
+      "rows": 1,
+      "scan_output_rows": 280000,
+      "scans": 1,
+      "selected_bytes": 500504380,
+      "selected_files": 6,
+      "shape": "context_lookup",
+      "variant": "control_compacted",
+      "wall_s": 0.2623705829901155
+    },
+    {
+      "input_bytes": 113430144,
+      "input_records": 9999999,
+      "rep": 2,
+      "rows": 4700000,
+      "scan_output_rows": 9999999,
+      "scans": 1,
+      "selected_bytes": 683538599,
+      "selected_files": 60,
+      "shape": "context_extract",
+      "variant": "partitioned_date",
+      "wall_s": 0.46369170799152926
+    },
+    {
+      "input_bytes": 113430144,
+      "input_records": 9999999,
+      "rep": 2,
+      "rows": 4700000,
+      "scan_output_rows": 9999999,
+      "scans": 1,
+      "selected_bytes": 683538599,
+      "selected_files": 60,
+      "shape": "context_extract",
+      "variant": "partitioned_date_zorder",
+      "wall_s": 0.47874554101144895
+    },
+    {
+      "input_bytes": 46124688,
+      "input_records": 4700000,
+      "rep": 2,
+      "rows": 4700000,
+      "scan_output_rows": 4700000,
+      "scans": 1,
+      "selected_bytes": 462188184,
+      "selected_files": 1,
+      "shape": "context_extract",
+      "variant": "partitioned_stream",
+      "wall_s": 0.31234445798327215
+    },
+    {
+      "input_bytes": 83545523,
+      "input_records": 9460000,
+      "rep": 2,
+      "rows": 4700000,
+      "scan_output_rows": 9460000,
+      "scans": 1,
+      "selected_bytes": 692958281,
+      "selected_files": 5,
+      "shape": "context_extract",
+      "variant": "liquid",
+      "wall_s": 0.5107928329962306
+    },
+    {
+      "input_bytes": 79661778,
+      "input_records": 9420000,
+      "rep": 2,
+      "rows": 4700000,
+      "scan_output_rows": 9420000,
+      "scans": 1,
+      "selected_bytes": 674611410,
+      "selected_files": 8,
+      "shape": "context_extract",
+      "variant": "control",
+      "wall_s": 0.4338371659978293
+    },
+    {
+      "input_bytes": 79661778,
+      "input_records": 9420000,
+      "rep": 2,
+      "rows": 4700000,
+      "scan_output_rows": 9420000,
+      "scans": 1,
+      "selected_bytes": 674611410,
+      "selected_files": 8,
+      "shape": "context_extract",
+      "variant": "control_compacted",
+      "wall_s": 0.4853690000018105
+    },
+    {
+      "input_bytes": 449966742,
+      "input_records": 6166659,
+      "rep": 2,
+      "rows": 92,
+      "scan_output_rows": 6166659,
+      "scans": 1,
+      "selected_bytes": 683538599,
+      "selected_files": 60,
+      "shape": "account_history",
+      "variant": "partitioned_date",
+      "wall_s": 0.9655072090099566
+    },
+    {
+      "input_bytes": 449966742,
+      "input_records": 6166659,
+      "rep": 2,
+      "rows": 92,
+      "scan_output_rows": 6166659,
+      "scans": 1,
+      "selected_bytes": 683538599,
+      "selected_files": 60,
+      "shape": "account_history",
+      "variant": "partitioned_date_zorder",
+      "wall_s": 0.9976494169968646
+    },
+    {
+      "input_bytes": 830756731,
+      "input_records": 10000000,
+      "rep": 2,
+      "rows": 92,
+      "scan_output_rows": 10000000,
+      "scans": 1,
+      "selected_bytes": 823605867,
+      "selected_files": 4,
+      "shape": "account_history",
+      "variant": "partitioned_stream",
+      "wall_s": 1.167623083019862
+    },
+    {
+      "input_bytes": 309723093,
+      "input_records": 4308290,
+      "rep": 2,
+      "rows": 92,
+      "scan_output_rows": 4308290,
+      "scans": 1,
+      "selected_bytes": 392384113,
+      "selected_files": 3,
+      "shape": "account_history",
+      "variant": "liquid",
+      "wall_s": 1.0729250000149477
+    },
+    {
+      "input_bytes": 680452258,
+      "input_records": 10000000,
+      "rep": 2,
+      "rows": 92,
+      "scan_output_rows": 10000000,
+      "scans": 1,
+      "selected_bytes": 674611410,
+      "selected_files": 8,
+      "shape": "account_history",
+      "variant": "control",
+      "wall_s": 1.1191386659920681
+    },
+    {
+      "input_bytes": 680452258,
+      "input_records": 10000000,
+      "rep": 2,
+      "rows": 92,
+      "scan_output_rows": 10000000,
+      "scans": 1,
+      "selected_bytes": 674611410,
+      "selected_files": 8,
+      "shape": "account_history",
+      "variant": "control_compacted",
+      "wall_s": 1.1484282499877736
+    },
+    {
+      "input_bytes": 23129445,
+      "input_records": 333335,
+      "rep": 2,
+      "rows": 166666,
+      "scan_output_rows": 333335,
+      "scans": 1,
+      "selected_bytes": 22902661,
+      "selected_files": 2,
+      "shape": "time_range",
+      "variant": "partitioned_date",
+      "wall_s": 0.5781255420006346
+    },
+    {
+      "input_bytes": 23129445,
+      "input_records": 333335,
+      "rep": 2,
+      "rows": 166666,
+      "scan_output_rows": 333335,
+      "scans": 1,
+      "selected_bytes": 22902661,
+      "selected_files": 2,
+      "shape": "time_range",
+      "variant": "partitioned_date_zorder",
+      "wall_s": 0.49951462500030175
+    },
+    {
+      "input_bytes": 829879973,
+      "input_records": 10000000,
+      "rep": 2,
+      "rows": 166666,
+      "scan_output_rows": 10000000,
+      "scans": 1,
+      "selected_bytes": 823605867,
+      "selected_files": 4,
+      "shape": "time_range",
+      "variant": "partitioned_stream",
+      "wall_s": 1.0859250409994274
+    },
+    {
+      "input_bytes": 566978222,
+      "input_records": 8170132,
+      "rep": 2,
+      "rows": 166666,
+      "scan_output_rows": 8170132,
+      "scans": 1,
+      "selected_bytes": 562765187,
+      "selected_files": 4,
+      "shape": "time_range",
+      "variant": "liquid",
+      "wall_s": 1.4732782499922905
+    },
+    {
+      "input_bytes": 679715024,
+      "input_records": 10000000,
+      "rep": 2,
+      "rows": 166666,
+      "scan_output_rows": 10000000,
+      "scans": 1,
+      "selected_bytes": 674611410,
+      "selected_files": 8,
+      "shape": "time_range",
+      "variant": "control",
+      "wall_s": 1.3221511250012554
+    },
+    {
+      "input_bytes": 679715024,
+      "input_records": 10000000,
+      "rep": 2,
+      "rows": 166666,
+      "scan_output_rows": 10000000,
+      "scans": 1,
+      "selected_bytes": 674611410,
+      "selected_files": 8,
+      "shape": "time_range",
+      "variant": "control_compacted",
+      "wall_s": 1.0676485839940142
+    },
+    {
+      "input_bytes": 4613000,
+      "input_records": 120000,
+      "rep": 3,
+      "rows": 1,
+      "scan_output_rows": 120000,
+      "scans": 1,
+      "selected_bytes": 68265326,
+      "selected_files": 6,
+      "shape": "context_lookup",
+      "variant": "partitioned_date_zorder",
+      "wall_s": 0.2515368330059573
+    },
+    {
+      "input_bytes": 9832204,
+      "input_records": 892917,
+      "rep": 3,
+      "rows": 1,
+      "scan_output_rows": 892917,
+      "scans": 1,
+      "selected_bytes": 462188184,
+      "selected_files": 1,
+      "shape": "context_lookup",
+      "variant": "partitioned_stream",
+      "wall_s": 0.2769320829829667
+    },
+    {
+      "input_bytes": 11737236,
+      "input_records": 760000,
+      "rep": 3,
+      "rows": 1,
+      "scan_output_rows": 760000,
+      "scans": 1,
+      "selected_bytes": 407137840,
+      "selected_files": 3,
+      "shape": "context_lookup",
+      "variant": "liquid",
+      "wall_s": 0.25282687501749024
+    },
+    {
+      "input_bytes": 5032735,
+      "input_records": 180000,
+      "rep": 3,
+      "rows": 1,
+      "scan_output_rows": 180000,
+      "scans": 1,
+      "selected_bytes": 500505785,
+      "selected_files": 6,
+      "shape": "context_lookup",
+      "variant": "control",
+      "wall_s": 0.23645795899210498
+    },
+    {
+      "input_bytes": 5032735,
+      "input_records": 180000,
+      "rep": 3,
+      "rows": 1,
+      "scan_output_rows": 180000,
+      "scans": 1,
+      "selected_bytes": 500505785,
+      "selected_files": 6,
+      "shape": "context_lookup",
+      "variant": "control_compacted",
+      "wall_s": 0.26039320800919086
+    },
+    {
+      "input_bytes": 4613000,
+      "input_records": 120000,
+      "rep": 3,
+      "rows": 1,
+      "scan_output_rows": 120000,
+      "scans": 1,
+      "selected_bytes": 68265326,
+      "selected_files": 6,
+      "shape": "context_lookup",
+      "variant": "partitioned_date",
+      "wall_s": 0.2533546249906067
+    },
+    {
+      "input_bytes": 113430144,
+      "input_records": 9999999,
+      "rep": 3,
+      "rows": 4700000,
+      "scan_output_rows": 9999999,
+      "scans": 1,
+      "selected_bytes": 683538599,
+      "selected_files": 60,
+      "shape": "context_extract",
+      "variant": "partitioned_date_zorder",
+      "wall_s": 0.4698309999948833
+    },
+    {
+      "input_bytes": 46124688,
+      "input_records": 4700000,
+      "rep": 3,
+      "rows": 4700000,
+      "scan_output_rows": 4700000,
+      "scans": 1,
+      "selected_bytes": 462188184,
+      "selected_files": 1,
+      "shape": "context_extract",
+      "variant": "partitioned_stream",
+      "wall_s": 0.3222904589783866
+    },
+    {
+      "input_bytes": 83545523,
+      "input_records": 9460000,
+      "rep": 3,
+      "rows": 4700000,
+      "scan_output_rows": 9460000,
+      "scans": 1,
+      "selected_bytes": 692958281,
+      "selected_files": 5,
+      "shape": "context_extract",
+      "variant": "liquid",
+      "wall_s": 0.4786502500064671
+    },
+    {
+      "input_bytes": 79661778,
+      "input_records": 9420000,
+      "rep": 3,
+      "rows": 4700000,
+      "scan_output_rows": 9420000,
+      "scans": 1,
+      "selected_bytes": 674611410,
+      "selected_files": 8,
+      "shape": "context_extract",
+      "variant": "control",
+      "wall_s": 0.4233998749987222
+    },
+    {
+      "input_bytes": 79661778,
+      "input_records": 9420000,
+      "rep": 3,
+      "rows": 4700000,
+      "scan_output_rows": 9420000,
+      "scans": 1,
+      "selected_bytes": 674611410,
+      "selected_files": 8,
+      "shape": "context_extract",
+      "variant": "control_compacted",
+      "wall_s": 0.42266304200165905
+    },
+    {
+      "input_bytes": 113430144,
+      "input_records": 9999999,
+      "rep": 3,
+      "rows": 4700000,
+      "scan_output_rows": 9999999,
+      "scans": 1,
+      "selected_bytes": 683538599,
+      "selected_files": 60,
+      "shape": "context_extract",
+      "variant": "partitioned_date",
+      "wall_s": 0.47336183398147114
+    },
+    {
+      "input_bytes": 220500489,
+      "input_records": 2833340,
+      "rep": 3,
+      "rows": 33,
+      "scan_output_rows": 2833340,
+      "scans": 1,
+      "selected_bytes": 683538599,
+      "selected_files": 60,
+      "shape": "account_history",
+      "variant": "partitioned_date_zorder",
+      "wall_s": 0.6535543749923818
+    },
+    {
+      "input_bytes": 830756731,
+      "input_records": 10000000,
+      "rep": 3,
+      "rows": 33,
+      "scan_output_rows": 10000000,
+      "scans": 1,
+      "selected_bytes": 823605867,
+      "selected_files": 4,
+      "shape": "account_history",
+      "variant": "partitioned_stream",
+      "wall_s": 1.2868240830139257
+    },
+    {
+      "input_bytes": 266988036,
+      "input_records": 3611443,
+      "rep": 3,
+      "rows": 33,
+      "scan_output_rows": 3611443,
+      "scans": 1,
+      "selected_bytes": 300574168,
+      "selected_files": 2,
+      "shape": "account_history",
+      "variant": "liquid",
+      "wall_s": 1.0792026669951156
+    },
+    {
+      "input_bytes": 680452258,
+      "input_records": 10000000,
+      "rep": 3,
+      "rows": 33,
+      "scan_output_rows": 10000000,
+      "scans": 1,
+      "selected_bytes": 674611410,
+      "selected_files": 8,
+      "shape": "account_history",
+      "variant": "control",
+      "wall_s": 1.1747360419831239
+    },
+    {
+      "input_bytes": 680452258,
+      "input_records": 10000000,
+      "rep": 3,
+      "rows": 33,
+      "scan_output_rows": 10000000,
+      "scans": 1,
+      "selected_bytes": 674611410,
+      "selected_files": 8,
+      "shape": "account_history",
+      "variant": "control_compacted",
+      "wall_s": 1.1719210829760414
+    },
+    {
+      "input_bytes": 220500489,
+      "input_records": 2833340,
+      "rep": 3,
+      "rows": 33,
+      "scan_output_rows": 2833340,
+      "scans": 1,
+      "selected_bytes": 683538599,
+      "selected_files": 60,
+      "shape": "account_history",
+      "variant": "partitioned_date",
+      "wall_s": 0.6703847499738913
+    },
+    {
+      "input_bytes": 22994872,
+      "input_records": 333332,
+      "rep": 3,
+      "rows": 166667,
+      "scan_output_rows": 333332,
+      "scans": 1,
+      "selected_bytes": 22768232,
+      "selected_files": 2,
+      "shape": "time_range",
+      "variant": "partitioned_date_zorder",
+      "wall_s": 0.5477444590069354
+    },
+    {
+      "input_bytes": 829879973,
+      "input_records": 10000000,
+      "rep": 3,
+      "rows": 166667,
+      "scan_output_rows": 10000000,
+      "scans": 1,
+      "selected_bytes": 823605867,
+      "selected_files": 4,
+      "shape": "time_range",
+      "variant": "partitioned_stream",
+      "wall_s": 1.1772284999897238
+    },
+    {
+      "input_bytes": 287979396,
+      "input_records": 4129709,
+      "rep": 3,
+      "rows": 166667,
+      "scan_output_rows": 4129709,
+      "scans": 1,
+      "selected_bytes": 285820441,
+      "selected_files": 2,
+      "shape": "time_range",
+      "variant": "liquid",
+      "wall_s": 0.9467274170019664
+    },
+    {
+      "input_bytes": 679715024,
+      "input_records": 10000000,
+      "rep": 3,
+      "rows": 166667,
+      "scan_output_rows": 10000000,
+      "scans": 1,
+      "selected_bytes": 674611410,
+      "selected_files": 8,
+      "shape": "time_range",
+      "variant": "control",
+      "wall_s": 1.156382625020342
+    },
+    {
+      "input_bytes": 679715024,
+      "input_records": 10000000,
+      "rep": 3,
+      "rows": 166667,
+      "scan_output_rows": 10000000,
+      "scans": 1,
+      "selected_bytes": 674611410,
+      "selected_files": 8,
+      "shape": "time_range",
+      "variant": "control_compacted",
+      "wall_s": 1.2249217499920633
+    },
+    {
+      "input_bytes": 22994872,
+      "input_records": 333332,
+      "rep": 3,
+      "rows": 166667,
+      "scan_output_rows": 333332,
+      "scans": 1,
+      "selected_bytes": 22768232,
+      "selected_files": 2,
+      "shape": "time_range",
+      "variant": "partitioned_date",
+      "wall_s": 0.5500632499752101
+    },
+    {
+      "input_bytes": 16586508,
+      "input_records": 1552917,
+      "rep": 4,
+      "rows": 1,
+      "scan_output_rows": 1552917,
+      "scans": 1,
+      "selected_bytes": 462188184,
+      "selected_files": 1,
+      "shape": "context_lookup",
+      "variant": "partitioned_stream",
+      "wall_s": 0.28835083401645534
+    },
+    {
+      "input_bytes": 17537172,
+      "input_records": 1220000,
+      "rep": 4,
+      "rows": 1,
+      "scan_output_rows": 1220000,
+      "scans": 1,
+      "selected_bytes": 407137840,
+      "selected_files": 3,
+      "shape": "context_lookup",
+      "variant": "liquid",
+      "wall_s": 0.31124966699280776
+    },
+    {
+      "input_bytes": 7678674,
+      "input_records": 340000,
+      "rep": 4,
+      "rows": 1,
+      "scan_output_rows": 340000,
+      "scans": 1,
+      "selected_bytes": 674611410,
+      "selected_files": 8,
+      "shape": "context_lookup",
+      "variant": "control",
+      "wall_s": 0.2967000829812605
+    },
+    {
+      "input_bytes": 7678674,
+      "input_records": 340000,
+      "rep": 4,
+      "rows": 1,
+      "scan_output_rows": 340000,
+      "scans": 1,
+      "selected_bytes": 674611410,
+      "selected_files": 8,
+      "shape": "context_lookup",
+      "variant": "control_compacted",
+      "wall_s": 0.28271345800021663
+    },
+    {
+      "input_bytes": 9811496,
+      "input_records": 320000,
+      "rep": 4,
+      "rows": 1,
+      "scan_output_rows": 320000,
+      "scans": 1,
+      "selected_bytes": 136625955,
+      "selected_files": 12,
+      "shape": "context_lookup",
+      "variant": "partitioned_date",
+      "wall_s": 0.32138291699811816
+    },
+    {
+      "input_bytes": 9811496,
+      "input_records": 320000,
+      "rep": 4,
+      "rows": 1,
+      "scan_output_rows": 320000,
+      "scans": 1,
+      "selected_bytes": 136625955,
+      "selected_files": 12,
+      "shape": "context_lookup",
+      "variant": "partitioned_date_zorder",
+      "wall_s": 0.32692966700415127
+    },
+    {
+      "input_bytes": 46124688,
+      "input_records": 4700000,
+      "rep": 4,
+      "rows": 4700000,
+      "scan_output_rows": 4700000,
+      "scans": 1,
+      "selected_bytes": 462188184,
+      "selected_files": 1,
+      "shape": "context_extract",
+      "variant": "partitioned_stream",
+      "wall_s": 0.3997250419924967
+    },
+    {
+      "input_bytes": 83545523,
+      "input_records": 9460000,
+      "rep": 4,
+      "rows": 4700000,
+      "scan_output_rows": 9460000,
+      "scans": 1,
+      "selected_bytes": 692958281,
+      "selected_files": 5,
+      "shape": "context_extract",
+      "variant": "liquid",
+      "wall_s": 0.5112658330181148
+    },
+    {
+      "input_bytes": 79661778,
+      "input_records": 9420000,
+      "rep": 4,
+      "rows": 4700000,
+      "scan_output_rows": 9420000,
+      "scans": 1,
+      "selected_bytes": 674611410,
+      "selected_files": 8,
+      "shape": "context_extract",
+      "variant": "control",
+      "wall_s": 0.4669072079996113
+    },
+    {
+      "input_bytes": 79661778,
+      "input_records": 9420000,
+      "rep": 4,
+      "rows": 4700000,
+      "scan_output_rows": 9420000,
+      "scans": 1,
+      "selected_bytes": 674611410,
+      "selected_files": 8,
+      "shape": "context_extract",
+      "variant": "control_compacted",
+      "wall_s": 0.4089971659996081
+    },
+    {
+      "input_bytes": 113430144,
+      "input_records": 9999999,
+      "rep": 4,
+      "rows": 4700000,
+      "scan_output_rows": 9999999,
+      "scans": 1,
+      "selected_bytes": 683538599,
+      "selected_files": 60,
+      "shape": "context_extract",
+      "variant": "partitioned_date",
+      "wall_s": 0.4955047089897562
+    },
+    {
+      "input_bytes": 113430144,
+      "input_records": 9999999,
+      "rep": 4,
+      "rows": 4700000,
+      "scan_output_rows": 9999999,
+      "scans": 1,
+      "selected_bytes": 683538599,
+      "selected_files": 60,
+      "shape": "context_extract",
+      "variant": "partitioned_date_zorder",
+      "wall_s": 0.5060238330042921
+    },
+    {
+      "input_bytes": 830756731,
+      "input_records": 10000000,
+      "rep": 4,
+      "rows": 29,
+      "scan_output_rows": 10000000,
+      "scans": 1,
+      "selected_bytes": 823605867,
+      "selected_files": 4,
+      "shape": "account_history",
+      "variant": "partitioned_stream",
+      "wall_s": 1.1175818339979742
+    },
+    {
+      "input_bytes": 385834086,
+      "input_records": 5191211,
+      "rep": 4,
+      "rows": 29,
+      "scan_output_rows": 5191211,
+      "scans": 1,
+      "selected_bytes": 430767262,
+      "selected_files": 3,
+      "shape": "account_history",
+      "variant": "liquid",
+      "wall_s": 0.9167886250070296
+    },
+    {
+      "input_bytes": 680452258,
+      "input_records": 10000000,
+      "rep": 4,
+      "rows": 29,
+      "scan_output_rows": 10000000,
+      "scans": 1,
+      "selected_bytes": 674611410,
+      "selected_files": 8,
+      "shape": "account_history",
+      "variant": "control",
+      "wall_s": 1.3680513750005048
+    },
+    {
+      "input_bytes": 680452258,
+      "input_records": 10000000,
+      "rep": 4,
+      "rows": 29,
+      "scan_output_rows": 10000000,
+      "scans": 1,
+      "selected_bytes": 674611410,
+      "selected_files": 8,
+      "shape": "account_history",
+      "variant": "control_compacted",
+      "wall_s": 1.1714781250047963
+    },
+    {
+      "input_bytes": 197340904,
+      "input_records": 2500006,
+      "rep": 4,
+      "rows": 29,
+      "scan_output_rows": 2500006,
+      "scans": 1,
+      "selected_bytes": 683538599,
+      "selected_files": 60,
+      "shape": "account_history",
+      "variant": "partitioned_date",
+      "wall_s": 0.667958957987139
+    },
+    {
+      "input_bytes": 197340904,
+      "input_records": 2500006,
+      "rep": 4,
+      "rows": 29,
+      "scan_output_rows": 2500006,
+      "scans": 1,
+      "selected_bytes": 683538599,
+      "selected_files": 60,
+      "shape": "account_history",
+      "variant": "partitioned_date_zorder",
+      "wall_s": 0.6643704579910263
+    },
+    {
+      "input_bytes": 829879973,
+      "input_records": 10000000,
+      "rep": 4,
+      "rows": 166666,
+      "scan_output_rows": 10000000,
+      "scans": 1,
+      "selected_bytes": 823605867,
+      "selected_files": 4,
+      "shape": "time_range",
+      "variant": "partitioned_stream",
+      "wall_s": 1.1083851250004955
+    },
+    {
+      "input_bytes": 287979396,
+      "input_records": 4129709,
+      "rep": 4,
+      "rows": 166666,
+      "scan_output_rows": 4129709,
+      "scans": 1,
+      "selected_bytes": 285820441,
+      "selected_files": 2,
+      "shape": "time_range",
+      "variant": "liquid",
+      "wall_s": 0.9496551250049379
+    },
+    {
+      "input_bytes": 368602786,
+      "input_records": 5125000,
+      "rep": 4,
+      "rows": 166666,
+      "scan_output_rows": 5125000,
+      "scans": 1,
+      "selected_bytes": 365857029,
+      "selected_files": 4,
+      "shape": "time_range",
+      "variant": "control",
+      "wall_s": 0.8131342080014292
+    },
+    {
+      "input_bytes": 368602786,
+      "input_records": 5125000,
+      "rep": 4,
+      "rows": 166666,
+      "scan_output_rows": 5125000,
+      "scans": 1,
+      "selected_bytes": 365857029,
+      "selected_files": 4,
+      "shape": "time_range",
+      "variant": "control_compacted",
+      "wall_s": 0.7425382079964038
+    },
+    {
+      "input_bytes": 22999835,
+      "input_records": 333333,
+      "rep": 4,
+      "rows": 166666,
+      "scan_output_rows": 333333,
+      "scans": 1,
+      "selected_bytes": 22773519,
+      "selected_files": 2,
+      "shape": "time_range",
+      "variant": "partitioned_date",
+      "wall_s": 0.5610596250044182
+    },
+    {
+      "input_bytes": 22999835,
+      "input_records": 333333,
+      "rep": 4,
+      "rows": 166666,
+      "scan_output_rows": 333333,
+      "scans": 1,
+      "selected_bytes": 22773519,
+      "selected_files": 2,
+      "shape": "time_range",
+      "variant": "partitioned_date_zorder",
+      "wall_s": 0.5605802500213031
+    }
+  ]
+}

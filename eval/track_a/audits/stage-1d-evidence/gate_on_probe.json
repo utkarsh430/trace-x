@@ -1,0 +1,298 @@
+{
+ "rows": {
+  "tx": 120000,
+  "fraud": 605,
+  "legit": 119395,
+  "side_events": 130940
+ },
+ "whole_second": {
+  "fraud": 0.0017,
+  "legit": 0.00087,
+  "legit_rows": 104,
+  "by_pattern": {
+   "ACCOUNT_TAKEOVER": 0.0,
+   "ANOMALOUS_HIGH_VALUE": 0.0,
+   "CARD_TESTING": 0.0,
+   "CREDENTIAL_STUFFING": 0.0,
+   "DEVICE_FARM": 0.015,
+   "FRAUD_RING": 0.0,
+   "IMPOSSIBLE_TRAVEL": 0.0,
+   "MERCHANT_COLLUSION": 0.0,
+   "UNUSUAL_LOCATION_DEVICE": 0.0,
+   "VELOCITY_ATTACK": 0.0
+  }
+ },
+ "declined": {
+  "fraud": 0.0661,
+  "legit": 0.02954,
+  "legit_rows": 3527,
+  "by_pattern": {
+   "ACCOUNT_TAKEOVER": 0.0,
+   "ANOMALOUS_HIGH_VALUE": 0.0,
+   "CARD_TESTING": 0.488,
+   "CREDENTIAL_STUFFING": 0.0,
+   "DEVICE_FARM": 0.0,
+   "FRAUD_RING": 0.0,
+   "IMPOSSIBLE_TRAVEL": 0.0,
+   "MERCHANT_COLLUSION": 0.0,
+   "UNUSUAL_LOCATION_DEVICE": 0.0,
+   "VELOCITY_ATTACK": 0.0
+  }
+ },
+ "device_not_home": {
+  "fraud": 0.6264,
+  "legit": 0.06774,
+  "legit_rows": 8088,
+  "by_pattern": {
+   "ACCOUNT_TAKEOVER": 1.0,
+   "ANOMALOUS_HIGH_VALUE": 0.0,
+   "CARD_TESTING": 1.0,
+   "CREDENTIAL_STUFFING": 1.0,
+   "DEVICE_FARM": 1.0,
+   "FRAUD_RING": 1.0,
+   "IMPOSSIBLE_TRAVEL": 0.0,
+   "MERCHANT_COLLUSION": 0.0,
+   "UNUSUAL_LOCATION_DEVICE": 1.0,
+   "VELOCITY_ATTACK": 0.0
+  }
+ },
+ "ip_not_home": {
+  "fraud": 0.2975,
+  "legit": 0.0,
+  "legit_rows": 0,
+  "by_pattern": {
+   "ACCOUNT_TAKEOVER": 0.0,
+   "ANOMALOUS_HIGH_VALUE": 0.0,
+   "CARD_TESTING": 0.0,
+   "CREDENTIAL_STUFFING": 1.0,
+   "DEVICE_FARM": 0.0,
+   "FRAUD_RING": 1.0,
+   "IMPOSSIBLE_TRAVEL": 0.0,
+   "MERCHANT_COLLUSION": 0.0,
+   "UNUSUAL_LOCATION_DEVICE": 0.0,
+   "VELOCITY_ATTACK": 0.0
+  }
+ },
+ "distance_ge_100km": {
+  "fraud": 0.0893,
+  "legit": 0.0,
+  "legit_rows": 0,
+  "by_pattern": {
+   "ACCOUNT_TAKEOVER": 1.0,
+   "ANOMALOUS_HIGH_VALUE": 0.0,
+   "CARD_TESTING": 0.0,
+   "CREDENTIAL_STUFFING": 0.0,
+   "DEVICE_FARM": 0.0,
+   "FRAUD_RING": 0.0,
+   "IMPOSSIBLE_TRAVEL": 0.5,
+   "MERCHANT_COLLUSION": 0.0,
+   "UNUSUAL_LOCATION_DEVICE": 1.0,
+   "VELOCITY_ATTACK": 0.0
+  }
+ },
+ "night_00_05": {
+  "fraud": 0.2975,
+  "legit": 0.0411,
+  "legit_rows": 4907,
+  "by_pattern": {
+   "ACCOUNT_TAKEOVER": 0.4,
+   "ANOMALOUS_HIGH_VALUE": 0.333,
+   "CARD_TESTING": 0.39,
+   "CREDENTIAL_STUFFING": 0.0,
+   "DEVICE_FARM": 0.848,
+   "FRAUD_RING": 0.16,
+   "IMPOSSIBLE_TRAVEL": 0.0,
+   "MERCHANT_COLLUSION": 0.2,
+   "UNUSUAL_LOCATION_DEVICE": 0.167,
+   "VELOCITY_ATTACK": 0.204
+  }
+ },
+ "card_not_present": {
+  "fraud": 0.6496,
+  "legit": 0.44261,
+  "legit_rows": 52845
+ },
+ "ecommerce_given_cnp": {
+  "fraud": 0.333,
+  "legit": 0.334
+ },
+ "last_3_days": {
+  "fraud": 0.0,
+  "legit": 0.05501,
+  "legit_rows": 6568
+ },
+ "merchant_top1pct": {
+  "fraud": 0.0595,
+  "legit": 0.10609,
+  "legit_rows": 12667,
+  "by_pattern": {
+   "ACCOUNT_TAKEOVER": 0.067,
+   "ANOMALOUS_HIGH_VALUE": 0.0,
+   "CARD_TESTING": 0.0,
+   "CREDENTIAL_STUFFING": 0.0,
+   "DEVICE_FARM": 0.061,
+   "FRAUD_RING": 0.083,
+   "IMPOSSIBLE_TRAVEL": 0.167,
+   "MERCHANT_COLLUSION": 0.0,
+   "UNUSUAL_LOCATION_DEVICE": 0.167,
+   "VELOCITY_ATTACK": 0.072
+  }
+ },
+ "coordinate_exactly_home": {
+  "fraud": 0.0,
+  "legit": 0.0,
+  "legit_rows": 0,
+  "by_pattern": {
+   "ACCOUNT_TAKEOVER": 0.0,
+   "ANOMALOUS_HIGH_VALUE": 0.0,
+   "CARD_TESTING": 0.0,
+   "CREDENTIAL_STUFFING": 0.0,
+   "DEVICE_FARM": 0.0,
+   "FRAUD_RING": 0.0,
+   "IMPOSSIBLE_TRAVEL": 0.0,
+   "MERCHANT_COLLUSION": 0.0,
+   "UNUSUAL_LOCATION_DEVICE": 0.0,
+   "VELOCITY_ATTACK": 0.0
+  }
+ },
+ "coordinate_repeats_earlier_on_account": {
+  "fraud": 0.0,
+  "legit": 0.00987,
+  "legit_rows": 1178,
+  "by_pattern": {
+   "ACCOUNT_TAKEOVER": 0.0,
+   "ANOMALOUS_HIGH_VALUE": 0.0,
+   "CARD_TESTING": 0.0,
+   "CREDENTIAL_STUFFING": 0.0,
+   "DEVICE_FARM": 0.0,
+   "FRAUD_RING": 0.0,
+   "IMPOSSIBLE_TRAVEL": 0.0,
+   "MERCHANT_COLLUSION": 0.0,
+   "UNUSUAL_LOCATION_DEVICE": 0.0,
+   "VELOCITY_ATTACK": 0.0
+  }
+ },
+ "gap_to_previous_under_60s": {
+  "fraud": 0.3256,
+  "legit": 0.00095,
+  "legit_rows": 114,
+  "by_pattern": {
+   "ACCOUNT_TAKEOVER": 0.0,
+   "ANOMALOUS_HIGH_VALUE": 0.0,
+   "CARD_TESTING": 0.732,
+   "CREDENTIAL_STUFFING": 0.0,
+   "DEVICE_FARM": 0.015,
+   "FRAUD_RING": 0.0,
+   "IMPOSSIBLE_TRAVEL": 0.0,
+   "MERCHANT_COLLUSION": 0.0,
+   "UNUSUAL_LOCATION_DEVICE": 0.0,
+   "VELOCITY_ATTACK": 0.751
+  }
+ },
+ "gap_to_previous_59_61s": {
+  "fraud": 0.0066,
+  "legit": 3e-05,
+  "legit_rows": 3,
+  "by_pattern": {
+   "ACCOUNT_TAKEOVER": 0.0,
+   "ANOMALOUS_HIGH_VALUE": 0.0,
+   "CARD_TESTING": 0.0,
+   "CREDENTIAL_STUFFING": 0.0,
+   "DEVICE_FARM": 0.03,
+   "FRAUD_RING": 0.0,
+   "IMPOSSIBLE_TRAVEL": 0.0,
+   "MERCHANT_COLLUSION": 0.0,
+   "UNUSUAL_LOCATION_DEVICE": 0.0,
+   "VELOCITY_ATTACK": 0.011
+  }
+ },
+ "correlation_id_shared": {
+  "fraud": 0.4,
+  "legit": 0.51827,
+  "legit_rows": 61879
+ },
+ "side_event_counts": {
+  "device:ATTRIBUTE_CHANGED:legit": 3146,
+  "device:FINGERPRINT_CHANGED:legit": 485,
+  "device:FIRST_SEEN:legit": 802,
+  "device:FIRST_SEEN:planted": 10,
+  "identity:ADDRESS_CHANGE:legit": 93,
+  "identity:EMAIL_CHANGE:legit": 75,
+  "identity:EMAIL_CHANGE:planted": 3,
+  "identity:LOGIN_FAILED:legit": 11493,
+  "identity:LOGIN_FAILED:planted": 73,
+  "identity:LOGIN_SUCCEEDED:legit": 113109,
+  "identity:LOGIN_SUCCEEDED:planted": 11,
+  "identity:MFA_ENROLLED:legit": 317,
+  "identity:MFA_RESET:legit": 278,
+  "identity:MFA_RESET:planted": 4,
+  "identity:PASSWORD_CHANGE:legit": 955,
+  "identity:PASSWORD_CHANGE:planted": 3,
+  "identity:PHONE_CHANGE:legit": 83
+ },
+ "side_payload_keysets": {
+  "ADDRESS_CHANGE:legit": {
+   "account_id,device_id,identity_event_type,user_agent": 93
+  },
+  "ATTRIBUTE_CHANGED:legit": {
+   "account_id,device_event_type,device_id,platform": 3146
+  },
+  "EMAIL_CHANGE:legit": {
+   "account_id,device_id,identity_event_type,user_agent": 75
+  },
+  "EMAIL_CHANGE:planted": {
+   "account_id,device_id,identity_event_type,user_agent": 3
+  },
+  "FINGERPRINT_CHANGED:legit": {
+   "account_id,device_event_type,device_id,platform": 485
+  },
+  "FIRST_SEEN:legit": {
+   "account_id,device_event_type,device_id,platform": 802
+  },
+  "FIRST_SEEN:planted": {
+   "account_id,device_event_type,device_id,platform": 10
+  },
+  "LOGIN_FAILED:legit": {
+   "account_id,device_id,identity_event_type,ip_id,user_agent": 11493
+  },
+  "LOGIN_FAILED:planted": {
+   "account_id,device_id,identity_event_type,ip_id,user_agent": 73
+  },
+  "LOGIN_SUCCEEDED:legit": {
+   "account_id,device_id,identity_event_type,ip_id,user_agent": 113109
+  },
+  "LOGIN_SUCCEEDED:planted": {
+   "account_id,device_id,identity_event_type,ip_id,user_agent": 11
+  },
+  "MFA_ENROLLED:legit": {
+   "account_id,device_id,identity_event_type,user_agent": 317
+  },
+  "MFA_RESET:legit": {
+   "account_id,device_id,identity_event_type,user_agent": 278
+  },
+  "MFA_RESET:planted": {
+   "account_id,device_id,identity_event_type,user_agent": 4
+  },
+  "PASSWORD_CHANGE:legit": {
+   "account_id,device_id,identity_event_type,user_agent": 955
+  },
+  "PASSWORD_CHANGE:planted": {
+   "account_id,device_id,identity_event_type,user_agent": 3
+  },
+  "PHONE_CHANGE:legit": {
+   "account_id,device_id,identity_event_type,user_agent": 83
+  }
+ },
+ "side_whole_second_count": {
+  "legit": 137,
+  "planted": 0
+ },
+ "first_seen_offset_after_identity_event": {
+  "legit:other": 759,
+  "planted:119-121s": 10
+ },
+ "device_platform_consistent": {
+  "legit:True": 4433,
+  "planted:True": 10
+ }
+}

@@ -19,7 +19,11 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from trace_core.contracts.api.events_ingress import DeviceEventRequest, IdentityEventRequest
+from trace_core.contracts.api.events_ingress import (
+    AuthorizationOutcomeRequest,
+    DeviceEventRequest,
+    IdentityEventRequest,
+)
 from trace_core.contracts.api.transaction import TransactionRequest
 
 pytestmark = pytest.mark.contract
@@ -210,3 +214,30 @@ def test_device_ingress_is_equally_strict() -> None:
         DeviceEventRequest.model_validate({**base, "device_event_type": "NOT_A_TYPE"})
     with pytest.raises(ValidationError):
         DeviceEventRequest.model_validate({**base, "device_id": "device_1"})
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"authorization_outcome": "UNKNOWN"},
+        {"authorization_outcome": "REVERSED"},
+        {"account_id": "account_1"},
+        {"transaction_id": ""},
+        {"transaction_id": "t" * 65},
+        {"decided_at": "2026-09-12T10:00:00"},
+        {"surprise": 1},
+    ],
+    ids=["unknown", "reversed", "account-pattern", "empty-id", "long-id", "naive-time", "extra"],
+)
+def test_authorization_ingress_is_equally_strict(change: dict[str, Any]) -> None:
+    """ADR-0049 §2: only observations, only released identifiers, only aware times."""
+    base = {
+        "transaction_id": "tx_0000000001",
+        "account_id": "acct_000001",
+        "authorization_outcome": "DECLINED",
+        "decided_at": "2026-09-12T10:00:00.340Z",
+        "transaction_occurred_at": "2026-09-12T10:00:00Z",
+    }
+    assert AuthorizationOutcomeRequest.model_validate(base)
+    with pytest.raises(ValidationError):
+        AuthorizationOutcomeRequest.model_validate({**base, **change})
