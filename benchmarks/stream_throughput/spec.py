@@ -160,11 +160,17 @@ class RunConfig(BaseModel):
     Spark's 300-second broadcast timeout and killed the consumer
     (`bench-20260920-064710-stream-throughput-77cb0051`, INVALID). Sixteen is still comfortably
     above one 4-second batch at the target rate, so it binds only while catching up."""
-    master: Annotated[str, Field(pattern=r"^local\[(\d+|\*)\]$")] = "local[8]"
-    """The consumer runs six streaming queries in one JVM -- a Bronze and a Silver query per topic
-    -- and each pays its own fixed per-batch cost, so what it needs is slots, not speed. `local[4]`
-    made them queue behind one another on a 12-core machine. Declared before the 2026-09-20 run and
-    recorded in the manifest, as every resource this benchmark uses is; no target moved with it."""
+    master: Annotated[str, Field(pattern=r"^local\[(\d+|\*)\]$")] = "local[4]"
+    """Four, and the reason is measured rather than assumed.
+
+    The consumer runs six streaming queries in one JVM -- a Bronze and a Silver query per topic --
+    and each pays its own fixed per-batch cost, so `local[8]` was declared on 2026-09-20 to stop
+    them queueing behind one another. It did the opposite of what the run needed: the harness's own
+    four producer workers were starved, offered **3,568 events/s against the fixed 5,000** and fell
+    up to 486 s behind schedule, so the run measured nothing and was INVALID on its own integrity
+    checks (`bench-20260920-180255-stream-throughput-bfb8c748`). A benchmark that cannot offer the
+    rate cannot judge the pipeline at it. Back to four, which the runs before it showed leaves the
+    producers able to offer the rate."""
     driver_memory: Annotated[str, Field(pattern=r"^\d+[mg]$")] = "3g"
     """With eight task slots and the admission bounds above, 2 GiB left no headroom for a batch
     that had fallen behind. Three, not four: the consumer shares an 18 GiB machine with Gold's own

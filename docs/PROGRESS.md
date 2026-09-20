@@ -20,6 +20,163 @@ planning surfaced recorded under *What Phase 3 planning found in Phase 2's artef
 
 ### Phase 3
 
+### Phase 3 — 2026-09-20: the first green CI on Phase 3, and what a Silver micro-batch really costs
+
+**Read this first.** `tests/acceptance/status.json` is authoritative.
+
+- **CI: every workflow green on the Phase 3 pull request (#5), for the first time.** `lint`,
+  `contracts`, `claims`, `test-fast`, `test-stream` (39 min) and `test-integration` (57 min) all
+  passed on `87def20`. Neither `test-stream` nor `test-integration` had ever run on Phase 3 code
+  before 2026-09-19; the two failures from that first run were fixed in `ec5ea75`, and the
+  integration job's timeout was raised to 90 minutes in `87def20`.
+  - This closes **D14**. `test-integration.yml` starts the compose `core` profile, applies the
+    migrations and runs the integration and chaos suites against real PostgreSQL, both Redis
+    instances and the gateway, with `ci_skip_failure` making a skipped service-backed test fail the
+    job. The green run is the evidence that they executed rather than skipped — including the
+    release-blocking ground-truth isolation suite.
+
+- **`P3.stream-throughput`: the earlier diagnosis was wrong, and a controlled measurement says so.**
+  D29 (the whole-table reads ADR-0053 Amendment 1 left behind) was recorded as the leading cause of
+  the consumer's failure to keep up. Two probes, committed under `spikes/step13-silver-batch-cost/`
+  (diagnostics; they produce no manifest and nothing in them is citable as a benchmark result),
+  drove the real Silver query over a real Bronze table on the benchmark's own session:
+
+  | canonical rows | 0 | 250,000 | 1,000,000 | 2,000,000 | 3,000,000 |
+  |---|---|---|---|---|---|
+  | one 7,000-row batch, s | 7.46 | 7.48 | 7.87 | 7.41 | 8.53 |
+
+  Steady state over eight consecutive micro-batches: **5.20 s per batch against an empty canonical
+  table, 5.90 s against 2,000,000 rows.** The table cost about 0.35 s per million rows. Roughly 5 s
+  of every batch was fixed, so at the benchmark's 2-second trigger Silver could not keep up at any
+  table size on any heap: it fell behind, each batch then admitted a larger backlog than the last,
+  and the consumer died of `OutOfMemoryError`. **The OOM was the symptom; the fixed per-batch cost
+  was the defect.**
+
+  The breakdown placed that cost: canonical MERGE 0.98 s, `late_events` re-derivation 0.80 s,
+  uniqueness assertion 0.74 s, bounds aggregate 0.05 s, and about 2.3 s on the disposition counts
+  and four `isEmpty()` probes — eleven Spark jobs per batch, in a local session where a job costs
+  about 0.2 s before it does any work.
+
+- **ADR-0053 Amendment 2 (Proposed): the sink stops paying it.** No row any table holds changes; no
+  lateness bound, no dedup horizon, no change to the dispositions or the commit order.
+  1. one grouped aggregation (`batch_facts` → `BatchFacts`) replaces six actions: the disposition
+     counts, the five bound aggregates and the four `isEmpty()` probes;
+  2. `late_events` is re-derived only when the batch can change it — a superseding row, a replayed
+     row, or an admitted row judged late. `replayed` is in that list because a crash between the
+     canonical commit and the `late_events` commit is re-run by Structured Streaming and the
+     batch's rows then classify as `replayed`, so the commit it owes is never skipped;
+  3. the existence check that moved with it comes back **stronger**: `_assert_unique` holds the
+     canonical table to exactly one row per batch identity, unbounded, on every batch, and judges
+     both tables in one job and one shuffle;
+  4. the canonical MERGE's matched clause is built only when the batch supersedes something, which
+     lets Delta take its one-pass insert-only path (the clause was unreachable otherwise).
+  - Measured on the same probes: **3.80 s at 0 rows (from 5.20 s) and 4.70 s at 2,000,000 (from
+    5.90 s).**
+
+- **`LOCAL_DELTA_CONF`: `spark.databricks.delta.snapshotPartitions=4` on local masters.** Delta
+  replays a table's log in 50 partitions by default — a cluster number. A one-executor session pays
+  50 task launches per read and per commit. Four took the batch to **3.52 s** and about a fifth off
+  its MERGE. Local-only, outside `BASE_CONF` and `RESERVED_KEYS`, so a cluster raises it through
+  `extra_conf`.
+
+- **The benchmark's declared configuration changed, before the run and on that measurement.** The
+  rate (5,000 events/s), the 10 s lag target and the 120 s outage are untouched.
+  - `silver_trigger_s` 2.0 → 4.0. A batch's cost is fixed, so a shorter trigger pays it more often
+    for fewer rows.
+  - `MAX_TRIGGER_SHARE_OF_LAG_TARGET = 0.5` is declared with it and enforced by the config: a
+    trigger is a floor under consumer lag, so it may never take more than half the target. A run
+    cannot be made to look sustained by trading the trigger against the number it measures.
+  - `max_offsets_per_trigger` 30,000 (Bronze) and `max_bytes_per_trigger` 64 MiB (Silver). Both
+    defer rows and never skip them, and they are what bounds a batch's memory after an outage.
+    `maxBytesPerTrigger` is Delta's soft cap — at least one file always goes through — so no single
+    large Bronze file can stall the query.
+  - `master` `local[4]` → `local[8]` and `driver_memory` 2g → 3g, on a 12-core 18 GiB machine. The
+    consumer runs six streaming queries in one JVM and each pays its own fixed per-batch cost, so
+    what it needs is slots. Three gibibytes, not four: Gold's own 2 GiB JVM, the producers and the
+    broker share the machine, and a host that swaps measures the swap
+    (`bench-20260918-201547-stream-throughput-b46e7e74`, INVALID on host saturation).
+
+- **D23 closed.** `tests/integration/test_silver_kafka.py` now drives `tx.raw.v1`,
+  `device.events.v1` and `investigation.requested.v1` across a real broker into Bronze and Silver,
+  each on its own declared identity (`payload.transaction_id`, `envelope.event_id`, and
+  `envelope.idempotency_key` — a content hash, so a fresh envelope over the same content
+  collapses), with a poison value quarantined, a late device event tagged and copied, and
+  conservation checked on all three.
+
+- **D21 accepted at the exit review, not built.** ADR-0052 Amendment 1's three open risks stay as
+  the ADR records them, with reasons: a DELETE losing to a concurrent append is inferred from
+  Delta's conflict rules rather than constructed, and the direction that *was* observed is the safe
+  one (the appending writer loses and restarts idempotently); Gold is refused by the VACUUM tooling
+  rather than vacuumed, so Gold's local disk stays unbounded until its readers are modelled
+  (Phase 12 owns that); and the Spark half of the coverage rule is proved with a stub ledger, with
+  the real ledger covered by the Bronze integration suite's coverage test.
+
+- **A measured run now starts on an empty broker, and the harness refuses one that does not.**
+  The first run on the amended sink, `bench-20260920-061851-stream-throughput-a9cee6ce`, is a
+  recorded **FAIL** and is kept: it died 15 seconds in, and not on throughput. The local broker
+  still held **3,492,057 records from earlier runs**, so `tx.scored.v1` sat at its declared byte
+  cap and the retention trimmer removed segments Bronze — which reads from earliest — had not read
+  yet. Bronze stopped loudly on `failOnDataLoss` with `OffsetOutOfRangeException`, which is
+  **exactly what debt D18 predicted**.
+  - That is not the declared workload. Records already on the broker are read as if the run had
+    produced them, and how many there are varies from run to run — the uncontrolled variable a
+    comparison may not carry.
+  - `refuse_preexisting` now refuses a run whose broker holds more than `MAX_PREEXISTING_RECORDS`
+    (5,000: one second of the offered rate). It is a refusal, not a verdict: the run never starts,
+    writes no record and leaves no lake, so nothing about it could be cited.
+  - `make kafka-topics-reset` is the remedy it names — delete and recreate every declared topic,
+    local only, `--yes` required.
+
+- **`P3.stream-throughput` is still FAIL, and four runs on 2026-09-20 say why. Every one is kept.**
+  The rate, the lag target and the outage were never moved.
+
+  | run_id | status | what stopped it |
+  |---|---|---|
+  | `bench-20260920-061851-stream-throughput-a9cee6ce` | FAIL | the broker held 3,492,057 records from earlier runs, so `tx.scored.v1` sat at its byte cap and the trimmer removed segments Bronze had not read; Bronze stopped on `failOnDataLoss` after 15 s — **debt D18, exactly as written** |
+  | `bench-20260920-062507-stream-throughput-4231d90e` | INVALID | 17 minutes in, a producer worker died because the host wall clock stepped back 93.5 ms between a send and its acknowledgement |
+  | `bench-20260920-064710-stream-throughput-77cb0051` | INVALID | a batch that had fallen behind admitted tens of thousands of rows under the 64 MiB cap and its broadcast outran Spark's broadcast timeout; separately the broker-to-host clock drifted seconds against a 500 ms tolerance |
+  | `bench-20260920-180255-stream-throughput-bfb8c748` | INVALID | **the harness could not offer the rate**: it fell well short of the fixed rate and its producers fell minutes behind schedule, because the declared `local[8]` consumer starved them |
+
+  Each one was diagnosed and fixed before the next: the pre-existing-records refusal, the
+  clock-step discard (validated in the last run: a handful of reports out of fifteen million were
+  discarded, far inside the declared tolerance, and the run was not killed by it), the 16 MiB cap
+  with 8 shuffle partitions, and `local[8]` reverted to `local[4]` because it was what starved the
+  producers.
+
+- **What the runs do establish.** Silver commits at **well under half the target rate** on this
+  laptop. Every figure behind that sentence comes from an INVALID run or from a consumer log, so
+  none of it is published here and none of it may be cited: the run records hold it. The shape is
+  consistent across them — `tx.authorization.v1` and `identity.events.v1` keep up, while
+  `tx.scored.v1`, which alone needs seven tenths of the offered rate, reaches under half of what it
+  needs. **The ceiling is per-row cost, not per-batch cost.** The admission UDF — a row-at-a-time
+  Python UDF that JSON-parses and Pydantic-validates every record — is where ADR-0053 said the
+  throughput risk would be, and that is where it is.
+
+- **The machine is now part of the finding.** At the offered rate this 12-core, 18 GiB laptop
+  saturates: the Docker VM's clock drifts seconds against the host, Spark broadcasts exceed their
+  timeout, and the harness's own producers fall minutes behind. Offering the target rate and
+  consuming it on one laptop is what does not fit.
+
+**Open decisions for the user (`P3.stream-throughput` blocks the Phase 3 exit; everything else is
+PASS).**
+
+1. **Where the target rate is measured.** The pipeline reaches well under half of it here,
+   and at the offered rate the laptop can no longer both produce and consume. Either the target is
+   measured on hardware that can host it, or the local number is recorded as the local ceiling and
+   the target is judged elsewhere (Phase 12). Neither is a change to the target; it is a change to
+   where it is measured, and it needs the user's decision because it changes an accepted exit
+   condition's evidence.
+2. **Vectorising Silver's admission boundary.** The measured ceiling is per-row, and the row-at-a-
+   time Python UDF is the largest single cost. An Arrow-batched boundary (`mapInPandas`) keeps the
+   same Pydantic validation and the same rules — the existing tests compare Spark's dispositions
+   against the pure `silver_rules` functions, so they are the oracle for equivalence — and would be
+   the first thing to try. It is a change to the core dedup path, so it is an ADR-0053 decision,
+   not a lead call.
+3. **D29 (still open, now quantified in ADR-0053 Amendment 2).** The whole-table reads are
+   secondary to the per-row wall, but they are what sets the ceiling of a long run.
+4. **D27, D28** unchanged, and **ADR acceptance** (0015, 0046–0057 with their amendments) is still
+   the user's.
+
 ### Phase 3 — Mac validation and Step 11 landed (2026-09-18). Read this first, then the handoff below.
 
 - **Environment.** The Mac is an M3 Pro with 12 cores and 18 GiB, running Docker Desktop 29.8 (17.5

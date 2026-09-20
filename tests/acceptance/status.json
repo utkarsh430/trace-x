@@ -3,8 +3,8 @@
   "project": "TRACE-X",
   "current_phase": "3",
   "current_phase_name": "Streaming & Medallion",
-  "updated_at": "2026-09-18",
-  "last_verified_commit": "4396c0f",
+  "updated_at": "2026-09-20",
+  "last_verified_commit": "bfb8c74",
   "legend": {
     "NOT_STARTED": "No implementation exists.",
     "IN_PROGRESS": "Implementation started; acceptance evidence incomplete.",
@@ -339,9 +339,9 @@
       "name": "Sustained stream throughput and outage recovery at the 5,000 events/s target rate, recorded honestly",
       "status": "FAIL",
       "evidence": {
-        "command": "make load-stream",
+        "command": "make kafka-topics-reset && make load-stream",
         "verified_at": null,
-        "result": "FAIL (2026-09-18), recorded honestly; the rate was never lowered. Latest valid record bench-20260918-200555-stream-throughput-b46e7e74 at b46e7e7, with Silver's canonical MERGE bounded (D24): every integrity check passed, and the consumer (Bronze + Silver in one JVM, 2g) again died of java.lang.OutOfMemoryError before the measured window. Diagnostics (not citable): a 4g run survived the 10-minute warm-up without reaching a steady state and died of OOM later (INVALID on host saturation, bench-20260918-201547-stream-throughput-b46e7e74); capping Bronze intake did not help; heap histograms are dominated by in-flight byte arrays. The remaining per-batch work that grows with the Silver table (the classification identity lookup and the post-write uniqueness check, not boundable on occurred_at) is the leading cause (D29); fixing it needs an identity-organised layout, a design decision. First valid FAIL: bench-20260918-141621-stream-throughput-50aad177."
+        "result": "FAIL (2026-09-20), recorded as found; the rate, the lag target and the outage were never moved. Four runs, all kept, none of them a valid measurement of the pipeline at the rate: bench-20260920-061851-stream-throughput-a9cee6ce FAIL -- the broker still held 3,492,057 records from earlier runs, so tx.scored.v1 sat at its declared byte cap and the retention trimmer removed segments Bronze had not read; Bronze stopped loudly on failOnDataLoss after 15 s, which is debt D18 exactly as written, and refuse_preexisting now refuses such a broker before a run starts. bench-20260920-062507-stream-throughput-4231d90e INVALID -- a producer worker died 17 minutes in because the host wall clock stepped back 93.5 ms between a send and its acknowledgement; OffsetBounds.observe now discards such a report and counts it, which the last run validated (a handful out of fifteen million, far inside the declared tolerance, and it killed nothing). bench-20260920-064710-stream-throughput-77cb0051 INVALID -- a batch that had fallen behind admitted tens of thousands of rows under the 64 MiB cap and its broadcast outran Spark's broadcast timeout, and the broker-to-host clock drifted seconds against a 500 ms tolerance. bench-20260920-180255-stream-throughput-bfb8c748 INVALID -- the harness itself could not offer the rate, falling well short of it with its producers minutes behind schedule, because the declared local[8] consumer starved them; the declaration is back to local[4]. What the runs establish, from figures that live in those records and may not be cited because the records are INVALID: Silver commits well under half the target rate on this laptop, with tx.authorization.v1 and identity.events.v1 keeping up while tx.scored.v1 reaches under half of what it alone needs. The ceiling is per-row cost, not per-batch cost: ADR-0053 Amendment 2 cut the steady-state micro-batch by about a quarter (spikes/step13-silver-batch-cost/, diagnostics), which removed the death spiral and the OutOfMemoryError every earlier run died of and left the row-at-a-time Python admission UDF as the wall -- where ADR-0053 said the throughput risk would be. At the offered rate the 12-core 18 GiB machine saturates: the Docker VM clock drifts seconds against the host, Spark broadcasts exceed their timeout, and the producers fall minutes behind. Escalated to the user: where the target is measured, and whether to vectorise the admission boundary (an ADR-0053 decision)."
       }
     },
     {
