@@ -256,7 +256,9 @@ def render_report(run: StreamBenchmarkRecord) -> str:
         f"| consumer | `{config['master']}`, driver {config['driver_memory']}, "
         f"{config['shuffle_partitions']} shuffle partitions, triggers "
         f"{config['bronze_trigger_s']} s / {config['silver_trigger_s']} s, maxOffsetsPerTrigger "
-        f"{config['max_offsets_per_trigger']} |",
+        f"{config['max_offsets_per_trigger']}, maxFilesPerTrigger "
+        f"{config['max_files_per_trigger']}, maxBytesPerTrigger "
+        f"{config['max_bytes_per_trigger']} |",
         f"| Gold | {'on' if config['gold'] else 'off'}, driver {config['gold_driver_memory']} |",
         f"| mix | {config['mix']} ({config['producer_workers']} producer workers) |",
         f"| windows | warm-up {config['warmup_min_s']} to {config['warmup_max_s']} s, measured "

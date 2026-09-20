@@ -59,6 +59,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--bronze-trigger-s", type=float, required=True)
     parser.add_argument("--silver-trigger-s", type=float, required=True)
     parser.add_argument("--max-offsets-per-trigger", type=int)
+    parser.add_argument("--max-files-per-trigger", type=int)
+    parser.add_argument("--max-bytes-per-trigger", type=int)
     parser.add_argument("--master", required=True)
     parser.add_argument("--driver-memory", required=True)
     parser.add_argument("--shuffle-partitions", type=int, required=True)
@@ -95,6 +97,8 @@ def _run(spark: Any, lake: LakeConfig, args: argparse.Namespace) -> int:
             dirty_worktree=dirty,
             now=dt.datetime.now(dt.UTC),
             trigger=Trigger(interval_s=args.silver_trigger_s),
+            max_files_per_trigger=args.max_files_per_trigger,
+            max_bytes_per_trigger=args.max_bytes_per_trigger,
         )
         for topic in args.topic
     ]

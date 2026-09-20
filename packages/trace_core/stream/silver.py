@@ -781,30 +781,87 @@ def occurred_at_predicate(column: str, bounds: OccurredRange | None) -> str:
     return f"({column} >= {low} AND {column} <= {high})"
 
 
-def batch_merge_bounds(classified: DataFrame) -> MergeBounds:
-    """`merge_bounds` over a classified batch: one aggregate over the persisted batch."""
+@dataclass(frozen=True, slots=True)
+class BatchFacts:
+    """Everything the sink needs to know about a classified batch, read in one pass over it.
+
+    A Silver micro-batch's cost is dominated by fixed per-job overhead, not by its rows or by the
+    table it deduplicates against: 7,000 rows cost 5.2 s against an empty canonical table and
+    5.9 s against one of 2,000,000 (the Step 13 breakdown probe, 2026-09-20, `local[4]`, 2 GiB).
+    So the sink asks Spark as few questions as it can, and each one only once.
+
+    One grouped aggregation replaces six actions: the disposition counts, the five bound
+    aggregates, and the four `isEmpty()` probes the sink used to make before each commit. Reading
+    emptiness from the counts is also the safer answer: a second action over a batch whose cache
+    was evicted recomputes it, and two looks could disagree.
+    """
+
+    by_disposition: dict[str, int]
+    bounds: MergeBounds
+    late_admitted: int
+    """Admitted rows this batch judged late: the entries it may have to add to `late_events`."""
+
+    @property
+    def rows(self) -> int:
+        """Classified rows. Records `decide` rejected are not among them."""
+        return sum(self.by_disposition.values())
+
+    def count(self, *dispositions: Disposition) -> int:
+        return sum(self.by_disposition.get(item.value, 0) for item in dispositions)
+
+    @property
+    def late_events_may_change(self) -> bool:
+        """Whether this batch can change `silver.late_events`; see `_merge_late_events`."""
+        return bool(self.count(Disposition.SUPERSEDE, Disposition.REPLAYED) or self.late_admitted)
+
+
+def batch_facts(classified: DataFrame) -> BatchFacts:
+    """`BatchFacts` from one grouped aggregation over the persisted classified batch.
+
+    The bounds are folded from the per-disposition aggregates. `min`, `max` and `sum` are
+    associative, so the fold is the ungrouped aggregate `merge_bounds` judges, unchanged.
+    """
     from pyspark.sql import functions as F  # noqa: N812
 
     own = F.col(DIGESTED_EVENT_TIME)  # the event's column, in epoch microseconds here
     existing = F.col("existing_occurred_at_us")
     supersede = F.col("disposition") == Disposition.SUPERSEDE.value
+    admitted_late = (F.col("disposition") == Disposition.ADMIT.value) & F.col("is_late")
     kept = F.when(F.col("disposition") != Disposition.CONFLICT.value, own)
-    row = classified.agg(
-        F.min(F.when(supersede, own)).alias("supersede_low_us"),
-        F.max(F.when(supersede, own)).alias("supersede_high_us"),
-        F.min(F.least(kept, existing)).alias("committed_low_us"),
-        F.max(F.greatest(kept, existing)).alias("committed_high_us"),
-        F.count(F.when(supersede & ~own.eqNullSafe(existing), 1)).alias("supersede_mismatched"),
-    ).first()
-    if row is None:
-        raise LakeContractError("an aggregate returned no row")
-    return merge_bounds(
-        supersede_low_us=row["supersede_low_us"],
-        supersede_high_us=row["supersede_high_us"],
-        committed_low_us=row["committed_low_us"],
-        committed_high_us=row["committed_high_us"],
-        supersede_mismatched=int(row["supersede_mismatched"]),
+    groups = (
+        classified.groupBy("disposition")
+        .agg(
+            F.count(F.lit(1)).alias("rows"),
+            F.count(F.when(admitted_late, 1)).alias("late_admitted"),
+            F.min(F.when(supersede, own)).alias("supersede_low_us"),
+            F.max(F.when(supersede, own)).alias("supersede_high_us"),
+            F.min(F.least(kept, existing)).alias("committed_low_us"),
+            F.max(F.greatest(kept, existing)).alias("committed_high_us"),
+            F.count(F.when(supersede & ~own.eqNullSafe(existing), 1)).alias("supersede_mismatched"),
+        )
+        .collect()
     )
+
+    def fold(column: str, pick: Callable[..., int]) -> int | None:
+        values = [int(row[column]) for row in groups if row[column] is not None]
+        return pick(values) if values else None
+
+    return BatchFacts(
+        by_disposition={str(row["disposition"]): int(row["rows"]) for row in groups},
+        bounds=merge_bounds(
+            supersede_low_us=fold("supersede_low_us", min),
+            supersede_high_us=fold("supersede_high_us", max),
+            committed_low_us=fold("committed_low_us", min),
+            committed_high_us=fold("committed_high_us", max),
+            supersede_mismatched=sum(int(row["supersede_mismatched"]) for row in groups),
+        ),
+        late_admitted=sum(int(row["late_admitted"]) for row in groups),
+    )
+
+
+def batch_merge_bounds(classified: DataFrame) -> MergeBounds:
+    """`merge_bounds` over a classified batch: one aggregate over the persisted batch."""
+    return batch_facts(classified).bounds
 
 
 # -------------------------------------------------------------------- the sink ---
@@ -1011,34 +1068,33 @@ def _write_batch(
         checkpoint_id,
     )
 
-    by_disposition = {
-        str(row["disposition"]): int(row["count"])
-        for row in classified.groupBy("disposition").count().collect()
-    }
-    rejected_count = decided.filter(F.col("outcome") == Outcome.QUARANTINED.value).count()
     # Before the first commit: a refused premise leaves nothing of the batch written.
-    bounds = batch_merge_bounds(classified)
+    facts = batch_facts(classified)
+    bounds = facts.bounds
+    rejected_count = decided.filter(F.col("outcome") == Outcome.QUARANTINED.value).count()
+    # Whether a frame has rows is read from those counts, never asked of Spark again: an
+    # `isEmpty()` per target was a Spark job for an answer already in hand (`BatchFacts`).
+    supersede_count = facts.count(Disposition.SUPERSEDE)
 
     # The order matters for a replay after a crash between two commits (module docstring).
-    if not quarantined.isEmpty():
+    if rejected_count or facts.count(Disposition.CONFLICT):
         opened.append(quarantined, batch_id=batch_id, target=QUARANTINE)
-    if not duplicates.isEmpty():
+    if facts.count(Disposition.DUPLICATE, Disposition.SUPERSEDE):
         opened.append(duplicates, batch_id=batch_id, target=DUPLICATES)
-    if not inserts.isEmpty():
+    if facts.count(Disposition.ADMIT, Disposition.SUPERSEDE):
         opened.merge(
             inserts.sparkSession,
             batch_id=batch_id,
             target=spec.table,
             build=lambda target: _canonical_merge(target, inserts, topic, bounds.supersede),
         )
-    if not classified.isEmpty():
+    if facts.late_events_may_change:
         _merge_late_events(spec, opened, classified, bounds.committed, batch_id=batch_id)
-    supersede_count = by_disposition.get(Disposition.SUPERSEDE.value, 0)
     return BatchCounts(
-        admitted=by_disposition.get(Disposition.ADMIT.value, 0),
-        replayed=by_disposition.get(Disposition.REPLAYED.value, 0),
-        duplicates=by_disposition.get(Disposition.DUPLICATE.value, 0),
-        quarantined=rejected_count + by_disposition.get(Disposition.CONFLICT.value, 0),
+        admitted=facts.count(Disposition.ADMIT),
+        replayed=facts.count(Disposition.REPLAYED),
+        duplicates=facts.count(Disposition.DUPLICATE),
+        quarantined=rejected_count + facts.count(Disposition.CONFLICT),
         superseding=supersede_count,
         superseded=supersede_count,
     )
@@ -1058,9 +1114,16 @@ def _canonical_merge(
 ) -> Any:
     """Insert-only, except `tx.scored.v1`: there a row with the same digest and an earlier key
     replaces the committed row. A differing digest is a conflict, and never reaches the MERGE.
-    Bounded by `supersede` (the bounded-MERGEs section)."""
+    Bounded by `supersede` (the bounded-MERGEs section).
+
+    The matched clause is built only when the batch has a superseding row (`supersede is not
+    None`). Without one the clause is unreachable anyway -- the MERGE condition already carries
+    `FALSE` for the target range, and `inserts` then holds `admit` rows alone, whose identities
+    have no committed row -- but Delta reads a merge with no matched clause as insert-only and
+    writes it in one pass instead of two. Same rows, one fewer pass over the batch.
+    """
     builder = target.alias("t").merge(inserts.alias("s"), canonical_merge_condition(supersede))
-    if topic == SUPERSEDABLE_TOPIC:
+    if topic == SUPERSEDABLE_TOPIC and supersede is not None:
         builder = builder.whenMatchedUpdateAll(
             condition=f"t.content_digest = s.content_digest AND {key_sql('s')} < {key_sql('t')}"
         )
@@ -1106,7 +1169,18 @@ def _merge_late_events(
     attempt made): matched and late with other coordinates, update; matched and not late, delete;
     not matched and late, insert; otherwise nothing. The read and the MERGE are bounded by
     `committed_range` (the bounded-MERGEs section); a batch identity whose committed row the
-    bounded read does not find refuses the batch before the MERGE."""
+    bounded read does not find refuses the batch before the MERGE.
+
+    **Called only when the batch can change the table** (`BatchFacts.late_events_may_change`:
+    a superseding row, a replayed row, or an admitted row judged late). `late_events` holds
+    exactly one row per late committed canonical row, so for every other batch identity all three
+    clauses are no-ops: the committed row did not change, so a matched entry is neither moved nor
+    un-lated, and an unmatched committed row that was late would already contradict that
+    invariant. A replayed row is what a crash between the canonical commit and this one leaves
+    behind -- Structured Streaming re-runs the failed batch, and its rows then classify as
+    `replayed` -- so a replay always re-derives, and the commit this one owes is never skipped.
+    Skipping the no-op saves a bounded read, a count and a MERGE commit in the common case; the
+    post-commit check it used to make is kept, unbounded and stronger, in `_assert_unique`."""
     from pyspark.sql import functions as F  # noqa: N812
 
     session = classified.sparkSession
@@ -1119,8 +1193,16 @@ def _merge_late_events(
         .persist()
     )
     try:
-        expected = identities.count()
-        located = found.select("silver_identity").distinct().count()
+        # One job for both counts: the batch's identities and the ones the bounded read found.
+        sides = {
+            str(row["side"]): int(row["count"])
+            for row in identities.select(F.lit("expected").alias("side"), "silver_identity")
+            .unionByName(found.select(F.lit("located").alias("side"), "silver_identity").distinct())
+            .groupBy("side")
+            .count()
+            .collect()
+        }
+        expected, located = sides.get("expected", 0), sides.get("located", 0)
         if located != expected:
             raise SilverPruningError(
                 f"{spec.table}: {expected - located} of the batch's {expected} identities have "
@@ -1175,6 +1257,12 @@ def _late_events_commit(
     opened.merge(session, batch_id=batch_id, target=LATE_EVENTS, build=build)
 
 
+BATCH_SCOPE: Final = "batch"
+CANONICAL_SCOPE: Final = "canonical"
+LATE_SCOPE: Final = "late"
+"""Tags `_assert_unique` counts by, so both tables are judged in one aggregation."""
+
+
 class SilverUniquenessError(LakeContractError):
     """A Silver table holds an identity twice: exact deduplication failed, and the query stops."""
 
@@ -1186,33 +1274,52 @@ def _assert_unique(
 
     identities = classified.select("silver_identity").distinct()
     canonical = session.read.format("delta").load(str(spec.table.local_path(opened.lake)))
-    repeated = (
-        canonical.join(identities, "silver_identity", "left_semi")
-        .groupBy("silver_identity")
-        .count()
-        .filter(F.col("count") > 1)
-        .limit(5)
-        .collect()
-    )
-    if repeated:
-        raise SilverUniquenessError(
-            f"{spec.table} holds identities more than once after a MERGE: "
-            f"{[row['silver_identity'] for row in repeated]}"
-        )
     late = session.read.format("delta").load(str(LATE_EVENTS.local_path(opened.lake)))
-    repeated_late = (
-        late.filter(F.col("silver_topic") == spec.topic)
-        .join(identities, "silver_identity", "left_semi")
-        .groupBy("silver_identity")
-        .count()
-        .filter(F.col("count") > 1)
+    # Both tables, in one job and one shuffle: the batch's identities and the rows each table
+    # holds for them are tagged and counted together. Each table is still read by identity and
+    # unbounded, as before.
+    #
+    # The canonical table is held to **exactly one** row per batch identity, not merely at most
+    # one. After the canonical commit every classified row's identity has a committed row -- the
+    # batch's own `admit` or `supersede` row, or the row classification found for a `replayed`,
+    # `duplicate` or `conflict` row -- so a missing one is as wrong as a repeated one, and this
+    # unbounded check subsumes the bounded existence check `_merge_late_events` makes only when it
+    # runs. `late_events` holds at most one row per (topic, identity); zero is correct there, for
+    # every identity whose committed row is not late.
+    tagged = (
+        identities.select("silver_identity", F.lit(BATCH_SCOPE).alias("scope"))
+        .unionByName(
+            canonical.join(identities, "silver_identity", "left_semi").select(
+                "silver_identity", F.lit(CANONICAL_SCOPE).alias("scope")
+            )
+        )
+        .unionByName(
+            late.filter(F.col("silver_topic") == spec.topic)
+            .join(identities, "silver_identity", "left_semi")
+            .select("silver_identity", F.lit(LATE_SCOPE).alias("scope"))
+        )
+    )
+    counted = F.count(F.when(F.col("scope") == F.lit(CANONICAL_SCOPE), 1)).alias(CANONICAL_SCOPE)
+    counted_late = F.count(F.when(F.col("scope") == F.lit(LATE_SCOPE), 1)).alias(LATE_SCOPE)
+    wrong = (
+        tagged.groupBy("silver_identity")
+        .agg(counted, counted_late)
+        .filter((F.col(CANONICAL_SCOPE) != 1) | (F.col(LATE_SCOPE) > 1))
         .limit(5)
         .collect()
     )
-    if repeated_late:
+    if wrong:
+        listed = sorted(
+            (
+                str(row["silver_identity"]),
+                int(row[CANONICAL_SCOPE]),
+                int(row[LATE_SCOPE]),
+            )
+            for row in wrong
+        )
         raise SilverUniquenessError(
-            f"{LATE_EVENTS} holds ({spec.topic}, identity) more than once: "
-            f"{[row['silver_identity'] for row in repeated_late]}"
+            f"{spec.query} left a Silver table holding an identity other than once "
+            f"(identity, {spec.table} rows, {LATE_EVENTS} rows): {listed}"
         )
 
 
@@ -1261,6 +1368,31 @@ def silver_targets(topic: str) -> list[TableRef]:
     return [silver_topic(topic).table, *SHARED_TABLES]
 
 
+def silver_source_options(
+    max_files_per_trigger: int | None = None, max_bytes_per_trigger: int | None = None
+) -> dict[str, str] | None:
+    """Silver's Delta-source options: admission only, never loss tolerance.
+
+    Both defer Bronze files to a later batch; neither skips one, and `delta_source` still refuses
+    every option that would let a source skip data. `maxBytesPerTrigger` is Delta's soft byte cap:
+    it always admits at least one file, so it bounds a batch's memory without ever stalling a
+    query behind a file larger than the cap, which is why it is the bound the stream benchmark
+    declares. A file count cannot make that promise, because Bronze's file sizes follow its own
+    intake.
+    """
+    options: dict[str, str] = {}
+    for name, value, key in (
+        ("max_files_per_trigger", max_files_per_trigger, "maxFilesPerTrigger"),
+        ("max_bytes_per_trigger", max_bytes_per_trigger, "maxBytesPerTrigger"),
+    ):
+        if value is None:
+            continue
+        if value < 1:
+            raise ValueError(f"{name} must be positive: {value}")
+        options[key] = str(value)
+    return options or None
+
+
 def start_silver_query(
     spark: SparkSession,
     lake: LakeConfig,
@@ -1270,8 +1402,17 @@ def start_silver_query(
     dirty_worktree: bool,
     now: dt.datetime,
     trigger: Trigger,
+    max_files_per_trigger: int | None = None,
+    max_bytes_per_trigger: int | None = None,
 ) -> SilverQuery:
-    """Create the tables, open the checkpoint on the topic's Bronze table, and start."""
+    """Create the tables, open the checkpoint on the topic's Bronze table, and start.
+
+    `max_files_per_trigger` and `max_bytes_per_trigger` bound how much Bronze one micro-batch
+    admits (`silver_source_options`). They defer rows, never skip them (`delta_source` still
+    refuses every loss-tolerant option), and they bound the batch's memory: without a bound a
+    batch that fell behind admits the whole backlog, needs more heap than the last, and falls
+    further behind (the stream benchmark's consumer, 2026-09-18/19).
+    """
     spec = silver_topic(topic)
     source: TableRef = bronze_topic(topic).table
     if snapshot_facts(spark, source.local_path(lake)) is None:
@@ -1289,7 +1430,9 @@ def start_silver_query(
         dirty_worktree=dirty_worktree,
         now=now,
     )
-    frame = opened.delta_source(spark, source)
+    frame = opened.delta_source(
+        spark, source, silver_source_options(max_files_per_trigger, max_bytes_per_trigger)
+    )
     writer: Any = (
         frame.writeStream.queryName(spec.query)
         .option("checkpointLocation", str(opened.directory))
@@ -1322,10 +1465,12 @@ __all__ = [
     "PASS_THROUGH",
     "REWRITTEN_TABLES",
     "BatchCounts",
+    "BatchFacts",
     "SilverQuery",
     "SilverUniquenessError",
     "admission_type",
     "admit_row",
+    "batch_facts",
     "canonical_schema",
     "classify_frame",
     "create_silver_tables",

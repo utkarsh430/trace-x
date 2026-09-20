@@ -209,6 +209,10 @@ class ConsumerProcess:
         ]
         if c.max_offsets_per_trigger is not None:
             args += ["--max-offsets-per-trigger", str(c.max_offsets_per_trigger)]
+        if c.max_files_per_trigger is not None:
+            args += ["--max-files-per-trigger", str(c.max_files_per_trigger)]
+        if c.max_bytes_per_trigger is not None:
+            args += ["--max-bytes-per-trigger", str(c.max_bytes_per_trigger)]
         for topic in sorted(c.mix):
             args += ["--topic", topic]
         return args
@@ -625,7 +629,11 @@ def _parser() -> argparse.ArgumentParser:
         default = getattr(defaults, name)
         if isinstance(default, bool):
             parser.add_argument(flag, action=argparse.BooleanOptionalAction, default=default)
-        elif name == "max_offsets_per_trigger":
+        elif name in {
+            "max_offsets_per_trigger",
+            "max_files_per_trigger",
+            "max_bytes_per_trigger",
+        }:
             parser.add_argument(flag, type=int, default=default)
         else:
             parser.add_argument(flag, type=type(default), default=default, help=field.description)

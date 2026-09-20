@@ -88,6 +88,17 @@ the first session on this project's reference machine failed. A single-JVM local
 session talks only to itself, so loopback is the one address it needs, and pinning
 it removes a dependency on how the host happens to be named."""
 
+LOCAL_DELTA_CONF: Final[dict[str, str]] = {
+    "spark.databricks.delta.snapshotPartitions": "4",
+}
+"""Applied to `local[...]` masters only, and overridable through `extra_conf`.
+
+Delta reconstructs a table's log state in `snapshotPartitions` partitions, 50 by default -- a
+number chosen for a cluster. A local session has one executor, and every Delta read and every
+commit pays 50 task launches for a log a laptop replays in one. Lowering it to 4 took about 7%
+off a steady-state Silver micro-batch and about a fifth off its MERGE (the Step 13 breakdown
+probe, 2026-09-20). It changes no result: the same log, replayed with fewer tasks."""
+
 VERIFIED_CLASSES: Final[dict[str, str]] = {
     "io.delta.sql.DeltaSparkSessionExtension": "delta-spark",
     "org.apache.spark.sql.kafka010.KafkaSourceProvider": "the Kafka connector",
@@ -216,8 +227,9 @@ def build_session(
             "another, or its static configuration would silently win"
         )
 
+    local = master.startswith("local")
     conf: dict[str, str] = {
-        **(LOCAL_DRIVER_CONF if master.startswith("local") else {}),
+        **(LOCAL_DRIVER_CONF | LOCAL_DELTA_CONF if local else {}),
         **BASE_CONF,
         "spark.jars": ",".join(str(path) for path in toolchain.locked_jar_paths()),
         "spark.sql.shuffle.partitions": str(shuffle_partitions),
@@ -297,6 +309,7 @@ def verify_running_jvm(session: SparkSession) -> None:
 
 __all__ = [
     "BASE_CONF",
+    "LOCAL_DELTA_CONF",
     "LOCAL_DRIVER_CONF",
     "RESERVED_KEYS",
     "VERIFIED_CLASSES",

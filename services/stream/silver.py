@@ -50,6 +50,8 @@ def _parser() -> argparse.ArgumentParser:
     mode.add_argument("--available-now", action="store_true")
     mode.add_argument("--interval-s", type=float)
     run.add_argument("--driver-memory", default="1g")
+    run.add_argument("--max-files-per-trigger", type=int, default=None)
+    run.add_argument("--max-bytes-per-trigger", type=int, default=None)
     check = commands.add_parser("conservation", help="judge Silver against Bronze")
     check.add_argument("--topic", action="append")
     return parser
@@ -93,6 +95,8 @@ def _run(spark: Any, lake: LakeConfig, args: argparse.Namespace) -> int:
             dirty_worktree=dirty,
             now=dt.datetime.now(dt.UTC),
             trigger=trigger,
+            max_files_per_trigger=args.max_files_per_trigger,
+            max_bytes_per_trigger=args.max_bytes_per_trigger,
         )
         for topic in released_topics(args.topic)
     ]

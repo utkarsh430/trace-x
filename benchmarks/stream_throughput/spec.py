@@ -67,6 +67,14 @@ THROUGHPUT_QUANTISATION_TOLERANCE: Final = 0.01
 OFFERED_RATE_TOLERANCE: Final = 0.01
 MAX_SCHEDULE_LAG_S: Final = 1.0
 CLOCK_OFFSET_TOLERANCE_MS: Final = 500.0
+MAX_TRIGGER_SHARE_OF_LAG_TARGET: Final = 0.5
+"""A `processingTime` trigger is a floor under consumer lag: nothing a query has not triggered on
+yet is committed, so lag at a commit is at least the trigger interval plus the batch's own
+duration. A declared trigger may therefore take at most half the 10 s target, leaving the other
+half for the batch. Without this rule a run could be made to look sustained by trading the trigger
+against the very number the target measures, which is the sort of quiet re-tuning CLAUDE.md §17
+forbids; with it, a trigger long enough to amortise Spark's fixed per-batch cost is still bounded
+by the target it is measured against."""
 MIN_SAMPLES_PER_WINDOW: Final = 10
 RECOVERY_HOLD_S: Final = 60
 RECOVERY_BOUND_S: Final = 900
@@ -107,10 +115,33 @@ class RunConfig(BaseModel):
     recovery_hold_s: Annotated[int, Field(ge=1)] = RECOVERY_HOLD_S
 
     bronze_trigger_s: Annotated[float, Field(gt=0)] = 2.0
-    silver_trigger_s: Annotated[float, Field(gt=0)] = 2.0
-    max_offsets_per_trigger: Annotated[int, Field(gt=0)] | None = None
-    master: Annotated[str, Field(pattern=r"^local\[(\d+|\*)\]$")] = "local[4]"
-    driver_memory: Annotated[str, Field(pattern=r"^\d+[mg]$")] = "2g"
+    silver_trigger_s: Annotated[float, Field(gt=0)] = 4.0
+    """Declared before the 2026-09-20 run, from the measured shape of a Silver micro-batch: its
+    cost is fixed rather than proportional (ADR-0053 Amendment 2), so a 2-second trigger pays that
+    cost twice as often for half the rows and cannot keep up at any table size. Four seconds is
+    the longest interval `MAX_TRIGGER_SHARE_OF_LAG_TARGET` allows."""
+    max_offsets_per_trigger: Annotated[int, Field(gt=0)] | None = 30_000
+    """Kafka records one Bronze micro-batch may admit, per topic. At the target rate the busiest
+    topic offers about 7,000 per 2-second trigger, so this is roughly four times the steady
+    inflow: enough to drain an outage backlog quickly, and a bound on what one batch holds."""
+    max_files_per_trigger: Annotated[int, Field(gt=0)] | None = None
+    max_bytes_per_trigger: Annotated[int, Field(gt=0)] | None = 64 * 1024 * 1024
+    """Bronze bytes one Silver micro-batch may admit (Delta's soft cap: at least one file always
+    goes through, so no file larger than the cap can stall the query). It defers rows, never skips
+    them; without it a batch that fell behind admits the whole backlog, needs more heap than the
+    last, and the consumer dies of OutOfMemoryError, as every Step 13 run before 2026-09-20 did.
+    About ten times the steady inflow of one 4-second batch."""
+    master: Annotated[str, Field(pattern=r"^local\[(\d+|\*)\]$")] = "local[8]"
+    """The consumer runs six streaming queries in one JVM -- a Bronze and a Silver query per topic
+    -- and each pays its own fixed per-batch cost, so what it needs is slots, not speed. `local[4]`
+    made them queue behind one another on a 12-core machine. Declared before the 2026-09-20 run and
+    recorded in the manifest, as every resource this benchmark uses is; no target moved with it."""
+    driver_memory: Annotated[str, Field(pattern=r"^\d+[mg]$")] = "3g"
+    """With eight task slots and the admission bounds above, 2 GiB left no headroom for a batch
+    that had fallen behind. Three, not four: the consumer shares an 18 GiB machine with Gold's own
+    2 GiB JVM, the producers and the broker, and a host that starts swapping measures the swap
+    rather than the pipeline (`bench-20260918-201547-stream-throughput-b46e7e74`, INVALID on host
+    saturation). Declared before the run, with the master."""
     shuffle_partitions: Annotated[int, Field(ge=1)] = 2
 
     gold: bool = True
@@ -150,6 +181,25 @@ class RunConfig(BaseModel):
             raise ValueError("warmup_max_s must be at least warmup_min_s")
         return self
 
+    @model_validator(mode="after")
+    def _triggers_leave_room_under_the_lag_target(self) -> RunConfig:
+        budget = LAG_TARGET_MS / 1_000 * MAX_TRIGGER_SHARE_OF_LAG_TARGET
+        over = {
+            name: value
+            for name, value in (
+                ("bronze_trigger_s", self.bronze_trigger_s),
+                ("silver_trigger_s", self.silver_trigger_s),
+            )
+            if value > budget
+        }
+        if over:
+            raise ValueError(
+                f"{sorted(over)} exceed {budget} s, half the {LAG_TARGET_MS} ms lag target: a "
+                f"trigger is a floor under consumer lag and may not be traded against it "
+                f"(MAX_TRIGGER_SHARE_OF_LAG_TARGET)"
+            )
+        return self
+
     @property
     def per_worker_rate(self) -> float:
         return self.rate_events_per_s / self.producer_workers
@@ -168,5 +218,6 @@ def targets() -> dict[str, float | int]:
         "offered_rate_tolerance": OFFERED_RATE_TOLERANCE,
         "max_schedule_lag_s": MAX_SCHEDULE_LAG_S,
         "clock_offset_tolerance_ms": CLOCK_OFFSET_TOLERANCE_MS,
+        "max_trigger_share_of_lag_target": MAX_TRIGGER_SHARE_OF_LAG_TARGET,
         "min_samples_per_window": MIN_SAMPLES_PER_WINDOW,
     }

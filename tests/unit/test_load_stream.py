@@ -767,13 +767,24 @@ def test_the_consumer_runs_processing_time_triggers_never_available_now() -> Non
     from benchmarks.stream_throughput.consumer import _parser
     from benchmarks.stream_throughput.run import ConsumerProcess
 
+    config = RunConfig()
     command = ConsumerProcess(
-        RunConfig(), bootstrap="localhost:9092", lake_root=Path("/x"), logs=Path("/y")
+        config, bootstrap="localhost:9092", lake_root=Path("/x"), logs=Path("/y")
     ).command()
     assert "--bronze-trigger-s" in command and "--silver-trigger-s" in command
     assert not any("available" in part for part in command)
+    # The declared configuration reaches the consumer whole: read from the config, never
+    # repeated as a literal here, so declaring a different one cannot leave this test asserting
+    # the old one (it did, when the 2026-09-20 run declared local[8]).
     parsed = _parser().parse_args(command[3:])
-    assert parsed.bronze_trigger_s == 2.0 and parsed.master == "local[4]"
+    assert parsed.bronze_trigger_s == config.bronze_trigger_s
+    assert parsed.silver_trigger_s == config.silver_trigger_s
+    assert parsed.master == config.master
+    assert parsed.driver_memory == config.driver_memory
+    assert parsed.shuffle_partitions == config.shuffle_partitions
+    assert parsed.max_offsets_per_trigger == config.max_offsets_per_trigger
+    assert parsed.max_files_per_trigger == config.max_files_per_trigger
+    assert parsed.max_bytes_per_trigger == config.max_bytes_per_trigger
     source = (ROOT / "benchmarks" / "stream_throughput" / "consumer.py").read_text()
     assert "available_now=True" not in source
 

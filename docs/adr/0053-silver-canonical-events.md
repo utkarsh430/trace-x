@@ -344,3 +344,92 @@ read of the committed rows that feeds it. Per-batch cost therefore grew with the
     control fails with `FAILED_READ_FILE.FILE_NOT_EXIST`.
   - Those stream tests have not been run as of this amendment.
   - Whether the bounded MERGEs meet `P3.stream-throughput` is for a new benchmark run to say.
+
+---
+
+## Amendment 2 (2026-09-20): a Silver micro-batch's cost is fixed, not proportional; the sink stops paying it
+
+- **Status of this amendment:** Proposed.
+- **What it does not change:** §4.2 uniqueness, the dispositions, the commit order (§4), timing
+  semantics v1, the bounds of Amendment 1, and every row any table holds. Nothing here is a
+  lateness bound, a dedup horizon, or a change to what a batch writes. It changes only how many
+  questions the sink asks Spark, and which of them it can prove it need not ask.
+
+### Context
+
+Amendment 1 named the whole-table reads that remain (`classify_frame`'s identity semi-join and
+`_assert_unique`) as the leading suspect for `P3.stream-throughput`'s failure, and recorded them as
+debt D29. **A controlled measurement contradicts that ranking.**
+
+A probe ran one real 7,000-row Silver micro-batch against a canonical table seeded to a declared
+size, file count held fixed, on the benchmark's own session (`local[4]`, 2 GiB, 2 shuffle
+partitions), and separately ran eight consecutive micro-batches to separate cold start from steady
+state (2026-09-20, diagnostics, not acceptance evidence):
+
+| canonical rows | 0 | 250,000 | 1,000,000 | 2,000,000 | 3,000,000 |
+|---|---|---|---|---|---|
+| one batch, s | 7.46 | 7.48 | 7.87 | 7.41 | 8.53 |
+
+Steady state, eight consecutive batches in one query: **5.20 s per batch against an empty table,
+5.90 s against 2,000,000 rows.** So the table contributes about 0.35 s per million rows, and
+roughly 5 s of every batch is paid whatever the table holds. At the benchmark's 2-second trigger,
+Silver could never keep up at any table size, on any heap: it falls behind, each batch then admits
+a larger backlog than the last, and the consumer dies of `OutOfMemoryError` — which is what every
+Step 13 run recorded.
+
+The steady-state breakdown placed that fixed cost: of 5.20 s, the canonical MERGE took 0.98 s, the
+`late_events` re-derivation 0.80 s, the uniqueness assertion 0.74 s, the bounds aggregate 0.05 s,
+and about 2.3 s went on the counts and the four `isEmpty()` probes the sink made before its
+commits. In local mode each Spark job costs roughly 0.2 s before it does any work, and the sink was
+taking eleven of them per batch.
+
+### Decision
+
+The sink asks Spark as few questions as it can, and each one only once.
+
+1. **One grouped aggregation replaces six actions** (`batch_facts` → `BatchFacts`): the disposition
+   counts, the five bound aggregates of Amendment 1, and the four `isEmpty()` probes. The bounds
+   are folded from the per-disposition groups; `min`, `max` and `sum` are associative, so the fold
+   is the same number the ungrouped aggregate produced. Reading emptiness from the counts is also
+   the safer answer: a second action over a batch whose cache was evicted recomputes it, and two
+   looks at one batch could disagree.
+2. **`late_events` is re-derived only when the batch can change it** — when it holds a superseding
+   row, a replayed row, or an admitted row judged late. `late_events` holds exactly one row per
+   late committed canonical row, so for every other batch identity all three MERGE clauses are
+   no-ops: the committed row did not change, so a matched entry is neither moved nor un-lated, and
+   an unmatched committed row that was late would already contradict that invariant. **The replay
+   case is why `replayed` is in the list:** a crash between the canonical commit and this one is
+   re-run by Structured Streaming, and the batch's rows then classify as `replayed`, so the commit
+   it owes is never skipped.
+3. **The post-commit existence check moves, and gets stronger.** `_merge_late_events` refused a
+   batch whose identity had no committed row inside its bound; that check runs only when the
+   re-derivation runs. `_assert_unique` now holds the canonical table to **exactly one** row per
+   batch identity rather than at most one — unbounded, by identity, on every batch — which is the
+   same guarantee over a wider range. Both tables are judged in one job and one shuffle: the
+   batch's identities and the rows each table holds for them are tagged and counted together.
+4. **The canonical MERGE's matched clause is built only when the batch supersedes something.**
+   Without a superseding row the clause is unreachable already: Amendment 1's condition carries
+   `FALSE` for the target range, and `inserts` then holds `admit` rows alone, whose identities have
+   no committed row. Delta reads a merge with no matched clause as insert-only and writes it in one
+   pass instead of two.
+
+### Consequences
+
+- **Positive.** The same probes, on the same machine with the same seeds and session settings,
+  measure the steady-state micro-batch at **3.8 s against an empty canonical table (from 5.20 s)
+  and 4.7 s against 2,000,000 rows (from 5.90 s)** — about a quarter off, and the `late_events`
+  commit and its bounded read gone from the common batch entirely. Whether that is enough for
+  `P3.stream-throughput` is for the benchmark run to say, not this amendment. The uniqueness
+  invariant is checked more strictly than before, on every batch.
+- **Negative.** `late_events` is now correct by an argument about an invariant rather than by
+  re-derivation on every batch. The argument is written above, and
+  `test_a_batch_that_cannot_change_late_events_commits_nothing_to_it` fixes it in a test: a batch
+  that cannot change the table does not commit to it, and one that can, does.
+- **D29 is re-ranked, not closed, and its weight is now measured.** The whole-table reads remain,
+  and they remain unboundable on `occurred_at`. Before the amendment they cost about 0.35 s per
+  million canonical rows; after it, with the fixed cost a quarter lower, they are about 0.45 s per
+  million and a larger share of what is left — the uniqueness assertion alone goes from 0.88 s
+  against an empty table to 1.5 s against 2,000,000 rows. The earlier claim that they were the
+  leading cause of the throughput failure was wrong; the claim that they set the ceiling of a long
+  run is what the measurement now supports, and bounding them is still the user's design decision
+  (an identity-organised layout or index; a dedup horizon is forbidden by §4.2).

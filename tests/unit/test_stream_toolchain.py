@@ -380,3 +380,14 @@ def test_spark_manages_nothing_outside_the_lake_root() -> None:
     """A managed table created without a path lands under the lake root's `_warehouse`, never in a
     `spark-warehouse` beside whichever directory a job started in, and no caller can redirect it."""
     assert "spark.sql.warehouse.dir" in RESERVED_KEYS
+
+
+def test_the_local_delta_tuning_is_local_only_and_stays_overridable() -> None:
+    """`LOCAL_DELTA_CONF` is a local-mode performance setting, not part of the toolchain
+    contract: it must stay out of `BASE_CONF` and out of `RESERVED_KEYS`, so a cluster deployment
+    can raise `snapshotPartitions` through `extra_conf` without touching the contract."""
+    from trace_core.stream.session import BASE_CONF, LOCAL_DELTA_CONF, RESERVED_KEYS
+
+    assert LOCAL_DELTA_CONF == {"spark.databricks.delta.snapshotPartitions": "4"}
+    assert not set(LOCAL_DELTA_CONF) & set(BASE_CONF)
+    assert not set(LOCAL_DELTA_CONF) & RESERVED_KEYS

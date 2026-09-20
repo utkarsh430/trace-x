@@ -1,0 +1,100 @@
+{
+  "seed_rows": 2000000,
+  "batches": 8,
+  "batch_rows": 7000,
+  "total_s": 42.07,
+  "phases": {
+    "classify": [
+      0.18,
+      0.136,
+      0.13,
+      0.135,
+      0.13,
+      0.131,
+      0.126,
+      0.122
+    ],
+    "write_batch": [
+      4.301,
+      3.636,
+      2.892,
+      3.005,
+      2.954,
+      2.898,
+      2.83,
+      2.851
+    ],
+    "assert_unique": [
+      1.728,
+      1.583,
+      1.462,
+      1.508,
+      1.396,
+      1.447,
+      1.574,
+      1.438
+    ],
+    "bounds": [],
+    "late_events": [],
+    "ckpt_merge": [
+      1.121,
+      1.633,
+      0.947,
+      0.98,
+      0.999,
+      0.979,
+      0.953,
+      0.948
+    ],
+    "ckpt_append": []
+  },
+  "progress": [
+    {
+      "batch_id": 0,
+      "rows": 7000,
+      "duration_ms": 6688
+    },
+    {
+      "batch_id": 1,
+      "rows": 7000,
+      "duration_ms": 5604
+    },
+    {
+      "batch_id": 2,
+      "rows": 7000,
+      "duration_ms": 4740
+    },
+    {
+      "batch_id": 3,
+      "rows": 7000,
+      "duration_ms": 4888
+    },
+    {
+      "batch_id": 4,
+      "rows": 7000,
+      "duration_ms": 4715
+    },
+    {
+      "batch_id": 5,
+      "rows": 7000,
+      "duration_ms": 4709
+    },
+    {
+      "batch_id": 6,
+      "rows": 7000,
+      "duration_ms": 4776
+    },
+    {
+      "batch_id": 7,
+      "rows": 7000,
+      "duration_ms": 4668
+    }
+  ],
+  "jobs": {
+    "job_count": 0,
+    "stage_count": 0,
+    "task_count": 0,
+    "stage_ms_total": 0,
+    "slowest_stages_ms": []
+  }
+}

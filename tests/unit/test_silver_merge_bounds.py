@@ -221,3 +221,53 @@ def test_the_late_events_condition_keeps_the_partition_literal_first() -> None:
     assert condition.endswith(
         "AND t.silver_topic = s.silver_topic AND t.silver_identity = s.silver_identity"
     )
+
+
+def test_silver_admits_files_per_batch_without_tolerating_loss() -> None:
+    """`maxFilesPerTrigger` defers Bronze files; it is not among the loss-tolerant options a
+    Delta source is refused (tables.LOSS_TOLERANT_SOURCE_OPTIONS)."""
+    from trace_core.stream.silver import silver_source_options
+    from trace_core.stream.tables import LOSS_TOLERANT_SOURCE_OPTIONS
+
+    assert silver_source_options() is None
+    assert silver_source_options(32) == {"maxFilesPerTrigger": "32"}
+    assert silver_source_options(max_bytes_per_trigger=1024) == {"maxBytesPerTrigger": "1024"}
+    assert silver_source_options(8, 1024) == {
+        "maxFilesPerTrigger": "8",
+        "maxBytesPerTrigger": "1024",
+    }
+    for bad in (0, -1):
+        with pytest.raises(ValueError, match="max_files_per_trigger must be positive"):
+            silver_source_options(bad)
+        with pytest.raises(ValueError, match="max_bytes_per_trigger must be positive"):
+            silver_source_options(max_bytes_per_trigger=bad)
+    refused = {key.lower() for key in LOSS_TOLERANT_SOURCE_OPTIONS}
+    assert "maxfilespertrigger" not in refused
+    assert "maxbytespertrigger" not in refused
+
+
+def test_a_batch_re_derives_late_events_only_when_it_can_change_them() -> None:
+    """`BatchFacts.late_events_may_change` (`trace_core.stream.silver`): the sink skips the
+    `late_events` re-derivation only for a batch whose committed rows it cannot alter."""
+    from trace_core.stream.silver import BatchFacts, MergeBounds
+    from trace_core.stream.silver_rules import Disposition
+
+    def facts(late_admitted: int = 0, **counts: int) -> BatchFacts:
+        return BatchFacts(
+            by_disposition=dict(counts),
+            bounds=MergeBounds(None, None),
+            late_admitted=late_admitted,
+        )
+
+    admit, supersede = Disposition.ADMIT.value, Disposition.SUPERSEDE.value
+    replayed, duplicate = Disposition.REPLAYED.value, Disposition.DUPLICATE.value
+
+    assert not facts(**{admit: 10}).late_events_may_change
+    assert not facts(**{duplicate: 3}).late_events_may_change
+    assert not facts().late_events_may_change
+    assert facts(late_admitted=1, **{admit: 10}).late_events_may_change
+    assert facts(**{supersede: 1}).late_events_may_change, "a supersede can un-late a row"
+    assert facts(**{replayed: 1}).late_events_may_change, (
+        "a replay is what a crash between the canonical commit and this one leaves behind"
+    )
+    assert facts(late_admitted=2, **{admit: 5, duplicate: 1}).rows == 6

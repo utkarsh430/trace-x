@@ -429,17 +429,137 @@ def test_the_late_events_merge_reads_only_the_files_its_bound_names(
 def test_batch_bounds_leave_out_a_conflict_s_own_time_and_refuse_a_moved_supersede(
     spark: Any,
 ) -> None:
-    columns = ["disposition", "occurred_at", "existing_occurred_at_us"]
+    columns = ["disposition", "occurred_at", "existing_occurred_at_us", "is_late"]
     d = rules.Disposition
     rows = [
-        (d.ADMIT.value, 50, None),
-        (d.DUPLICATE.value, 40, 40),
-        (d.SUPERSEDE.value, 45, 45),
-        (d.CONFLICT.value, 1, 60),  # its own time is not a committed row's; its canonical's is
+        (d.ADMIT.value, 50, None, False),
+        (d.DUPLICATE.value, 40, 40, False),
+        (d.SUPERSEDE.value, 45, 45, False),
+        (
+            d.CONFLICT.value,
+            1,
+            60,
+            False,
+        ),  # its own time is not a committed row's; its canonical's is
     ]
     bounds = batch_merge_bounds(spark.createDataFrame(rows, columns))
     assert bounds.supersede == OccurredRange(45, 45)
     assert bounds.committed == OccurredRange(40, 60)
-    moved = [*rows, (d.SUPERSEDE.value, 46, 47)]
+    moved = [*rows, (d.SUPERSEDE.value, 46, 47, False)]
     with pytest.raises(SilverPruningError, match="1 superseding row"):
         batch_merge_bounds(spark.createDataFrame(moved, columns))
+
+
+# ------------------------------------------------- the late_events no-op ---
+
+
+def test_a_batch_that_cannot_change_late_events_commits_nothing_to_it(
+    spark: Any, tmp_path: Path
+) -> None:
+    """`late_events` is re-derived only when the batch can change it (a supersede, a replay or an
+    admitted late row). A batch that can, does; a batch that cannot leaves the table's version
+    where it was, and the rows it holds are the same either way.
+
+    The skip rests on the table's invariant -- one row per late committed canonical row -- so the
+    test reads the table after every batch, not only its version.
+    """
+    lake = LakeConfig.at(tmp_path / "lake")
+    topic = TX_AUTHORIZATION_V1
+    _create_bronze(spark, lake, topic)
+    late_table = rules.LATE_EVENTS.local_path(lake)
+    second = dt.timedelta(seconds=1)
+
+    _append_bronze(
+        spark,
+        lake,
+        topic,
+        [_row(0, 0, T0 + 2 * second, _authorization(1))],
+        batch=0,
+    )
+    _run_silver(spark, lake, topic)
+    quiet = _version(spark, late_table)
+    assert _rows(spark, lake, rules.LATE_EVENTS, topic) == []
+
+    _append_bronze(
+        spark,
+        lake,
+        topic,
+        [
+            _row(0, 1, T0 + 3 * second, _authorization(2)),
+            _row(0, 2, T0 + 4 * second, _authorization(1)),  # a duplicate of an on-time row
+        ],
+        batch=1,
+    )
+    _run_silver(spark, lake, topic)
+    assert _version(spark, late_table) == quiet, "nothing in that batch could change late_events"
+    assert _rows(spark, lake, rules.LATE_EVENTS, topic) == []
+
+    _append_bronze(
+        spark,
+        lake,
+        topic,
+        [_row(1, 0, T0 + 300_700 * second, _authorization(300_000))],  # 700 s late
+        batch=2,
+    )
+    _run_silver(spark, lake, topic)
+    assert _version(spark, late_table) > quiet, "an admitted late row re-derives the table"
+    assert [(r["kafka_partition"], r["kafka_offset"]) for r in _rows(
+        spark, lake, rules.LATE_EVENTS, topic
+    )] == [(1, 0)]  # fmt: skip
+    assert check_silver_conservation(spark, lake, topic).conserved
+
+
+def test_a_canonical_row_that_vanished_under_a_replay_stops_the_query(
+    spark: Any, tmp_path: Path
+) -> None:
+    """The uniqueness assertion holds the canonical table to exactly one row per batch identity,
+    not merely at most one, so a committed row that disappeared is caught on the next batch that
+    touches its identity.
+
+    The row is deleted behind the pipeline's back and the batch is replayed. Its MERGE carries the
+    batch's `txnVersion`, which Delta has already applied, so nothing is re-inserted: without the
+    stronger check the query would carry on over a hole.
+    """
+    from delta.tables import DeltaTable
+
+    from trace_core.stream.bronze import Trigger
+    from trace_core.stream.silver import SilverUniquenessError, start_silver_query
+
+    lake = LakeConfig.at(tmp_path / "lake")
+    topic = TX_AUTHORIZATION_V1
+    _create_bronze(spark, lake, topic)
+    _append_bronze(
+        spark,
+        lake,
+        topic,
+        [_row(0, 0, T0 + dt.timedelta(seconds=2), _authorization(1))],
+        batch=0,
+    )
+    _run_silver(spark, lake, topic)
+    spec = rules.silver_topic(topic)
+    table = spec.table.local_path(lake)
+    (committed,) = _rows(spark, lake, spec.table)
+    identity = str(committed["silver_identity"])
+
+    # The canonical table is declared append-only, so the corruption is applied the only way a
+    # table can lose a committed row: the property is lifted, the row deleted, the property put
+    # back, leaving the declaration exactly as it was.
+    spark.sql(f"ALTER TABLE delta.`{table}` UNSET TBLPROPERTIES ('delta.appendOnly')")
+    DeltaTable.forPath(spark, str(table)).delete(f"silver_identity = '{identity}'")
+    spark.sql(f"ALTER TABLE delta.`{table}` SET TBLPROPERTIES ('delta.appendOnly' = 'true')")
+    assert _rows(spark, lake, spec.table) == []
+    _crash_before_spark_commit(lake, topic)
+
+    handle = start_silver_query(
+        spark,
+        lake,
+        topic,
+        git_sha=SHA,
+        dirty_worktree=False,
+        now=dt.datetime.now(dt.UTC),
+        trigger=Trigger(available_now=True),
+    )
+    with pytest.raises(Exception, match="other than once") as failure:
+        handle.query.awaitTermination()
+    assert SilverUniquenessError.__name__ in str(failure.value)
+    assert identity in str(failure.value)
