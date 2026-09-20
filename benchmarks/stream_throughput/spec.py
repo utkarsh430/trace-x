@@ -148,12 +148,18 @@ class RunConfig(BaseModel):
     topic offers about 7,000 per 2-second trigger, so this is roughly four times the steady
     inflow: enough to drain an outage backlog quickly, and a bound on what one batch holds."""
     max_files_per_trigger: Annotated[int, Field(gt=0)] | None = None
-    max_bytes_per_trigger: Annotated[int, Field(gt=0)] | None = 64 * 1024 * 1024
+    max_bytes_per_trigger: Annotated[int, Field(gt=0)] | None = 16 * 1024 * 1024
     """Bronze bytes one Silver micro-batch may admit (Delta's soft cap: at least one file always
     goes through, so no file larger than the cap can stall the query). It defers rows, never skips
     them; without it a batch that fell behind admits the whole backlog, needs more heap than the
     last, and the consumer dies of OutOfMemoryError, as every Step 13 run before 2026-09-20 did.
-    About ten times the steady inflow of one 4-second batch."""
+
+    Sixteen mebibytes, not sixty-four: at 64 MiB a batch that had fallen behind admitted about
+    90,000 rows and took about a minute, and its broadcast side -- the batch's own distinct
+    identities, which cannot be built until every row of it is parsed and validated -- outran
+    Spark's 300-second broadcast timeout and killed the consumer
+    (`bench-20260920-064710-stream-throughput-77cb0051`, INVALID). Sixteen is still comfortably
+    above one 4-second batch at the target rate, so it binds only while catching up."""
     master: Annotated[str, Field(pattern=r"^local\[(\d+|\*)\]$")] = "local[8]"
     """The consumer runs six streaming queries in one JVM -- a Bronze and a Silver query per topic
     -- and each pays its own fixed per-batch cost, so what it needs is slots, not speed. `local[4]`
@@ -165,7 +171,11 @@ class RunConfig(BaseModel):
     2 GiB JVM, the producers and the broker, and a host that starts swapping measures the swap
     rather than the pipeline (`bench-20260918-201547-stream-throughput-b46e7e74`, INVALID on host
     saturation). Declared before the run, with the master."""
-    shuffle_partitions: Annotated[int, Field(ge=1)] = 2
+    shuffle_partitions: Annotated[int, Field(ge=1)] = 8
+    """Two was declared when a micro-batch was a few thousand rows. A batch here is tens of
+    thousands, and every shuffle -- the identity window, the semi-joins, the uniqueness
+    aggregation -- funnelled all of it through two tasks while six task slots sat idle. Declared
+    before the 2026-09-20 run, with the master it matches."""
 
     gold: bool = True
     gold_driver_memory: Annotated[str, Field(pattern=r"^\d+[mg]$")] = "2g"
