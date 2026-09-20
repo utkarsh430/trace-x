@@ -1211,3 +1211,31 @@ def test_a_broker_holding_another_run_s_records_is_refused_before_anything_start
         refuse_preexisting(MAX_PREEXISTING_RECORDS + 1)
     with pytest.raises(HarnessError, match="kafka-topics-reset"):
         refuse_preexisting(3_492_057)
+
+
+def test_a_host_clock_that_steps_backwards_discards_the_report_it_spoiled() -> None:
+    """`OffsetBounds.observe`: `sent_ms` and `acked_ms` are both host wall-clock readings, and a
+    wall clock steps. An acknowledgement that reads before its send bounds nothing, so it is
+    dropped and counted -- it never kills the worker, which is how a 17-minute run became INVALID
+    on the harness rather than on the pipeline
+    (`bench-20260920-062507-stream-throughput-4231d90e`)."""
+    from benchmarks.stream_throughput.clock import OffsetBounds
+    from benchmarks.stream_throughput.spec import MAX_DISCARDED_CLOCK_REPORT_FRACTION
+
+    good = OffsetBounds().observe(sent_ms=1_000.0, acked_ms=1_010.0, log_append_ms=1_005.0)
+    assert good.samples == 1 and good.discarded == 0
+
+    stepped = good.observe(sent_ms=2_000.0, acked_ms=1_906.5, log_append_ms=1_950.0)
+    assert stepped.samples == 1, "the spoiled report bounds nothing"
+    assert stepped.discarded == 1
+    assert (stepped.lower_ms, stepped.upper_ms) == (good.lower_ms, good.upper_ms)
+    assert (stepped.min_lower_ms, stepped.max_upper_ms) == (good.min_lower_ms, good.max_upper_ms)
+
+    assert stepped.merge(good).discarded == 1
+    assert OffsetBounds.from_record(stepped.as_record()).discarded == 1
+
+    # One step in a long run is tolerated; a clock that keeps stepping is not.
+    many = OffsetBounds(0.0, 1.0, 999_999, 0.0, 1.0, 1)
+    assert many.enough_measured(MAX_DISCARDED_CLOCK_REPORT_FRACTION)
+    assert not stepped.enough_measured(MAX_DISCARDED_CLOCK_REPORT_FRACTION)
+    assert not OffsetBounds().enough_measured(MAX_DISCARDED_CLOCK_REPORT_FRACTION)

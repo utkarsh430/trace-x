@@ -31,6 +31,7 @@ from benchmarks.stream_throughput.spec import (
     GOLD_P95_LAG_MS,
     GOLD_STALL_MS,
     LAG_TARGET_MS,
+    MAX_DISCARDED_CLOCK_REPORT_FRACTION,
     MAX_SCHEDULE_LAG_S,
     MIN_SAMPLES_PER_WINDOW,
     OFFERED_RATE_TOLERANCE,
@@ -401,13 +402,17 @@ def clock_verdict(bounds: OffsetBounds, *, required: bool = True) -> Verdict:
             "not required: no lag measurement this run judges depends on the broker-to-host "
             "clock offset, and no delivery report bounded it (0 reports)",
         )
+    measured = bounds.enough_measured(MAX_DISCARDED_CLOCK_REPORT_FRACTION)
     return Verdict(
         "clock_offset_bounded",
         INTEGRITY,
-        bounds.within(CLOCK_OFFSET_TOLERANCE_MS),
+        measured and bounds.within(CLOCK_OFFSET_TOLERANCE_MS),
         f"every record's broker-to-host clock offset lies in [{bounds.min_lower_ms}, "
         f"{bounds.max_upper_ms}] ms over {bounds.samples} delivery reports (drift between records "
-        f"{bounds.drift_ms} ms); must lie within +-{CLOCK_OFFSET_TOLERANCE_MS} ms",
+        f"{bounds.drift_ms} ms); must lie within +-{CLOCK_OFFSET_TOLERANCE_MS} ms. "
+        f"{bounds.discarded} report(s) were discarded for a host clock that stepped backwards "
+        f"between send and acknowledgement; at most "
+        f"{MAX_DISCARDED_CLOCK_REPORT_FRACTION:%} of them may be",
     )
 
 

@@ -67,6 +67,15 @@ THROUGHPUT_QUANTISATION_TOLERANCE: Final = 0.01
 OFFERED_RATE_TOLERANCE: Final = 0.01
 MAX_SCHEDULE_LAG_S: Final = 1.0
 CLOCK_OFFSET_TOLERANCE_MS: Final = 500.0
+MAX_DISCARDED_CLOCK_REPORT_FRACTION: Final = 0.0001
+"""Delivery reports whose host-clock readings inverted that a run may discard, as a fraction.
+
+`sent_ms` and `acked_ms` are both host wall-clock readings, and a wall clock steps: an NTP
+correction mid-run put an acknowledgement 93.5 ms before its send. Such a pair bounds nothing, so
+it is dropped (`OffsetBounds.observe`). One step costs a handful of reports out of millions; a
+clock that steps repeatedly leaves an offset nobody should trust, and one in ten thousand is where
+this run stops trusting it."""
+
 MAX_PREEXISTING_RECORDS: Final = 5_000
 """Records the broker may already hold when a run starts: one second of the offered rate.
 
@@ -234,5 +243,6 @@ def targets() -> dict[str, float | int]:
         "clock_offset_tolerance_ms": CLOCK_OFFSET_TOLERANCE_MS,
         "max_trigger_share_of_lag_target": MAX_TRIGGER_SHARE_OF_LAG_TARGET,
         "max_preexisting_records": MAX_PREEXISTING_RECORDS,
+        "max_discarded_clock_report_fraction": MAX_DISCARDED_CLOCK_REPORT_FRACTION,
         "min_samples_per_window": MIN_SAMPLES_PER_WINDOW,
     }
