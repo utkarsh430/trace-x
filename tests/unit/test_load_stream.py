@@ -1195,3 +1195,19 @@ def test_the_events_are_valid_released_events_that_refer_to_each_other() -> None
             source = scored[payload["transaction_id"]]
             assert payload["account_id"] == source["account_id"]
     assert factory.substituted == 1
+
+
+def test_a_broker_holding_another_run_s_records_is_refused_before_anything_starts() -> None:
+    """`refuse_preexisting` (`benchmarks.stream_throughput.run`): Bronze reads from earliest, so
+    records already on the broker would be measured as this run's, and a topic at its local byte
+    cap trims segments Bronze has not read yet. A refusal, never a verdict: no record is written,
+    so nothing about a refused run is citable."""
+    from benchmarks.stream_throughput.run import HarnessError, refuse_preexisting
+    from benchmarks.stream_throughput.spec import MAX_PREEXISTING_RECORDS
+
+    refuse_preexisting(0)
+    refuse_preexisting(MAX_PREEXISTING_RECORDS)
+    with pytest.raises(HarnessError, match="more than the"):
+        refuse_preexisting(MAX_PREEXISTING_RECORDS + 1)
+    with pytest.raises(HarnessError, match="kafka-topics-reset"):
+        refuse_preexisting(3_492_057)

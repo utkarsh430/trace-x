@@ -87,7 +87,7 @@ up-streaming: ## Start core + streaming (kafka, spark) -- needs ~10 GB free
 	@# dependency is outside the active profiles ("depends on undefined service").
 	@$(COMPOSE) --profile core --profile streaming up -d --wait
 
-.PHONY: kafka-topics kafka-topics-verify kafka-topics-budget
+.PHONY: kafka-topics kafka-topics-verify kafka-topics-budget kafka-topics-reset
 
 kafka-topics: ## Create missing Kafka topics from deploy/kafka/topics.yaml, then verify (local broker only)
 	@$(VPY) scripts/kafka_topics.py apply --environment local $(ARGS)
@@ -97,6 +97,9 @@ kafka-topics-verify: ## Compare the local broker with deploy/kafka/topics.yaml; 
 
 kafka-topics-budget: ## Print the local Kafka disk bound derived from deploy/kafka/topics.yaml
 	@$(VPY) scripts/kafka_topics.py budget --environment local
+
+kafka-topics-reset: ## DESTRUCTIVE: delete and recreate the declared local topics (empty, for a measured run)
+	@$(VPY) scripts/kafka_topics.py reset --environment local --yes $(ARGS)
 
 up-full: ## Start every profile -- needs ~15 GB free and 8 GB Docker RAM
 	@$(MAKE) --no-print-directory up

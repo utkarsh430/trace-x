@@ -67,6 +67,20 @@ THROUGHPUT_QUANTISATION_TOLERANCE: Final = 0.01
 OFFERED_RATE_TOLERANCE: Final = 0.01
 MAX_SCHEDULE_LAG_S: Final = 1.0
 CLOCK_OFFSET_TOLERANCE_MS: Final = 500.0
+MAX_PREEXISTING_RECORDS: Final = 5_000
+"""Records the broker may already hold when a run starts: one second of the offered rate.
+
+Bronze reads each topic from its earliest retained offset, so anything already there is read as
+if the run had produced it. Two things then go wrong at once. The measurement stops being of the
+declared workload -- the pipeline drains another run's leftovers before it sees this one's rate,
+and how much it drains varies run to run, which is exactly the uncontrolled variable CLAUDE.md
+forbids in a comparison. And the local byte caps (debt D18) mean a full topic's retention trimmer
+removes segments Bronze has not read yet, so Bronze stops loudly on `failOnDataLoss`: observed on
+`bench-20260920-061851-stream-throughput-a9cee6ce`, whose consumer died 15 s in with
+`OffsetOutOfRangeException` on a broker holding 3,492,057 records from earlier runs.
+
+So a run refuses to start, with no record written, and `make kafka-topics-reset` is the remedy."""
+
 MAX_TRIGGER_SHARE_OF_LAG_TARGET: Final = 0.5
 """A `processingTime` trigger is a floor under consumer lag: nothing a query has not triggered on
 yet is committed, so lag at a commit is at least the trigger interval plus the batch's own
@@ -219,5 +233,6 @@ def targets() -> dict[str, float | int]:
         "max_schedule_lag_s": MAX_SCHEDULE_LAG_S,
         "clock_offset_tolerance_ms": CLOCK_OFFSET_TOLERANCE_MS,
         "max_trigger_share_of_lag_target": MAX_TRIGGER_SHARE_OF_LAG_TARGET,
+        "max_preexisting_records": MAX_PREEXISTING_RECORDS,
         "min_samples_per_window": MIN_SAMPLES_PER_WINDOW,
     }

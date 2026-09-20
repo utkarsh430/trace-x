@@ -19,6 +19,14 @@ Commands:
            made on a declared topic that the declaration does not contain, and any
            topic on the broker that is not declared. Exit 1 on drift.
   budget   print the local disk bound derived from the declaration. No broker.
+  reset    DELETE every declared topic that exists, then create them all from the
+           declaration. Local only, and only with `--yes`. It destroys every record
+           those topics hold, which is the point: a local broker that still holds a
+           previous benchmark run's records is at its byte cap, so the retention
+           trimmer removes segments a stream job reading from earliest has not read
+           yet and the job stops loudly on `failOnDataLoss` (debt D18, observed by
+           `bench-20260920-061851-stream-throughput-a9cee6ce`). A measured run starts
+           on topics that hold nothing.
 
 `--environment local` is required. The declaration's `local` section describes a
 single laptop broker, so `apply` and `verify` refuse a bootstrap that is not a
@@ -793,6 +801,79 @@ def run_apply(
     return code
 
 
+def delete_declared(
+    admin: Any, declaration: Declaration, cluster: LiveCluster, *, timeout_s: float
+) -> list[str]:
+    """Delete every declared topic the broker has, and wait until none of them is back."""
+    present = sorted(name for name in declaration.topics if name in cluster.topics)
+    if not present:
+        return []
+    futures = admin.delete_topics(present, request_timeout=timeout_s, operation_timeout=timeout_s)
+    for name, future in futures.items():
+        future.result(timeout=timeout_s)
+        del name
+    deadline = time.monotonic() + timeout_s
+    while True:
+        live = fetch_cluster(admin, timeout_s=timeout_s)
+        if not any(name in live.topics for name in present) or time.monotonic() >= deadline:
+            return present
+        time.sleep(0.5)
+
+
+def run_reset(
+    bootstrap: str,
+    declaration: Declaration,
+    *,
+    environment: str,
+    timeout_s: float,
+    confirmed: bool,
+    out: Printer,
+) -> int:
+    """Delete and recreate every declared topic. Destructive, local only, needs `--yes`."""
+    if not confirmed:
+        out("  REFUSED reset destroys every record the declared topics hold; pass --yes")
+        _summary(
+            out,
+            command="reset",
+            environment=environment,
+            bootstrap=bootstrap,
+            deleted=[],
+            exit=EXIT_REFUSED,
+        )
+        return EXIT_REFUSED
+    connected = _connect("reset", environment, bootstrap, timeout_s=timeout_s, out=out)
+    if isinstance(connected, int):
+        return connected
+    admin, cluster = connected
+    deleted = delete_declared(admin, declaration, cluster, timeout_s=timeout_s)
+    for name in deleted:
+        out(f"  DELETED {name}")
+    cluster = fetch_cluster(admin, timeout_s=timeout_s)
+    created = create_missing(admin, declaration, cluster, timeout_s=timeout_s)
+    for name in created:
+        out(f"  CREATED {name} partitions={declaration.topics[name].partitions}")
+    cluster = _wait_until_visible(admin, declaration, timeout_s=timeout_s)
+    problems = drift(declaration, cluster)
+    for problem in problems:
+        out(f"  DRIFT {problem}")
+    code = EXIT_DRIFT if problems else EXIT_OK
+    if code == EXIT_OK:
+        out(f"  OK {len(declaration.topics)} declared topic(s) recreated and empty")
+    _summary(
+        out,
+        command="reset",
+        environment=environment,
+        bootstrap=bootstrap,
+        cluster_id=cluster.cluster_id,
+        topic_ids=_declared_topic_ids(declaration, cluster),
+        deleted=deleted,
+        created=created,
+        drift=problems,
+        exit=code,
+    )
+    return code
+
+
 def run_budget(declaration: Declaration, *, environment: str, out: Printer) -> int:
     budget = compute_budget(declaration)
     mib = 1024 * 1024
@@ -822,11 +903,14 @@ def run_budget(declaration: Declaration, *, environment: str, out: Printer) -> i
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0] if __doc__ else None)
-    parser.add_argument("command", choices=("apply", "verify", "budget"))
+    parser.add_argument("command", choices=("apply", "verify", "budget", "reset"))
     parser.add_argument("--environment", required=True, choices=ENVIRONMENTS)
     parser.add_argument("--bootstrap", default="localhost:9092")
     parser.add_argument("--file", type=Path, default=DECLARATION)
     parser.add_argument("--timeout", type=float, default=20.0, help="seconds per admin request")
+    parser.add_argument(
+        "--yes", action="store_true", help="required by `reset`: it destroys every record"
+    )
     args = parser.parse_args(argv)
 
     def out(line: str) -> None:
@@ -842,6 +926,15 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         if args.command == "budget":
             return run_budget(declaration, environment=args.environment, out=out)
+        if args.command == "reset":
+            return run_reset(
+                args.bootstrap,
+                declaration,
+                environment=args.environment,
+                timeout_s=args.timeout,
+                confirmed=args.yes,
+                out=out,
+            )
         runner = run_verify if args.command == "verify" else run_apply
         return runner(
             args.bootstrap,

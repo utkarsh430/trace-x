@@ -67,7 +67,12 @@ from benchmarks.stream_throughput.lag import (
     lag_samples,
     window_stats,
 )
-from benchmarks.stream_throughput.spec import LAG_TARGET_MS, OUTAGE_S, RunConfig
+from benchmarks.stream_throughput.spec import (
+    LAG_TARGET_MS,
+    MAX_PREEXISTING_RECORDS,
+    OUTAGE_S,
+    RunConfig,
+)
 from benchmarks.stream_throughput.verdict import GoldBuild, OutageTiming, Status, Verdict
 
 from trace_core.observability import get_logger
@@ -595,6 +600,22 @@ class ResourceSampler(threading.Thread):
 # -------------------------------------------------------------- the phases ---
 
 
+def refuse_preexisting(preexisting: int) -> None:
+    """Refuse a broker that already holds more than `MAX_PREEXISTING_RECORDS` (see its docstring).
+
+    A refusal, not a verdict: the run never starts, so it writes no record and nothing about it
+    is citable. Raised before the lake is created, so a refused run leaves nothing behind.
+    """
+    if preexisting > MAX_PREEXISTING_RECORDS:
+        raise HarnessError(
+            f"the broker already holds {preexisting} records over the declared topics, more than "
+            f"the {MAX_PREEXISTING_RECORDS} a run tolerates: Bronze reads from earliest, so they "
+            f"would be measured as this run's, and a topic at its local byte cap trims segments "
+            f"Bronze has not read yet (failOnDataLoss). Run `make kafka-topics-reset` and start "
+            f"again."
+        )
+
+
 def _sleep_until(deadline_ms: int, *, check: Callable[[], None]) -> None:
     while _now_ms() < deadline_ms:
         check()
@@ -740,6 +761,7 @@ def _run(argv: Sequence[str] | None) -> int:
             f"broker {args.bootstrap}: {len(expected)} partitions over {topics}; "
             f"{preexisting} retained records predate the run (Bronze reads from earliest)"
         )
+        refuse_preexisting(preexisting)
         if lake_root.exists():
             raise HarnessError(f"{lake_root} already exists; a run always starts on a fresh lake")
         lake_root.mkdir(parents=True)
